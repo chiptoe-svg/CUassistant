@@ -586,7 +586,7 @@ function formatSummary(
     if (u) {
       const fmt = (n: number) => n.toLocaleString('en-US');
       parts.push(
-        `LLM cost: $${u.costUsd.toFixed(4)} (${u.calls} call${u.calls === 1 ? '' : 's'}, ${fmt(u.inputTokens)} in${u.cachedTokens ? ` / ${fmt(u.cachedTokens)} cached` : ''}, ${fmt(u.outputTokens)} out)`,
+        `LLM cost [${MODE}]: $${u.costUsd.toFixed(4)} (${u.calls} call${u.calls === 1 ? '' : 's'}, ${fmt(u.inputTokens)} in${u.cachedTokens ? ` / ${fmt(u.cachedTokens)} cached` : ''}, ${fmt(u.outputTokens)} out)`,
       );
     }
     if (api.tasksCreated.length > 0) {

@@ -31,6 +31,10 @@ The review surface is split by concern:
 | `src/ms365.ts`                | Microsoft Graph token refresh and Graph REST calls.         |
 | `src/permissions.ts`          | Host operation allow-list for Graph calls.                  |
 
+Additional capabilities would register as separate handlers beside `triage`.
+Each one would carry its own skill, declared permission scope, and host-applied
+effect path rather than expanding the email triage handler.
+
 ## Consent Context
 
 Restore delegated admin consent for the existing GCassistant Azure AD app under
@@ -50,9 +54,13 @@ reading Teams chats.
 ## Runtime Flow
 
 1. `npm run scan` starts `src/index.ts`.
-2. The only registered handler is `triage`.
-3. The handler lists new Inbox messages from configured accounts.
-4. Depending on mode:
+2. The host loads registered handlers from `src/handlers/` and sets the active
+   handler context before provider calls.
+3. The only registered handler today is `triage`; future capabilities would
+   register beside it with their own skill, permissions, and host-applied effect
+   path.
+4. The triage handler lists new Inbox messages from configured accounts.
+5. Depending on mode:
    - `MODE=agent`: fetch normalized bodies for all listed messages and send
      them to Codex for classification.
    - `MODE=hybrid`: apply deterministic host shortcuts first; fetch bodies and
@@ -64,12 +72,12 @@ reading Teams chats.
      and advances no progress cursor.
      The deterministic shortcuts are local YAML/string matching only; they do not
      call OpenAI, Codex, or any model.
-5. If a Codex decision says `needs_task=true`, the host writes a durable
+6. If a classifier decision says `needs_task=true`, the host writes a durable
    `task-intent` audit row before calling Graph.
-6. The host checks for an existing To Do task with the same CUassistant audit
+7. The host checks for an existing To Do task with the same CUassistant audit
    marker, then creates a task only if needed.
-7. The host writes the terminal decision row to `state/decisions.jsonl`.
-8. The progress cursor advances only after durable decisions and pending
+8. The host writes the terminal decision row to `state/decisions.jsonl`.
+9. The progress cursor advances only after durable decisions and pending
    classifier failures are written.
 
 ## Data Flow

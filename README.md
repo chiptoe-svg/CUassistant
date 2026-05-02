@@ -12,20 +12,37 @@ and `MODE=compare` lets you measure shortcuts against the full-agent result.
 
 ## How it works
 
-A scheduled run can either send every listed message to the agent, or run a
-deterministic prefilter before sending anything unresolved to the agent:
+A scheduled host script owns external connections and all side effects. On each
+run it loads the registered handlers and runs them in order. Today the only
+registered handler is email triage; other capabilities would slot in at this
+first handler boundary: one handler, one skill folder, one declared permission
+set, and one host-applied side-effect channel.
 
-| Bucket                 | Check                                                  | Cost     | Action                      |
-| ---------------------- | ------------------------------------------------------ | -------- | --------------------------- |
-| 1 — `action_templates` | Sender + subject pattern in `classification.yaml`      | zero LLM | create or skip per template |
-| 2 — `skip_senders`     | Sender domain/address in `classification.yaml`         | zero LLM | log skip                    |
-| 3 — Solicited          | Sender in `known_contacts` or domain in `institutions` | LLM call | classify                    |
-| 4 — Other residual     | Anything not pre-resolved                              | LLM call | classify                    |
+The safety shape is:
 
-Agent-classified messages fetch the body once, strip quoted-reply chains and
-footer boilerplate, and ask the model: "does this create a real obligation?"
-If yes, a task is created in MS365 To Do. Either way, a row is appended to
-`state/decisions.jsonl` for audit.
+1. **Host selects handlers.** The host loads registered capabilities from
+   `src/handlers/` and sets the active handler context before any provider call.
+2. **Triage reads mail metadata.** The triage handler lists inbox messages
+   through the configured provider integrations.
+3. **Mode chooses the triage path.** `MODE=agent` sends every listed message to Codex.
+   `MODE=hybrid` runs host-side deterministic sorting first and classifies only
+   unresolved residuals. `MODE=compare` runs Codex as the benchmark and records
+   what the deterministic sorting path would have done, without creating tasks
+   or advancing progress.
+4. **Host resolves obvious cases in hybrid mode.** Local rules can skip known
+   noise or create a task from a stable sender/subject template. This is just
+   YAML/string matching: no model call, no agent.
+5. **Classifier handles judgment cases.** For messages selected by the active
+   mode, the host fetches and normalizes the body, strips quoted replies and
+   footer boilerplate, and asks the selected classifier whether the message
+   creates a real obligation. Codex is the default classifier and runs as a
+   constrained classifier process: isolated working directory, read-only sandbox,
+   ignored local rules/config, JSON schema, and timeout. The optional lean OpenAI
+   path is also classifier only: no tools, no MCP server, JSON output.
+6. **Host applies side effects.** The classifier never receives Microsoft Graph
+   tools or credentials. It returns a decision; the host validates it, writes the
+   audit row, checks for an existing task marker, and creates the MS365 To Do
+   task only when needed.
 
 The scan is **read + create-task only** — it never moves, archives, or deletes
 mail. Filing happens separately when you complete the task in To Do.
@@ -212,6 +229,10 @@ The scan implementation is split by review concern: `src/scan.ts` orchestrates,
 `src/scan-mail.ts` reads mail and progress, `src/preclassifier.ts` owns
 deterministic rules, `src/residual-classifiers.ts` chooses the classifier
 backend, and `src/scan-effects.ts` applies audit/task side effects.
+
+Additional capabilities fit beside `triage`, not inside it. A future capability
+would add `src/handlers/<name>.ts`, `skills/<name>/SKILL.md`, its declared
+permission scope, and its own host-applied effect path.
 
 Each handler declares the Microsoft Graph consent scopes it touches in
 `src/handlers/`. The stricter executable operation list lives in

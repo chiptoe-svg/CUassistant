@@ -132,12 +132,13 @@ npm run scan:dry
 npm run scan
 ```
 
-Then wire to cron / launchd / systemd — twice daily is the recommended cadence:
+Then wire to cron / launchd / systemd:
 
 ```cron
-# 7:00 AM and 4:30 PM, weekdays
-0  7  * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
-30 16 * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
+# 7:30 AM, noon, and 4:00 PM, weekdays
+30 7  * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
+0  12 * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
+0  16 * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
 ```
 
 On macOS, `launchd/com.cuassistant.scan.plist` is a ready-to-edit template.

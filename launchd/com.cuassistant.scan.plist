@@ -12,7 +12,7 @@
     5. tail -f ~/Library/Logs/cuassistant.scan.out.log   # see operational stdout
        tail -f ~/Library/Logs/cuassistant.log            # see per-run summaries
 
-  Schedule: 7:00 AM and 4:30 PM, Mon–Fri (matches the README example).
+  Schedule: 7:30 AM, noon, and 4:00 PM, Mon-Fri (matches the README example).
   Edit the StartCalendarInterval array to change cadence.
 
   To unload:
@@ -46,52 +46,77 @@
   <array>
     <dict>
       <key>Hour</key><integer>7</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
       <key>Weekday</key><integer>1</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>7</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
       <key>Weekday</key><integer>2</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>7</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
       <key>Weekday</key><integer>3</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>7</integer>
-      <key>Minute</key><integer>0</integer>
+      <key>Minute</key><integer>30</integer>
       <key>Weekday</key><integer>4</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>7</integer>
+      <key>Minute</key><integer>30</integer>
+      <key>Weekday</key><integer>5</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>12</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>1</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>12</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>2</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>12</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>3</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>12</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>4</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>12</integer>
       <key>Minute</key><integer>0</integer>
       <key>Weekday</key><integer>5</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>16</integer>
-      <key>Minute</key><integer>30</integer>
+      <key>Minute</key><integer>0</integer>
       <key>Weekday</key><integer>1</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>16</integer>
-      <key>Minute</key><integer>30</integer>
+      <key>Minute</key><integer>0</integer>
       <key>Weekday</key><integer>2</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>16</integer>
-      <key>Minute</key><integer>30</integer>
+      <key>Minute</key><integer>0</integer>
       <key>Weekday</key><integer>3</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>16</integer>
-      <key>Minute</key><integer>30</integer>
+      <key>Minute</key><integer>0</integer>
       <key>Weekday</key><integer>4</integer>
     </dict>
     <dict>
       <key>Hour</key><integer>16</integer>
-      <key>Minute</key><integer>30</integer>
+      <key>Minute</key><integer>0</integer>
       <key>Weekday</key><integer>5</integer>
     </dict>
   </array>

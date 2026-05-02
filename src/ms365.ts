@@ -2,23 +2,26 @@
 // To Do task creation. The original CUagent reads tokens from an MSAL cache
 // owned by the in-container MCP server; here we go simpler: refresh token
 // in .env, fetched on demand, cached in-process for ~50 minutes.
+// The token can carry Mail.ReadWrite because that is the consent envelope; the
+// host operation allow-list in permissions.ts is what prevents send/delete/move
+// call sites from existing in this handler.
 
 import {
   MS365_CLIENT_ID,
   MS365_REFRESH_TOKEN,
   MS365_TENANT_ID,
   TIMEZONE,
-} from './config.js';
-import { log } from './log.js';
-import { normalizeBody } from './normalize.js';
-import { assertGraphScope } from './permissions.js';
-import { EmailMinimal } from './types.js';
+} from "./config.js";
+import { log } from "./log.js";
+import { normalizeBody } from "./normalize.js";
+import { assertGraphOperation } from "./permissions.js";
+import { EmailMinimal } from "./types.js";
 
 let cachedToken: { value: string; expiresAtMs: number } | null = null;
 
 export async function getMs365AccessToken(): Promise<string | null> {
   if (!MS365_CLIENT_ID || !MS365_REFRESH_TOKEN) {
-    log.debug('ms365: not configured (missing client id or refresh token)');
+    log.debug("ms365: not configured (missing client id or refresh token)");
     return null;
   }
   if (cachedToken && cachedToken.expiresAtMs > Date.now() + 60_000) {
@@ -28,20 +31,20 @@ export async function getMs365AccessToken(): Promise<string | null> {
     const resp = await fetch(
       `https://login.microsoftonline.com/${MS365_TENANT_ID}/oauth2/v2.0/token`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
-          grant_type: 'refresh_token',
+          grant_type: "refresh_token",
           client_id: MS365_CLIENT_ID,
           refresh_token: MS365_REFRESH_TOKEN,
           scope:
-            'https://graph.microsoft.com/Mail.ReadWrite ' +
-            'https://graph.microsoft.com/Tasks.ReadWrite',
+            "https://graph.microsoft.com/Mail.ReadWrite " +
+            "https://graph.microsoft.com/Tasks.ReadWrite",
         }).toString(),
       },
     );
     if (!resp.ok) {
-      log.warn('ms365: token refresh failed', {
+      log.warn("ms365: token refresh failed", {
         status: resp.status,
         body: (await resp.text()).slice(0, 200),
       });
@@ -58,83 +61,92 @@ export async function getMs365AccessToken(): Promise<string | null> {
     };
     return cachedToken.value;
   } catch (err) {
-    log.warn('ms365: token endpoint unreachable', { err: String(err) });
+    log.warn("ms365: token endpoint unreachable", { err: String(err) });
     return null;
   }
 }
 
 export async function listOutlook(
   sinceIso: string | null,
-): Promise<EmailMinimal[]> {
-  assertGraphScope('Mail.Read');
+): Promise<EmailMinimal[] | null> {
+  assertGraphOperation("mail.listInbox");
   const token = await getMs365AccessToken();
-  if (!token) return [];
+  if (!token) return null;
   const params = new URLSearchParams({
-    $select: 'id,subject,from,conversationId,receivedDateTime',
-    $top: '50',
-    $orderby: 'receivedDateTime desc',
+    $select: "id,subject,from,conversationId,receivedDateTime",
+    $top: "50",
+    $orderby: "receivedDateTime desc",
   });
-  if (sinceIso) params.set('$filter', `receivedDateTime ge ${sinceIso}`);
-  const url = `https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages?${params}`;
+  if (sinceIso) params.set("$filter", `receivedDateTime ge ${sinceIso}`);
+  let url: string | null =
+    `https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages?${params}`;
+  const out: EmailMinimal[] = [];
   try {
-    const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!r.ok) {
-      log.debug('outlook list failed', { status: r.status });
-      return [];
+    while (url) {
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        log.debug("outlook list failed", { status: r.status });
+        return null;
+      }
+      const body = (await r.json()) as {
+        value?: Array<{
+          id: string;
+          subject?: string;
+          from?: { emailAddress?: { address?: string } };
+          conversationId?: string;
+          receivedDateTime?: string;
+        }>;
+        "@odata.nextLink"?: string;
+      };
+      out.push(
+        ...(body.value || []).map((m) => ({
+          id: m.id,
+          account: "outlook" as const,
+          from: m.from?.emailAddress?.address || "",
+          subject: m.subject || "",
+          conversationId: m.conversationId,
+          receivedIso: m.receivedDateTime,
+        })),
+      );
+      url = body["@odata.nextLink"] ?? null;
     }
-    const body = (await r.json()) as {
-      value?: Array<{
-        id: string;
-        subject?: string;
-        from?: { emailAddress?: { address?: string } };
-        conversationId?: string;
-        receivedDateTime?: string;
-      }>;
-    };
-    return (body.value || []).map((m) => ({
-      id: m.id,
-      account: 'outlook' as const,
-      from: m.from?.emailAddress?.address || '',
-      subject: m.subject || '',
-      conversationId: m.conversationId,
-      receivedIso: m.receivedDateTime,
-    }));
+    return out;
   } catch (err) {
-    log.debug('outlook fetch threw', { err: String(err) });
-    return [];
+    log.debug("outlook fetch threw", { err: String(err) });
+    return null;
   }
 }
 
 export async function fetchOutlookBody(id: string): Promise<string> {
-  assertGraphScope('Mail.Read');
+  assertGraphOperation("mail.fetchBody");
   const token = await getMs365AccessToken();
-  if (!token) return '';
+  if (!token) return "";
   try {
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/me/messages/${id}?$select=body,bodyPreview`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!r.ok) return '';
+    if (!r.ok) return "";
     const body = (await r.json()) as {
       body?: { contentType?: string; content?: string };
       bodyPreview?: string;
     };
-    const raw = body.body?.content || body.bodyPreview || '';
+    const raw = body.body?.content || body.bodyPreview || "";
     return normalizeBody(raw);
   } catch (err) {
-    log.debug('outlook body fetch failed', { id, err: String(err) });
-    return '';
+    log.debug("outlook body fetch failed", { id, err: String(err) });
+    return "";
   }
 }
 
 export async function getDefaultTodoListId(): Promise<string | null> {
-  assertGraphScope('Tasks.ReadWrite');
+  assertGraphOperation("todo.listLists");
   const token = await getMs365AccessToken();
   if (!token) return null;
   try {
-    const r = await fetch('https://graph.microsoft.com/v1.0/me/todo/lists', {
+    const r = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!r.ok) return null;
@@ -147,8 +159,8 @@ export async function getDefaultTodoListId(): Promise<string | null> {
     };
     const lists = body.value || [];
     const preferred =
-      lists.find((l) => l.wellknownListName === 'defaultList') ||
-      lists.find((l) => l.displayName === 'Tasks') ||
+      lists.find((l) => l.wellknownListName === "defaultList") ||
+      lists.find((l) => l.displayName === "Tasks") ||
       lists[0];
     return preferred?.id ?? null;
   } catch {
@@ -160,14 +172,18 @@ export async function createMs365Task(
   listId: string,
   title: string,
   dueIsoLocal?: string,
+  auditMarker?: string,
 ): Promise<string | null> {
-  assertGraphScope('Tasks.ReadWrite');
+  assertGraphOperation("todo.createTask");
   const token = await getMs365AccessToken();
   if (!token) return null;
   const body: Record<string, unknown> = {
     title,
-    body: { content: '', contentType: 'text' },
-    importance: 'normal',
+    body: {
+      content: auditMarker ? `CUassistant audit marker: ${auditMarker}` : "",
+      contentType: "text",
+    },
+    importance: "normal",
   };
   if (dueIsoLocal) {
     body.dueDateTime = { dateTime: dueIsoLocal, timeZone: TIMEZONE };
@@ -176,24 +192,60 @@ export async function createMs365Task(
     const r = await fetch(
       `https://graph.microsoft.com/v1.0/me/todo/lists/${listId}/tasks`,
       {
-        method: 'POST',
+        method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
       },
     );
     if (!r.ok) {
-      log.warn('todo task creation failed', { status: r.status, title });
+      log.warn("todo task creation failed", { status: r.status, title });
       return null;
     }
     const created = (await r.json()) as { id?: string };
     return created.id ?? null;
   } catch (err) {
-    log.warn('todo task creation threw', { err: String(err) });
+    log.warn("todo task creation threw", { err: String(err) });
     return null;
   }
+}
+
+export async function findMs365TaskByMarker(
+  listId: string,
+  auditMarker: string,
+): Promise<string | null> {
+  assertGraphOperation("todo.findTaskByMarker");
+  const token = await getMs365AccessToken();
+  if (!token) return null;
+  const params = new URLSearchParams({
+    $select: "id,title,body",
+    $top: "100",
+  });
+  let url: string | null =
+    `https://graph.microsoft.com/v1.0/me/todo/lists/${listId}/tasks?${params}`;
+  try {
+    while (url) {
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) return null;
+      const body = (await r.json()) as {
+        value?: Array<{ id: string; body?: { content?: string } }>;
+        "@odata.nextLink"?: string;
+      };
+      for (const task of body.value || []) {
+        if (task.body?.content?.includes(auditMarker)) {
+          return task.id;
+        }
+      }
+      url = body["@odata.nextLink"] ?? null;
+    }
+  } catch (err) {
+    log.debug("todo marker lookup threw", { err: String(err) });
+  }
+  return null;
 }
 
 export function computeDueIsoLocal(offsetDays: number): string {

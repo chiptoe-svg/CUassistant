@@ -1,4 +1,6 @@
-export type Account = 'gmail' | 'outlook';
+export type Account = "gmail" | "outlook";
+export type ScanMode = "agent" | "hybrid" | "compare";
+export type ResidualClassifier = "codex" | "openai";
 
 export interface EmailMinimal {
   id: string;
@@ -10,7 +12,7 @@ export interface EmailMinimal {
 }
 
 export interface LlmCandidate extends EmailMinimal {
-  bucket_hint: 'solicited' | 'outreach_check';
+  bucket_hint: "solicited" | "outreach_check";
   body?: string;
 }
 
@@ -37,7 +39,7 @@ export interface SkipSender {
 
 export interface Override {
   email_id: string;
-  decision: 'task' | 'skip' | 'label-only';
+  decision: "task" | "skip" | "label-only";
   sort_folder?: string;
   reasoning?: string;
 }
@@ -55,7 +57,7 @@ export interface Taxonomy {
 
 export interface EmailAccount {
   id: string;
-  type: 'gws' | 'ms365';
+  type: "gws" | "ms365";
   address?: string;
   enabled?: boolean;
 }
@@ -91,4 +93,40 @@ export interface ClassificationResult {
   sort_folder: string;
   task_title: string;
   reasoning: string;
+}
+
+export type ProgressAccount = "gmail" | "outlook";
+
+export interface MailListing {
+  emails: EmailMinimal[];
+  completedAccounts: Set<ProgressAccount>;
+  errors: string[];
+}
+
+export interface ApiOutcome {
+  apiTaskCount: number;
+  apiSkipCount: number;
+  apiFailureCount: number;
+  tasksCreated: Array<{ title: string; folder: string }>;
+  failedEmailKeys: Set<string>;
+}
+
+export interface DeterministicDecision {
+  source: "override" | "template" | "skip" | "agent-needed";
+  needs_task: boolean | null;
+  sort_folder: string | null;
+  task_title: string | null;
+  rule_matched: string | null;
+  reasoning: string | null;
+}
+
+export interface CompareOutcome {
+  agentTaskCount: number;
+  agentSkipCount: number;
+  deterministicTaskCount: number;
+  deterministicSkipCount: number;
+  deterministicAgentNeededCount: number;
+  agreementCount: number;
+  disagreementCount: number;
+  missingAgentCount: number;
 }

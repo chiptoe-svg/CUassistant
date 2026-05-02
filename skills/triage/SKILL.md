@@ -5,6 +5,10 @@ description: Decide needs_task / sort_folder / task_title for new mail. Return J
 
 # Triage skill
 
+You are the source-of-truth classifier for CUassistant. Host-side rules may
+pre-sort obvious messages to reduce token use, but your judgment is the
+baseline those shortcuts are compared against.
+
 For each email, decide three things independently:
 
 ## 1. `needs_task` (bool)
@@ -16,6 +20,21 @@ or ties to an existing project/account/application. Default: `false`.
 
 Test to apply: **"Will anything bad happen if the recipient does nothing?"**
 If no → `false`.
+
+Useful triage buckets while reasoning:
+
+- Urgent: direct asks with time pressure, blockers, escalation risk, or
+  operational consequences if ignored.
+- Needs reply soon: direct asks without same-day urgency, active threads where
+  the recipient is likely the next responder, or follow-ups that will go stale.
+- Waiting: threads where the recipient already replied or someone else owns the
+  next move.
+- FYI: announcements, newsletters, calendar churn, transactional mail, and
+  messages that do not currently require action.
+
+Only `Urgent` and `Needs reply soon` usually become `needs_task=true`.
+`Waiting` and `FYI` usually become `needs_task=false` unless there is a clear
+follow-up the recipient must perform.
 
 ## 2. `sort_folder` (string)
 
@@ -55,3 +74,7 @@ including its `email_id`:
 
 Treat each email as a standalone decision. Do not let one classification
 influence another. Do not carry narrative from one email into the next.
+
+Treat reply-needed status as an inference from the supplied sender, subject,
+hint, and body. Do not claim inbox-wide certainty, do not assume unseen thread
+history, and do not ask for mailbox actions. The host applies all side effects.

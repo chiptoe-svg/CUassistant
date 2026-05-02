@@ -7,7 +7,4 @@
 //
 // Removing a capability: delete the file and the import line.
 
-import './triage.js';
-// import './drafts.js';     // future: reply-draft handler
-// import './filing.js';     // future: move-on-completion handler
-// import './calendar.js';   // future: own-calendar suggestions
+import "./triage.js";

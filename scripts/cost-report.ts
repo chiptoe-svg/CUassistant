@@ -9,17 +9,18 @@
 // `--simulate-mode agent` answers "what would the LLM bill have been if
 // every scanned email had gone through the full agent?" by extrapolating
 // observed per-email token rates from MODE=agent runs onto the total scan
-// volume in MODE=preclassifier and MODE=hybrid runs.
+// volume in shortcut modes such as MODE=hybrid.
 
-import { readUsageRecords } from '../src/state.js';
-import { computeCostUsd } from '../src/pricing.js';
+import { readUsageRecords } from "../src/state.js";
+import { computeCostUsd } from "../src/pricing.js";
+import type { ScanMode } from "../src/types.js";
 
 interface Record {
   ts: string;
   scan_run_id: string;
   email_ids: string[];
-  mode: 'preclassifier' | 'agent' | 'hybrid';
-  caller: 'openai' | 'codex';
+  mode: ScanMode;
+  caller: "codex" | "openai";
   model: string;
   input_tokens: number;
   cached_input_tokens: number;
@@ -31,29 +32,27 @@ interface Record {
 
 interface Args {
   since?: string;
-  by: 'mode' | 'model' | 'day';
-  simulateMode?: 'preclassifier' | 'agent' | 'hybrid';
+  by: "mode" | "model" | "day";
+  simulateMode?: ScanMode;
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { by: 'day' };
+  const out: Args = { by: "day" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--since') out.since = argv[++i];
-    else if (a === '--by')
-      out.by = argv[++i] as 'mode' | 'model' | 'day';
-    else if (a === '--simulate-mode')
-      out.simulateMode = argv[++i] as 'preclassifier' | 'agent' | 'hybrid';
+    if (a === "--since") out.since = argv[++i];
+    else if (a === "--by") out.by = argv[++i] as "mode" | "model" | "day";
+    else if (a === "--simulate-mode") out.simulateMode = argv[++i] as ScanMode;
   }
   return out;
 }
 
 function fmt(n: number): string {
-  return n.toLocaleString('en-US');
+  return n.toLocaleString("en-US");
 }
 
 function dollar(n: number): string {
-  return '$' + n.toFixed(4);
+  return "$" + n.toFixed(4);
 }
 
 interface Bucket {
@@ -85,9 +84,9 @@ function add(b: Bucket, r: Record): void {
   b.costUsd += r.cost_usd;
 }
 
-function keyFor(r: Record, by: Args['by']): string {
-  if (by === 'mode') return r.mode;
-  if (by === 'model') return r.model;
+function keyFor(r: Record, by: Args["by"]): string {
+  if (by === "mode") return r.mode;
+  if (by === "model") return r.model;
   return r.ts.slice(0, 10);
 }
 
@@ -98,7 +97,7 @@ function table(buckets: Map<string, Bucket>, label: string): void {
   console.log(
     `${label.padEnd(w)}  calls  emails       input    cached      output       cost`,
   );
-  console.log('-'.repeat(w + 70));
+  console.log("-".repeat(w + 70));
   let totals = emptyBucket();
   for (const k of keys) {
     const b = buckets.get(k)!;
@@ -112,13 +111,13 @@ function table(buckets: Map<string, Bucket>, label: string): void {
     totals.outputTokens += b.outputTokens;
     totals.costUsd += b.costUsd;
   }
-  console.log('-'.repeat(w + 70));
+  console.log("-".repeat(w + 70));
   console.log(
-    `${'total'.padEnd(w)}  ${String(totals.calls).padStart(5)}  ${String(totals.emailCount).padStart(6)}  ${fmt(totals.inputTokens).padStart(10)}  ${fmt(totals.cachedTokens).padStart(8)}  ${fmt(totals.outputTokens).padStart(10)}  ${dollar(totals.costUsd).padStart(9)}`,
+    `${"total".padEnd(w)}  ${String(totals.calls).padStart(5)}  ${String(totals.emailCount).padStart(6)}  ${fmt(totals.inputTokens).padStart(10)}  ${fmt(totals.cachedTokens).padStart(8)}  ${fmt(totals.outputTokens).padStart(10)}  ${dollar(totals.costUsd).padStart(9)}`,
   );
 }
 
-function simulate(records: Record[], targetMode: Args['simulateMode']): void {
+function simulate(records: Record[], targetMode: Args["simulateMode"]): void {
   if (!targetMode) return;
   const reference = records.filter((r) => r.mode === targetMode);
   if (reference.length === 0) {
@@ -156,7 +155,9 @@ function simulate(records: Record[], targetMode: Args['simulateMode']): void {
   console.log(`  Actual:    ${dollar(actualCost)}`);
   const delta = projectedCost - actualCost;
   if (delta > 0)
-    console.log(`  Savings:   ${dollar(delta)} (${((delta / projectedCost) * 100).toFixed(1)}%)`);
+    console.log(
+      `  Savings:   ${dollar(delta)} (${((delta / projectedCost) * 100).toFixed(1)}%)`,
+    );
   else
     console.log(
       `  Difference: ${dollar(-delta)} (actual was higher than the simulated baseline — unusual)`,
@@ -167,11 +168,11 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const all = readUsageRecords(args.since) as Record[];
   if (all.length === 0) {
-    console.log('No usage records yet. Run a scan first.');
+    console.log("No usage records yet. Run a scan first.");
     return;
   }
   console.log(
-    `Read ${all.length} usage record(s)${args.since ? ` since ${args.since}` : ''} from state/usage.jsonl`,
+    `Read ${all.length} usage record(s)${args.since ? ` since ${args.since}` : ""} from state/usage.jsonl`,
   );
   const buckets = new Map<string, Bucket>();
   for (const r of all) {

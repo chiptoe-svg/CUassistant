@@ -1,12 +1,8 @@
-// Handler registry — the v2-style pattern adapted for our scope.
-//
-// Each capability (triage today; drafts, filing, calendar later) self-
-// registers as a handler at import time. The orchestrator iterates and
-// runs them in registration order. Adding a capability = adding a file
-// in src/handlers/ and an import in src/handlers/index.ts. No edits to
-// orchestration code.
+// Handler registry. The only registered handler today is triage.
 
 export interface HandlerScopes {
+  // Consent scopes needed by the handler's Graph calls. The stricter list of
+  // executable host operations lives in src/permissions.ts.
   graph: string[];
   // Reserved for future expansion:
   //   gmail?: string[]    -- Google Workspace scopes

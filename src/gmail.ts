@@ -1,75 +1,89 @@
 // Gmail listing + body fetch via the `gws` CLI
 // (https://github.com/google/google-workspace-cli or equivalent).
-// If GWS_BIN is unset, listGmail() returns []; this lets the repo run
-// MS365-only without a Gmail toolchain installed.
+// If GWS_BIN is unset, listGmail() returns null so the scanner knows not to
+// advance Gmail progress for an account it could not actually list.
 
-import { execFileSync } from 'child_process';
+import { execFileSync } from "child_process";
 
-import { GWS_BIN } from './config.js';
-import { log } from './log.js';
-import { MAX_BODY_CHARS, normalizeBody } from './normalize.js';
-import { EmailMinimal } from './types.js';
+import { GWS_BIN } from "./config.js";
+import { log } from "./log.js";
+import { MAX_BODY_CHARS, normalizeBody } from "./normalize.js";
+import { EmailMinimal } from "./types.js";
 
 function gwsAvailable(): boolean {
   return Boolean(GWS_BIN);
 }
 
-export function listGmail(sinceIso: string | null): EmailMinimal[] {
-  if (!gwsAvailable()) return [];
+export function listGmail(sinceIso: string | null): EmailMinimal[] | null {
+  if (!gwsAvailable()) return null;
   const q = sinceIso
     ? `in:inbox after:${Math.floor(new Date(sinceIso).getTime() / 1000)}`
-    : 'in:inbox newer_than:1d';
+    : "in:inbox newer_than:1d";
   let ids: string[] = [];
+  let pageToken: string | undefined;
   try {
-    const listOut = execFileSync(
-      GWS_BIN,
-      [
-        'gmail',
-        'users',
-        'messages',
-        'list',
-        '--params',
-        JSON.stringify({ userId: 'me', q, maxResults: 50 }),
-        '--format',
-        'json',
-      ],
-      {
-        encoding: 'utf-8',
-        env: { ...process.env, GWS_CREDENTIAL_STORE: 'plaintext' },
-        timeout: 20_000,
-        maxBuffer: 8 * 1024 * 1024,
-      },
-    );
-    const parsed = JSON.parse(listOut) as { messages?: Array<{ id: string }> };
-    ids = (parsed.messages || []).map((m) => m.id);
+    do {
+      const params: Record<string, unknown> = {
+        userId: "me",
+        q,
+        maxResults: 100,
+      };
+      if (pageToken) params.pageToken = pageToken;
+      const listOut = execFileSync(
+        GWS_BIN,
+        [
+          "gmail",
+          "users",
+          "messages",
+          "list",
+          "--params",
+          JSON.stringify(params),
+          "--format",
+          "json",
+        ],
+        {
+          encoding: "utf-8",
+          env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+          timeout: 20_000,
+          maxBuffer: 8 * 1024 * 1024,
+        },
+      );
+      const parsed = JSON.parse(listOut) as {
+        messages?: Array<{ id: string }>;
+        nextPageToken?: string;
+      };
+      ids.push(...(parsed.messages || []).map((m) => m.id));
+      pageToken = parsed.nextPageToken;
+    } while (pageToken);
   } catch (err) {
-    log.debug('gmail list failed', { err: String(err) });
-    return [];
+    log.debug("gmail list failed", { err: String(err) });
+    return null;
   }
 
   const out: EmailMinimal[] = [];
+  let metadataFailed = false;
   for (const id of ids) {
     try {
       const getOut = execFileSync(
         GWS_BIN,
         [
-          'gmail',
-          'users',
-          'messages',
-          'get',
-          '--params',
+          "gmail",
+          "users",
+          "messages",
+          "get",
+          "--params",
           JSON.stringify({
-            userId: 'me',
+            userId: "me",
             id,
-            format: 'metadata',
-            metadataHeaders: ['From', 'Subject', 'Date'],
+            format: "metadata",
+            metadataHeaders: ["From", "Subject", "Date"],
           }),
-          '--format',
-          'json',
+          "--format",
+          "json",
         ],
         {
-          encoding: 'utf-8',
-          env: { ...process.env, GWS_CREDENTIAL_STORE: 'plaintext' },
+          encoding: "utf-8",
+          env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
           timeout: 15_000,
           maxBuffer: 4 * 1024 * 1024,
         },
@@ -82,42 +96,43 @@ export function listGmail(sinceIso: string | null): EmailMinimal[] {
       const headers = msg.payload?.headers || [];
       const header = (n: string): string =>
         headers.find((h) => h.name.toLowerCase() === n.toLowerCase())?.value ||
-        '';
+        "";
       out.push({
         id,
-        account: 'gmail',
-        from: header('From'),
-        subject: header('Subject'),
+        account: "gmail",
+        from: header("From"),
+        subject: header("Subject"),
         conversationId: msg.threadId,
         receivedIso: msg.internalDate
           ? new Date(parseInt(msg.internalDate, 10)).toISOString()
           : undefined,
       });
     } catch {
-      /* per-message failure is fine */
+      metadataFailed = true;
     }
   }
+  if (metadataFailed) return null;
   return out;
 }
 
 export function fetchGmailBody(id: string): string {
-  if (!gwsAvailable()) return '';
+  if (!gwsAvailable()) return "";
   try {
     const out = execFileSync(
       GWS_BIN,
       [
-        'gmail',
-        'users',
-        'messages',
-        'get',
-        '--params',
-        JSON.stringify({ userId: 'me', id, format: 'full' }),
-        '--format',
-        'json',
+        "gmail",
+        "users",
+        "messages",
+        "get",
+        "--params",
+        JSON.stringify({ userId: "me", id, format: "full" }),
+        "--format",
+        "json",
       ],
       {
-        encoding: 'utf-8',
-        env: { ...process.env, GWS_CREDENTIAL_STORE: 'plaintext' },
+        encoding: "utf-8",
+        env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
         timeout: 15_000,
         maxBuffer: 8 * 1024 * 1024,
       },
@@ -131,23 +146,23 @@ export function fetchGmailBody(id: string): string {
       snippet?: string;
     };
     const decodePart = (d?: string): string => {
-      if (!d) return '';
+      if (!d) return "";
       try {
         return Buffer.from(
-          d.replace(/-/g, '+').replace(/_/g, '/'),
-          'base64',
-        ).toString('utf-8');
+          d.replace(/-/g, "+").replace(/_/g, "/"),
+          "base64",
+        ).toString("utf-8");
       } catch {
-        return '';
+        return "";
       }
     };
     const walk = (
       node:
         | { mimeType?: string; body?: { data?: string }; parts?: unknown }
         | undefined,
-      type: 'text/plain' | 'text/html',
+      type: "text/plain" | "text/html",
     ): string => {
-      if (!node) return '';
+      if (!node) return "";
       const n = node as {
         mimeType?: string;
         body?: { data?: string };
@@ -160,15 +175,15 @@ export function fetchGmailBody(id: string): string {
           if (found) return found;
         }
       }
-      return '';
+      return "";
     };
-    const plain = walk(msg.payload, 'text/plain');
+    const plain = walk(msg.payload, "text/plain");
     if (plain) return normalizeBody(plain);
-    const html = walk(msg.payload, 'text/html');
+    const html = walk(msg.payload, "text/html");
     if (html) return normalizeBody(html);
-    return (msg.snippet || '').slice(0, MAX_BODY_CHARS);
+    return (msg.snippet || "").slice(0, MAX_BODY_CHARS);
   } catch (err) {
-    log.debug('gmail body fetch failed', { id, err: String(err) });
-    return '';
+    log.debug("gmail body fetch failed", { id, err: String(err) });
+    return "";
   }
 }

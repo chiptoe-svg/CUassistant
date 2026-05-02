@@ -1,14 +1,6 @@
 // Notifier registry — where summaries get delivered.
 //
-// Today's only registered notifier is stdout (so the cron job's stdout
-// captures the summary, or a launchctl plist can route it to a log file).
-// This is the seam where future delivery channels would plug in:
-//
-//   Slack, Telegram, email-self, webhook, file-tail, ...
-//
-// Each adds a file in src/notifiers/ that calls registerNotifier(). No
-// orchestration changes. The wiring is here so the extension point is
-// visible in the codebase, not so any of those channels are shipped.
+// Only stdout and a local file notifier are wired today.
 
 export interface Notifier {
   name: string;

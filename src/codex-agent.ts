@@ -1,5 +1,6 @@
-// Codex CLI fallback. Used when MODE=agent (full cascade in the agent) or
-// MODE=hybrid (agent only handles bucket 3/4/5 residuals).
+// Codex CLI classifier. Used when MODE=agent (agent is source-of-truth for every
+// listed email), MODE=compare (agent benchmark against deterministic prefilter),
+// or MODE=hybrid (agent handles deterministic prefilter residuals).
 //
 // We shell out to `codex exec`, hand it a prompt that inlines the candidate
 // list (plus pre-fetched bodies), and let the model decide. The agent is
@@ -8,12 +9,15 @@
 // "structured output" mode: ask it for a JSON array of decisions and apply
 // them ourselves on the host. No MCP server, no tool round-trips.
 
-import { spawn } from 'child_process';
+import { spawn } from "child_process";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import path from "path";
 
-import { CODEX_BIN, CODEX_MODEL } from './config.js';
-import { log } from './log.js';
-import { composeSystemPrompt } from './prompts.js';
-import { ClassificationResult, LlmCandidate, Taxonomy } from './types.js';
+import { CODEX_BIN, CODEX_MODEL, CODEX_TIMEOUT_MS } from "./config.js";
+import { log } from "./log.js";
+import { composeSystemPrompt } from "./prompts.js";
+import { ClassificationResult, LlmCandidate, Taxonomy } from "./types.js";
 
 interface AgentBatchResult {
   email_id: string;
@@ -46,65 +50,102 @@ function buildBatchPrompt(
       const hint = taxonomy.context[f];
       return hint ? `  ${f} — ${hint}` : `  ${f}`;
     })
-    .join('\n');
+    .join("\n");
 
   const candidateRows = candidates
     .map((c, i) => {
-      const head = `${i + 1}. id=${c.id} account=${c.account} from=${c.from} subject="${(c.subject || '').slice(0, 120)}" hint=${c.bucket_hint}`;
+      const head = `${i + 1}. id=${c.id} account=${c.account} from=${c.from} subject="${(c.subject || "").slice(0, 120)}" hint=${c.bucket_hint}`;
       const body = c.body
         ? `\n   body: ${c.body}`
         : `\n   body: (host body-fetch failed)`;
       return head + body;
     })
-    .join('\n\n');
+    .join("\n\n");
 
   // Persona + skill body live in AGENT.md and skills/triage/SKILL.md.
   // Runtime-computed appendix (taxonomy + candidate list) is appended below.
   const appendix = [
     `Taxonomy (pick exactly one for sort_folder):`,
     folderBullets,
-    '',
-    'Candidates:',
+    "",
+    "Candidates:",
     candidateRows,
-  ].join('\n');
+  ].join("\n");
 
-  return composeSystemPrompt('triage', appendix);
+  return composeSystemPrompt("triage", appendix);
 }
 
 function runCodexExec(prompt: string): Promise<CodexExecResult> {
   const startMs = Date.now();
   return new Promise((resolve, reject) => {
+    const isolatedCwd = mkdtempSync(path.join(tmpdir(), "cuassistant-codex-"));
+    const schemaPath = path.resolve(
+      process.cwd(),
+      "schemas",
+      "triage-batch.schema.json",
+    );
+    let settled = false;
     const proc = spawn(
       CODEX_BIN,
       [
-        'exec',
-        '--model',
+        "exec",
+        "--model",
         CODEX_MODEL,
-        '--json',
-        '--skip-git-repo-check',
-        '--ephemeral',
-        '-',
+        "--json",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--sandbox",
+        "read-only",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--output-schema",
+        schemaPath,
+        "--cd",
+        isolatedCwd,
+        "-",
       ],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
+      { stdio: ["pipe", "pipe", "pipe"], cwd: isolatedCwd },
     );
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf-8');
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        rmSync(isolatedCwd, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+      fn();
+    };
+    const timeout = setTimeout(() => {
+      proc.kill("SIGTERM");
+      finish(() =>
+        reject(new Error(`codex exec timed out after ${CODEX_TIMEOUT_MS}ms`)),
+      );
+    }, CODEX_TIMEOUT_MS);
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf-8");
     });
-    proc.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf-8');
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
     });
-    proc.on('error', (err) => reject(err));
-    proc.on('close', (code) => {
+    proc.on("error", (err) => finish(() => reject(err)));
+    proc.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`codex exec exited ${code}: ${stderr.slice(0, 500)}`));
+        finish(() =>
+          reject(
+            new Error(`codex exec exited ${code}: ${stderr.slice(0, 500)}`),
+          ),
+        );
         return;
       }
       try {
-        resolve(parseCodexJsonl(stdout, Date.now() - startMs));
+        const parsed = parseCodexJsonl(stdout, Date.now() - startMs);
+        finish(() => resolve(parsed));
       } catch (err) {
-        reject(err);
+        finish(() => reject(err));
       }
     });
     proc.stdin.write(prompt);
@@ -113,9 +154,9 @@ function runCodexExec(prompt: string): Promise<CodexExecResult> {
 }
 
 function parseCodexJsonl(raw: string, latencyMs: number): CodexExecResult {
-  let agentMessage = '';
+  let agentMessage = "";
   let usage: CodexUsage | null = null;
-  for (const line of raw.split('\n')) {
+  for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let evt: Record<string, unknown>;
     try {
@@ -123,12 +164,12 @@ function parseCodexJsonl(raw: string, latencyMs: number): CodexExecResult {
     } catch {
       continue;
     }
-    if (evt.type === 'item.completed') {
+    if (evt.type === "item.completed") {
       const item = evt.item as { type?: string; text?: string } | undefined;
-      if (item?.type === 'agent_message' && typeof item.text === 'string') {
+      if (item?.type === "agent_message" && typeof item.text === "string") {
         agentMessage = item.text;
       }
-    } else if (evt.type === 'turn.completed') {
+    } else if (evt.type === "turn.completed") {
       const u = evt.usage as
         | {
             input_tokens?: number;
@@ -156,8 +197,8 @@ function extractJsonArray(raw: string): string | null {
   // Codex sometimes wraps output in ```json fences or a leading sentence.
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) return fenced[1].trim();
-  const start = raw.indexOf('[');
-  const end = raw.lastIndexOf(']');
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
   if (start >= 0 && end > start) return raw.slice(start, end + 1);
   return null;
 }
@@ -178,13 +219,13 @@ export async function classifyBatchWithCodex(
   try {
     exec = await runCodexExec(prompt);
   } catch (err) {
-    log.warn('codex exec failed', { err: String(err) });
+    log.warn("codex exec failed", { err: String(err) });
     return out;
   }
   out.usage = exec.usage;
   const json = extractJsonArray(exec.agentMessage);
   if (!json) {
-    log.warn('codex output did not contain a JSON array', {
+    log.warn("codex output did not contain a JSON array", {
       preview: exec.agentMessage.slice(0, 200),
     });
     return out;
@@ -193,16 +234,16 @@ export async function classifyBatchWithCodex(
   try {
     parsed = JSON.parse(json) as AgentBatchResult[];
   } catch (err) {
-    log.warn('codex output JSON parse failed', { err: String(err) });
+    log.warn("codex output JSON parse failed", { err: String(err) });
     return out;
   }
   for (const r of parsed) {
     if (!r.email_id) continue;
     out.results.set(r.email_id, {
       needs_task: Boolean(r.needs_task),
-      sort_folder: String(r.sort_folder || 'To Delete'),
-      task_title: String(r.task_title || '').slice(0, 120),
-      reasoning: String(r.reasoning || '').slice(0, 500),
+      sort_folder: String(r.sort_folder || "To Delete"),
+      task_title: String(r.task_title || "").slice(0, 120),
+      reasoning: String(r.reasoning || "").slice(0, 500),
     });
   }
   return out;

@@ -1,18 +1,14 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
-import YAML from 'yaml';
+import YAML from "yaml";
 
-import { CONFIG_DIR } from './config.js';
-import {
-  Classification,
-  EmailAccount,
-  Taxonomy,
-} from './types.js';
+import { CONFIG_DIR } from "./config.js";
+import { Classification, EmailAccount, Taxonomy } from "./types.js";
 
 function loadYamlFile<T>(p: string, fallback: T): T {
   try {
-    const raw = fs.readFileSync(p, 'utf-8');
+    const raw = fs.readFileSync(p, "utf-8");
     const parsed = YAML.parse(raw);
     return (parsed ?? fallback) as T;
   } catch {
@@ -22,7 +18,7 @@ function loadYamlFile<T>(p: string, fallback: T): T {
 
 export function loadAccounts(): EmailAccount[] {
   const data = loadYamlFile<{ accounts?: EmailAccount[] }>(
-    path.join(CONFIG_DIR, 'accounts.yaml'),
+    path.join(CONFIG_DIR, "accounts.yaml"),
     {},
   );
   return (data.accounts || []).filter((a) => a.enabled !== false);
@@ -30,7 +26,7 @@ export function loadAccounts(): EmailAccount[] {
 
 export function loadClassification(): Classification {
   const data = loadYamlFile<Partial<Classification>>(
-    path.join(CONFIG_DIR, 'classification.yaml'),
+    path.join(CONFIG_DIR, "classification.yaml"),
     {},
   );
   return {
@@ -44,7 +40,7 @@ export function loadClassification(): Classification {
 
 export function loadInstitutions(): Set<string> {
   const data = loadYamlFile<{ institutions?: string[] }>(
-    path.join(CONFIG_DIR, 'institutions.yaml'),
+    path.join(CONFIG_DIR, "institutions.yaml"),
     {},
   );
   return new Set(
@@ -54,7 +50,7 @@ export function loadInstitutions(): Set<string> {
 
 export function loadKnownContacts(): Set<string> {
   const data = loadYamlFile<{ known_contacts?: string[] }>(
-    path.join(CONFIG_DIR, 'known_contacts.yaml'),
+    path.join(CONFIG_DIR, "known_contacts.yaml"),
     {},
   );
   return new Set(
@@ -66,7 +62,7 @@ export function loadTaxonomy(): Taxonomy {
   const data = loadYamlFile<{
     taxonomy?: string[];
     taxonomy_context?: Record<string, string>;
-  }>(path.join(CONFIG_DIR, 'taxonomy.yaml'), {});
+  }>(path.join(CONFIG_DIR, "taxonomy.yaml"), {});
   return {
     folders: data.taxonomy || [],
     context: data.taxonomy_context || {},

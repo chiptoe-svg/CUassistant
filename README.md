@@ -1,34 +1,30 @@
 # CUassistant
 
-A personal assistant, built to grow capabilities over time. Today it has one:
-**email triage** — scans your inbox a few times a day, identifies actionable
-mail, and creates Microsoft 365 To Do tasks.
+CUassistant currently has one capability: **email triage**. It scans your inbox
+a few times a day, identifies actionable mail, and creates Microsoft 365 To Do
+tasks.
 
-Some shared ideas with sidestream project: [GC_Agent_Course](https://github.com/chiptoe-svg/nanoclaw_gccourse), but this one is much simplified and narrowly focused on personal-assistant aspects.
-
-Today this is **mostly a deterministic script** that runs simple email-sort
-rules and only calls a small, handcuffed agent for the cases the rules can't
-decide. The agent classifies one email at a time and returns JSON; the host
-does the actual reading, task-creating, and audit-logging. That keeps the
-current footprint safe and easy to reason about, but the skill structure,
-agent persona flexibility, and permissions primitives are in place to
-increase capabilities over time.
+The Codex agent is the default classifier and the benchmark for tuning. It
+receives bounded email candidates and returns JSON; the host does the actual
+mailbox reads, task creation, audit logging, and progress tracking.
+Deterministic rules and the optional lean residual classifier are cost controls,
+and `MODE=compare` lets you measure shortcuts against the full-agent result.
 
 ## How it works
 
-A scheduled run walks new inbox mail through a four-bucket cascade:
+A scheduled run can either send every listed message to the agent, or run a
+deterministic prefilter before sending anything unresolved to the agent:
 
-| Bucket | Check | Cost | Action |
-| --- | --- | --- | --- |
-| 1 — `action_templates` | Sender + subject pattern in `classification.yaml` | zero LLM | create or skip per template |
-| 2 — `skip_senders`     | Sender domain/address in `classification.yaml` | zero LLM | log skip |
-| 3 — Solicited          | Sender in `known_contacts` or domain in `institutions` or thread already seen | LLM call | classify |
-| 4 — Outreach           | Heuristic: short personal body, scheduling keywords, no list-unsub headers | LLM call | classify |
-| 5 — Unsolicited        | Anything else | label-only | log |
+| Bucket                 | Check                                                  | Cost     | Action                      |
+| ---------------------- | ------------------------------------------------------ | -------- | --------------------------- |
+| 1 — `action_templates` | Sender + subject pattern in `classification.yaml`      | zero LLM | create or skip per template |
+| 2 — `skip_senders`     | Sender domain/address in `classification.yaml`         | zero LLM | log skip                    |
+| 3 — Solicited          | Sender in `known_contacts` or domain in `institutions` | LLM call | classify                    |
+| 4 — Other residual     | Anything not pre-resolved                              | LLM call | classify                    |
 
-Buckets 3 and 4 fetch the body once, strip quoted-reply chains and footer
-boilerplate, and ask the model: "does this create a real obligation?" If yes,
-a task is created in MS365 To Do. Either way, a row is appended to
+Agent-classified messages fetch the body once, strip quoted-reply chains and
+footer boilerplate, and ask the model: "does this create a real obligation?"
+If yes, a task is created in MS365 To Do. Either way, a row is appended to
 `state/decisions.jsonl` for audit.
 
 The scan is **read + create-task only** — it never moves, archives, or deletes
@@ -38,15 +34,28 @@ mail. Filing happens separately when you complete the task in To Do.
 
 Pick one in `.env`:
 
-- `MODE=preclassifier` (default) — the host runs the cascade. Residuals go to
-  OpenAI via direct API when `OPENAI_API_KEY` is set; otherwise the host
-  **automatically falls back to `codex exec`** for residuals. So you can leave
-  `OPENAI_API_KEY` blank if you already have the codex CLI authenticated with
-  a ChatGPT subscription.
-- `MODE=agent` — skip the host cascade entirely; let codex classify every
-  email. Useful for sanity-checking the cascade rules end-to-end.
-- `MODE=hybrid` — host always runs buckets 1+2; residuals always go to
-  `codex exec` (not OpenAI direct), even if `OPENAI_API_KEY` is set.
+- `MODE=agent` (default) — Codex classifies every listed email. This is the
+  source-of-truth behavior.
+- `MODE=hybrid` — the host applies deterministic shortcuts first; the selected
+  residual classifier handles everything not resolved.
+- `MODE=compare` — no task/progress side effects. Codex classifies every listed
+  email and `decisions.jsonl` records how the deterministic shortcuts would
+  have compared.
+
+The deterministic prefilter is local YAML/string matching only. It does not
+call OpenAI, Codex, or any other model.
+
+For `MODE=hybrid`, choose the residual classifier separately:
+
+- `RESIDUAL_CLASSIFIER=codex` (default) — unresolved mail goes through Codex.
+- `RESIDUAL_CLASSIFIER=openai` — unresolved mail goes through a lean direct
+  OpenAI API call, one email at a time, with no tools and JSON-only output. This
+  is the low-token path that avoids Codex agent-context overhead for residuals.
+
+Whenever Codex is used, it is still only a classifier: the host passes email
+candidates in, requires schema-shaped JSON back, and applies all side effects
+itself. The invocation uses an isolated temporary working directory, read-only
+sandbox mode, ignored local rules/config, an output schema, and a timeout.
 
 ## Setup
 
@@ -54,7 +63,7 @@ Pick one in `.env`:
 git clone <this-repo>
 cd CUassistant
 npm install
-cp .env.example .env                # fill in MS365 + OpenAI / Codex
+cp .env.example .env                # fill in MS365 + classifier credentials
 cp config/accounts.example.yaml         config/accounts.yaml
 cp config/classification.example.yaml   config/classification.yaml
 cp config/taxonomy.example.yaml         config/taxonomy.yaml
@@ -64,8 +73,24 @@ cp config/known_contacts.example.yaml   config/known_contacts.yaml
 
 ### MS365 auth (one-time)
 
-You need an Azure AD app registration with delegated scopes:
-`Mail.Read`, `Mail.ReadWrite`, `Tasks.ReadWrite`, `offline_access`.
+You need an Azure AD app registration with delegated scopes under the existing
+GCassistant consent envelope:
+`Mail.ReadWrite`, `Tasks.ReadWrite`, `Calendars.ReadWrite`, `Chat.Read`, and
+`offline_access`.
+
+That envelope is broader than the current triage code path. Today the runtime
+refreshes only for `Mail.ReadWrite + Tasks.ReadWrite`, and the host operation
+guard in `src/permissions.ts` permits only:
+
+- list Inbox messages
+- fetch a message body
+- list To Do lists
+- find a To Do task by CUassistant's audit marker
+- create a To Do task
+
+There is no host operation for sending mail, permanently deleting mail, moving
+mail, creating drafts, writing calendar events, or reading Teams chats in the
+shipping triage handler.
 
 Run the device-code login helper to populate `MS365_REFRESH_TOKEN` in `.env`:
 
@@ -73,7 +98,12 @@ Run the device-code login helper to populate `MS365_REFRESH_TOKEN` in `.env`:
 npm run ms365-login
 ```
 
-It prints a verification URL and a one-time code, polls for sign-in, and writes the refresh token back into `.env`. The script requests `https://graph.microsoft.com/.default offline_access` so the resulting token covers whatever scope envelope the Azure app is already consented to; runtime calls in `src/ms365.ts` then refresh for just `Mail.ReadWrite + Tasks.ReadWrite`.
+It prints a verification URL and a one-time code, polls for sign-in, and writes
+the refresh token back into `.env`. The script requests
+`https://graph.microsoft.com/.default offline_access` so the resulting refresh
+token covers whatever scope envelope the Azure app is already consented to;
+runtime calls in `src/ms365.ts` then request only the Mail + To Do scopes the
+triage handler currently uses.
 
 ### Schedule it
 
@@ -108,7 +138,9 @@ Per scan you get four things:
 - **`state/decisions.jsonl`.** Append-only audit log: one row per email
   scanned, including which bucket decided it, the reasoning, model used,
   body hash, and any task id created. This is the source of truth for "why
-  did this email become a task" or "why didn't it."
+  did this email become a task" or "why didn't it." Real task creation writes a
+  durable `task-intent` row before the Graph call and a terminal `task` row
+  after creation or marker-based recovery.
 - **`state/progress.yaml`.** Last-scanned timestamps so the next run only
   picks up new mail.
 - **`state/usage.jsonl`.** Append-only per-LLM-call usage: model, mode,
@@ -125,12 +157,11 @@ Per scan you get four things:
 Every LLM call is logged to `state/usage.jsonl` with model, token counts,
 and API-equivalent USD cost (rate cards live in `src/pricing.ts`). The
 "API-equivalent" framing means costs are computed from observed tokens at
-posted rates regardless of how billing actually happened — so a Codex run
-under a ChatGPT subscription is comparable to an OpenAI direct-API run.
+posted rates regardless of how billing actually happened.
 
 ```bash
 npm run cost-report                              # all-time, grouped by day
-npm run cost-report -- --by mode                 # group by preclassifier/agent/hybrid
+npm run cost-report -- --by mode                 # group by agent/hybrid/compare
 npm run cost-report -- --by model
 npm run cost-report -- --since 2026-04-01
 npm run cost-report -- --simulate-mode agent     # "what if every email had been full agent?"
@@ -138,21 +169,61 @@ npm run cost-report -- --simulate-mode agent     # "what if every email had been
 
 `--simulate-mode <mode>` extrapolates per-email token rates observed in that
 mode onto your total scanned-email count, then tells you the projected cost.
-Useful for comparing the cost of full-agent classification against the
-cascade-with-residuals optimization.
+Useful for comparing full-agent classification cost against the deterministic
+shortcut modes.
+
+## Preclassifier Tuning
+
+`PRECLASSIFY.md` is the human policy for preclassification cost control. It
+covers both deterministic shortcuts and the optional lean residual classifier.
+It says when it is acceptable to turn repeated agent judgments into
+`classification.yaml` rules, and when `RESIDUAL_CLASSIFIER=openai` is the right
+tradeoff for `MODE=hybrid`.
+
+This exists for cost control, not to demote the agent. The earlier 50-email
+triage test that dropped from about 5M tokens to about 50K tokens used the full
+cost-control prototype: deterministic shortcuts for obvious repeated patterns
+plus a lean classifier path for the messages that still needed model judgment.
+CUassistant keeps that lean classifier as an explicit `MODE=hybrid` option via
+`RESIDUAL_CLASSIFIER=openai`; Codex remains the default.
+
+After running `MODE=compare`, ask for reviewable rule suggestions:
+
+```bash
+npm run preclassify:suggest
+npm run preclassify:suggest -- --days 14 --min-evidence 5
+```
+
+The suggestion command reads `PRECLASSIFY.md`, current
+`config/classification.yaml`, and recent `pass: "compare"` rows in
+`state/decisions.jsonl`. It prints YAML snippets for possible `skip_senders`
+and `action_templates` additions, plus warnings for rules that disagreed with
+the agent. It does not edit config files.
 
 ## How it's organized
 
 Each capability is a self-registering **handler** in `src/handlers/`. Today
 there's only one:
 
-- `triage` — declared scopes: `Mail.Read`, `Tasks.ReadWrite`. Walks the
+- `triage` — runtime consent scopes: `Mail.ReadWrite`, `Tasks.ReadWrite`. Walks the
   cascade, creates tasks, writes `decisions.jsonl`.
 
-Each handler declares the Microsoft Graph scopes it touches in
-`src/permissions.ts`. Every Graph call asserts the active handler's
-declared scopes before firing. The full list of operations the tool is
-allowed to perform is one `Object.values()` away.
+The scan implementation is split by review concern: `src/scan.ts` orchestrates,
+`src/scan-mail.ts` reads mail and progress, `src/preclassifier.ts` owns
+deterministic rules, `src/residual-classifiers.ts` chooses the classifier
+backend, and `src/scan-effects.ts` applies audit/task side effects.
+
+Each handler declares the Microsoft Graph consent scopes it touches in
+`src/handlers/`. The stricter executable operation list lives in
+`src/permissions.ts`; every Graph call asserts the active handler is allowed
+that host operation before firing. The full list of actions the tool can
+perform is one `Object.values()` away.
+
+For the IT-facing review notes on consent, data flow, and non-capabilities, see
+[`docs/IT_REVIEW_NOTES.md`](docs/IT_REVIEW_NOTES.md).
+
+That note also covers local LLMs as a future privacy control. They are
+not part of the current runtime or consent request.
 
 ## Persona and skills
 
@@ -174,7 +245,10 @@ skills/
 
 At runtime, `src/prompts.ts` reads `AGENT.md` + the active handler's
 `SKILL.md` and composes them into the system prompt, with runtime-computed
-data (taxonomy bullets, candidate lists, etc.) appended after.
+data (taxonomy bullets, candidate lists, etc.) appended after. The local triage
+skill borrows the useful urgency/reply-needed heuristics from the bundled
+Codex Outlook inbox-triage skill, but keeps CUassistant's stricter batch JSON
+contract.
 
 ## Adding a capability
 
@@ -187,46 +261,17 @@ No orchestration changes. Optional: add `skills/<name>/references/` for
 supporting reference docs the skill can cite.
 
 Output goes through a parallel **notifier** registry in `src/notifiers/`.
-Today the only registered notifier is stdout (so cron / launchctl captures
-the summary). The registry is the seam where I'd add personal delivery
-channels later (Slack incoming-webhook, email-self, file-tail, etc.) — same
-pattern as handlers, no orchestration changes.
+Today the registered notifiers are stdout and a local log file.
 
-## Things I've thought about but haven't done
+## Private-project boundary
 
-- Reply drafting (would be a `drafts` handler + `skills/drafts/SKILL.md`;
-  `Mail.ReadWrite` scope).
-- Auto-filing on task completion (a `filing` handler; `Mail.ReadWrite`).
-- Calendar suggestions on scheduling emails (`calendar` handler; own
-  calendar only).
-
-Each goes through the same handler + permissions + skill seam.
-
-## Related: the Codex Gmail plugin
-
-OpenAI ships a [Gmail plugin for Codex](https://developers.openai.com/codex/plugins)
-plus a [Manage-your-inbox use case](https://developers.openai.com/codex/use-cases/manage-your-inbox)
-that solves a different but adjacent problem: agentically reading recent
-threads and **drafting replies in your voice**. It's not a packaged skill in
-[`openai/skills`](https://github.com/openai/skills); it's the Gmail plugin
-plus a prompt like "review Gmail for what needs my attention and draft the
-replies."
-
-Differences vs. this project:
-
-| | Codex Gmail use case | CUassistant (email triage) |
-| --- | --- | --- |
-| Architecture | LLM agent loop end-to-end | Deterministic cascade, LLM only on residuals |
-| Output | Gmail drafts | MS365 To Do tasks + audit JSONL |
-| Rules layer | None | action_templates / skip_senders / institutions / known_contacts |
-| Cost per ~50 mail | ~$0.30–$2 | ~$0.005 (only residuals hit the model) |
-| Repeatability | Per-run; depends on prompt + memory | Same input → same decision until rules change |
-| Audit | Chat transcript | decisions.jsonl with body_sha256, model_used per email |
-| MS365 / Outlook + To Do | Limited (Outlook MCP exists, To Do not built-in) | Native |
-| Scheduling | Codex Automations | Plain cron / launchd |
-
-**They compose well.** Run this taskfinder twice daily to keep To Do honest;
-use the Codex Gmail plugin ad-hoc when you actually sit down to reply.
+This repo is intentionally lighter than a campus platform review package. For a
+private single-user project, the important boundary is in code: one scheduled
+host process, no daemon, no outbound notification channel beyond stdout/file,
+no send/delete/move mail operation, and no direct LLM tool access to Microsoft
+Graph. If this grows into a sanctioned multi-user campus catalog, the next step
+is a short per-capability review manifest rather than a heavyweight document in
+this private branch.
 
 ## License
 

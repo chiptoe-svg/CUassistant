@@ -70,8 +70,10 @@ You need an Azure AD app registration with delegated scopes:
 Run the device-code login helper to populate `MS365_REFRESH_TOKEN` in `.env`:
 
 ```bash
-npm run scripts/ms365-login   # TODO
+npm run ms365-login
 ```
+
+It prints a verification URL and a one-time code, polls for sign-in, and writes the refresh token back into `.env`. The script requests `https://graph.microsoft.com/.default offline_access` so the resulting token covers whatever scope envelope the Azure app is already consented to; runtime calls in `src/ms365.ts` then refresh for just `Mail.ReadWrite + Tasks.ReadWrite`.
 
 ### Schedule it
 

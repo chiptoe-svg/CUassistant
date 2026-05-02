@@ -6,6 +6,10 @@ dist/
 .env
 .env.local
 state/
+
+# Live config copies (only the *.example.yaml files are tracked)
+config/*.yaml
+!config/*.example.yaml
 config/*.local.yaml
 
 # Editor / OS

@@ -4,6 +4,10 @@ This note describes the current shipping behavior for anyone reviewing the
 Microsoft 365 consent and data-flow shape. It intentionally describes what
 exists today, not the larger campus-agent direction.
 
+These notes were prepared after a Codex-assisted review of the current codebase.
+They are meant to make the implementation easier to inspect; they are not a
+formal security certification.
+
 ## Summary
 
 CUassistant is a single-user, cron-driven email triage script. It reads new

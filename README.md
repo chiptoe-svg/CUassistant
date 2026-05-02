@@ -284,16 +284,6 @@ supporting reference docs the skill can cite.
 Output goes through a parallel **notifier** registry in `src/notifiers/`.
 Today the registered notifiers are stdout and a local log file.
 
-## Private-project boundary
-
-This repo is intentionally lighter than a campus platform review package. For a
-private single-user project, the important boundary is in code: one scheduled
-host process, no daemon, no outbound notification channel beyond stdout/file,
-no send/delete/move mail operation, and no direct LLM tool access to Microsoft
-Graph. If this grows into a sanctioned multi-user campus catalog, the next step
-is a short per-capability review manifest rather than a heavyweight document in
-this private branch.
-
 ## License
 
 TBD.

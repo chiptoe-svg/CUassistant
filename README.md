@@ -93,6 +93,31 @@ Then wire to cron / launchd / systemd — twice daily is the recommended cadence
 30 16 * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
 ```
 
+On macOS, `launchd/com.cuassistant.scan.plist` is a ready-to-edit template.
+Replace `REPO_PATH`, `NPM_PATH`, and `HOME_PATH` with absolute paths, copy it
+to `~/Library/LaunchAgents/`, and `launchctl load` it. See the comment at the
+top of the plist for the full sequence.
+
+## Output and notifications
+
+Per scan you get four things:
+
+- **Real MS365 To Do tasks.** When not in dry-run mode, actionable mail
+  becomes tasks in your default `Tasks` list — visible in Outlook web, the
+  To Do app, and iOS Reminders, with native reminder notifications.
+- **`state/decisions.jsonl`.** Append-only audit log: one row per email
+  scanned, including which bucket decided it, the reasoning, model used,
+  body hash, and any task id created. This is the source of truth for "why
+  did this email become a task" or "why didn't it."
+- **`state/progress.yaml`.** Last-scanned timestamps so the next run only
+  picks up new mail.
+- **Per-run summary.** A short text block (scanned / created / by-bucket
+  counts and the task titles) is dispatched through the notifier registry.
+  Two notifiers are wired today:
+  - `stdout` — captured by cron / launchd's `StandardOutPath`.
+  - `file` — appends to `~/Library/Logs/cuassistant.log` (override path
+    with `NOTIFY_LOG_FILE`).
+
 ## How it's organized
 
 Each capability is a self-registering **handler** in `src/handlers/`. Today

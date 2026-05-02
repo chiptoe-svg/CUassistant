@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CUassistant scan job for launchd.
+
+  Setup (one time):
+    1. Edit this file: replace REPO_PATH with the absolute path to your local
+       repo, NPM_PATH with the absolute path to your npm binary
+       (run `which npm`), and HOME_PATH with $HOME.
+    2. cp launchd/com.cuassistant.scan.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.cuassistant.scan.plist
+    4. (optional) launchctl start com.cuassistant.scan   # runs once on demand
+    5. tail -f ~/Library/Logs/cuassistant.scan.out.log   # see operational stdout
+       tail -f ~/Library/Logs/cuassistant.log            # see per-run summaries
+
+  Schedule: 7:00 AM and 4:30 PM, Mon–Fri (matches the README example).
+  Edit the StartCalendarInterval array to change cadence.
+
+  To unload:
+    launchctl unload ~/Library/LaunchAgents/com.cuassistant.scan.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuassistant.scan</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>NPM_PATH</string>
+    <string>run</string>
+    <string>scan</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPO_PATH</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>HOME_PATH</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key><integer>7</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>1</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>7</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>2</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>7</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>3</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>7</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>4</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>7</integer>
+      <key>Minute</key><integer>0</integer>
+      <key>Weekday</key><integer>5</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
+      <key>Weekday</key><integer>1</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
+      <key>Weekday</key><integer>2</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
+      <key>Weekday</key><integer>3</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
+      <key>Weekday</key><integer>4</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>30</integer>
+      <key>Weekday</key><integer>5</integer>
+    </dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.scan.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.scan.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

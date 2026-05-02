@@ -1,23 +1,46 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CUassistant triage batch decisions",
-  "type": "array",
-  "items": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "email_id",
-      "needs_task",
-      "sort_folder",
-      "task_title",
-      "reasoning"
-    ],
-    "properties": {
-      "email_id": { "type": "string", "minLength": 1 },
-      "needs_task": { "type": "boolean" },
-      "sort_folder": { "type": "string", "minLength": 1 },
-      "task_title": { "type": "string", "minLength": 1, "maxLength": 120 },
-      "reasoning": { "type": "string", "minLength": 1, "maxLength": 500 }
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["results"],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email_id",
+          "needs_task",
+          "sort_folder",
+          "task_title",
+          "reasoning"
+        ],
+        "properties": {
+          "email_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "needs_task": {
+            "type": "boolean"
+          },
+          "sort_folder": {
+            "type": "string",
+            "minLength": 1
+          },
+          "task_title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "reasoning": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      }
     }
   }
 }

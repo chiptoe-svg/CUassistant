@@ -1,6 +1,8 @@
 export type Account = "gmail" | "outlook";
 export type ScanMode = "agent" | "hybrid" | "compare";
 export type ResidualClassifier = "codex" | "openai";
+export type OutlookMailProvider = "graph" | "codex";
+export type TaskProvider = "graph" | "graph-cli";
 
 export interface EmailMinimal {
   id: string;

@@ -60,14 +60,15 @@ Return JSON only — no prose, no markdown fences:
 ```
 
 When the same skill is used in batch mode (codex CLI invocation), return a
-JSON array of one object per candidate, in the same order, each object
-including its `email_id`:
+JSON object with a `results` array containing one object per candidate, in the
+same order, each object including its `email_id`:
 
 ```
-[
-  {"email_id": "<id>", "needs_task": false, "sort_folder": "...", "task_title": "...", "reasoning": "..."},
-  ...
-]
+{
+  "results": [
+    {"email_id": "<id>", "needs_task": false, "sort_folder": "...", "task_title": "...", "reasoning": "..."}
+  ]
+}
 ```
 
 ## Per-email independence

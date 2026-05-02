@@ -88,10 +88,40 @@ cp config/institutions.example.yaml     config/institutions.yaml
 cp config/known_contacts.example.yaml   config/known_contacts.yaml
 ```
 
-### MS365 auth (one-time)
+### Provider boundaries
 
-You need an Azure AD app registration with delegated scopes under the existing
-GCassistant consent envelope:
+CUassistant keeps mailbox access and task creation behind small provider
+interfaces:
+
+- `MailReader` — list new mail and fetch the body needed for classification.
+- `TaskWriter` — find an existing To Do task by audit marker and create a task.
+
+Today `src/provider-registry.ts` wires Gmail through `gws`, Outlook mail through
+the GCassistant Microsoft Graph app, and task creation through Microsoft Graph To
+Do. That registry is the swap point for a future `Codex Outlook connector` mail
+reader or a Graph CLI-backed task writer without changing the scan flow,
+preclassifier, classifier, or audit logic.
+
+Provider selection is controlled by `.env`:
+
+```bash
+# default: GCassistant Graph app reads Outlook
+OUTLOOK_MAIL_PROVIDER=graph
+
+# alternate: Codex CLI reads Outlook through the Outlook Email connector
+OUTLOOK_MAIL_PROVIDER=codex
+
+# default: GCassistant Graph app creates To Do tasks
+TASK_PROVIDER=graph
+
+# alternate: Graph CLI first-party client creates To Do tasks
+TASK_PROVIDER=graph-cli
+```
+
+### MS365 auth (one-time, default provider path)
+
+The default Outlook + To Do providers need an Azure AD app registration with
+delegated scopes under the existing GCassistant consent envelope:
 `Mail.ReadWrite`, `Tasks.ReadWrite`, `Calendars.ReadWrite`, `Chat.Read`, and
 `offline_access`.
 
@@ -121,6 +151,35 @@ the refresh token back into `.env`. The script requests
 token covers whatever scope envelope the Azure app is already consented to;
 runtime calls in `src/ms365.ts` then request only the Mail + To Do scopes the
 triage handler currently uses.
+
+An alternate ChatGPT Edu/Codex path may not need the GCassistant app for mail
+reads if Codex reads Outlook through its sanctioned Outlook connector, and may
+not need it for task writes if task creation is routed through an already
+consented Microsoft Graph CLI client. That is a different review story, not the
+current default: it depends on the Codex connector runtime for mail access and a
+separate task writer for To Do side effects.
+
+To use the Graph CLI task-writer path, run:
+
+```bash
+npm run graph-cli-tasks-login
+```
+
+That writes `GRAPH_CLI_REFRESH_TOKEN` into `.env`. Then set
+`TASK_PROVIDER=graph-cli`.
+
+Provider smoke checks avoid printing message content:
+
+```bash
+# List at most two Outlook messages through the selected mail provider.
+MODE=agent OUTLOOK_MAIL_PROVIDER=codex OUTLOOK_CODEX_MAX_RESULTS=2 npm run provider-smoke
+
+# Also fetch the first body, printing only body length and hash.
+MODE=agent OUTLOOK_MAIL_PROVIDER=codex OUTLOOK_CODEX_MAX_RESULTS=1 PROVIDER_SMOKE_FETCH_BODY=1 npm run provider-smoke
+
+# Check task-writer readiness without creating a task.
+MODE=agent TASK_PROVIDER=graph-cli PROVIDER_SMOKE_MAIL=0 PROVIDER_SMOKE_TASKS=1 npm run provider-smoke
+```
 
 ### Schedule it
 
@@ -227,9 +286,11 @@ there's only one:
   cascade, creates tasks, writes `decisions.jsonl`.
 
 The scan implementation is split by review concern: `src/scan.ts` orchestrates,
-`src/scan-mail.ts` reads mail and progress, `src/preclassifier.ts` owns
-deterministic rules, `src/residual-classifiers.ts` chooses the classifier
-backend, and `src/scan-effects.ts` applies audit/task side effects.
+`src/scan-mail.ts` reads mail through the configured provider, `src/preclassifier.ts`
+owns deterministic rules, `src/residual-classifiers.ts` chooses the classifier
+backend, and `src/scan-effects.ts` applies audit/task side effects through the
+configured task writer. `src/provider-registry.ts` is the narrow swap point for
+mail-read and task-write implementations.
 
 Additional capabilities fit beside `triage`, not inside it. A future capability
 would add `src/handlers/<name>.ts`, `skills/<name>/SKILL.md`, its declared

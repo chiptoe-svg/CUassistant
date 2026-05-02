@@ -1,6 +1,5 @@
-import { fetchGmailBody, listGmail } from "./gmail.js";
 import { loadAccounts } from "./loaders.js";
-import { fetchOutlookBody, listOutlook } from "./ms365.js";
+import { mailProviderForAccount } from "./provider-registry.js";
 import { writeProgress } from "./state.js";
 import {
   EmailAccount,
@@ -20,34 +19,31 @@ export async function listAllNewMail(progress: {
   const completedAccounts = new Set<ProgressAccount>();
   const errors: string[] = [];
   for (const acc of accounts) {
-    if (acc.type === "gws") {
-      const messages = listGmail(progress.gmail ?? null);
-      if (messages) {
-        out.push(...messages);
-        completedAccounts.add("gmail");
-      } else {
-        errors.push(`gmail:${acc.id}: list failed or GWS unavailable`);
-      }
-    } else if (acc.type === "ms365") {
-      const messages = await listOutlook(progress.outlook ?? null);
-      if (messages) {
-        out.push(...messages);
-        completedAccounts.add("outlook");
-      } else {
-        errors.push(`outlook:${acc.id}: list failed or MS365 unavailable`);
-      }
+    const provider = mailProviderForAccount(acc);
+    if (!provider) continue;
+    const messages = await provider.reader.listNew(
+      progress[provider.progressAccount] ?? null,
+    );
+    if (messages) {
+      out.push(...messages);
+      completedAccounts.add(provider.progressAccount);
+    } else {
+      errors.push(`${provider.progressAccount}:${acc.id}: list failed`);
     }
   }
   return { emails: out, completedAccounts, errors };
 }
 
 export async function fetchBodies(candidates: LlmCandidate[]): Promise<void> {
+  const providers = new Map(
+    loadAccounts()
+      .map((acc) => mailProviderForAccount(acc))
+      .filter((p): p is NonNullable<typeof p> => Boolean(p))
+      .map((p) => [p.progressAccount, p.reader]),
+  );
   for (const c of candidates) {
-    if (c.account === "gmail") {
-      c.body = fetchGmailBody(c.id);
-    } else if (c.account === "outlook") {
-      c.body = await fetchOutlookBody(c.id);
-    }
+    const reader = providers.get(c.account);
+    if (reader) c.body = await reader.fetchBody(c.id);
   }
 }
 

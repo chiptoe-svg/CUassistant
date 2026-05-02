@@ -32,6 +32,8 @@ The review surface is split by concern:
 | `src/openai-classifier.ts`    | Optional lean direct API classifier. Disabled by default.   |
 | `src/codex-agent.ts`          | Codex CLI invocation and schema-constrained output parsing. |
 | `src/scan-effects.ts`         | Host-applied audit rows and To Do task creation.            |
+| `src/provider-registry.ts`    | Mail-reader and task-writer provider selection.             |
+| `src/providers.ts`            | Provider interfaces for mail reads and task writes.         |
 | `src/ms365.ts`                | Microsoft Graph token refresh and Graph REST calls.         |
 | `src/permissions.ts`          | Host operation allow-list for Graph calls.                  |
 
@@ -41,8 +43,9 @@ effect path rather than expanding the email triage handler.
 
 ## Consent Context
 
-Restore delegated admin consent for the existing GCassistant Azure AD app under
-the previously reviewed scope envelope:
+The default provider path uses the existing GCassistant Azure AD app. Restoring
+delegated admin consent for that app would keep the implementation self-contained
+under the previously reviewed scope envelope:
 
 - `Mail.ReadWrite`
 - `Tasks.ReadWrite`
@@ -54,6 +57,44 @@ The scope envelope is broader than the active triage handler. The active handler
 refreshes and uses only Mail + To Do access, and the code has no host operation
 for sending, deleting, moving, or drafting mail; writing calendar events; or
 reading Teams chats.
+
+There is also a possible ChatGPT Edu/Codex provider path: Codex can read Outlook
+through its sanctioned Outlook connector, while a separate task writer could
+create To Do tasks through an already consented Microsoft Graph CLI client. That
+path may avoid the GCassistant app for this narrow workflow, but it is a
+different review story: mail access depends on the Codex connector runtime and
+task writes depend on a separate first-party Microsoft client. The provider
+interfaces make that swap localized rather than changing the scan, classifier,
+or audit flow.
+
+The concrete environment switches are:
+
+- `OUTLOOK_MAIL_PROVIDER=graph` or `codex`
+- `TASK_PROVIDER=graph` or `graph-cli`
+
+## Email And Task Provider Contract
+
+CUassistant treats email access and task creation as separate provider
+functions:
+
+| Provider function | Current implementations | Allowed behavior                                               |
+| ----------------- | ----------------------- | -------------------------------------------------------------- |
+| Mail reader       | `graph`, `codex`        | List Inbox messages and fetch message bodies.                  |
+| Task writer       | `graph`, `graph-cli`    | List To Do lists, find audit-marked tasks, create To Do tasks. |
+
+The mail reader does not expose send, delete, move, archive, draft, or calendar
+operations. The task writer does not receive the classifier prompt or mailbox
+body text; it receives only the clean task title, optional due date, target list,
+and CUassistant audit marker. The scan, preclassifier, classifier, audit log,
+and progress cursor code stay the same regardless of which provider
+implementation is selected.
+
+`OUTLOOK_MAIL_PROVIDER=codex` uses Codex CLI with the Outlook Email connector to
+read mail. `TASK_PROVIDER=graph-cli` uses the Microsoft Graph Command Line Tools
+first-party app ID for To Do writes after `npm run graph-cli-tasks-login`
+creates `GRAPH_CLI_REFRESH_TOKEN`. This is the ChatGPT Edu / first-party-client
+route; the default `graph` providers remain the self-contained GCassistant app
+route.
 
 ## Runtime Flow
 

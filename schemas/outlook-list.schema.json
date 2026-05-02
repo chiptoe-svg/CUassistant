@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["messages"],
+  "properties": {
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "from", "subject", "conversationId", "receivedIso"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "conversationId": {
+            "type": ["string", "null"]
+          },
+          "receivedIso": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

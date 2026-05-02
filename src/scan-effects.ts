@@ -8,7 +8,7 @@ import {
 import { DRY_RUN } from "./config.js";
 import { loadTaxonomy } from "./loaders.js";
 import { log } from "./log.js";
-import { createMs365Task, findMs365TaskByMarker } from "./ms365.js";
+import { TaskWriter } from "./providers.js";
 import { appendDecision, emailKey } from "./state.js";
 import {
   ApiOutcome,
@@ -47,7 +47,8 @@ export async function applyClassification(
   result: ClassificationResult,
   scanRunId: string,
   modelLabel: string,
-  ms365ListId: string | null,
+  taskListId: string | null,
+  taskWriter: TaskWriter,
   out: ApiOutcome,
 ): Promise<void> {
   const taxonomy = loadTaxonomy();
@@ -59,7 +60,7 @@ export async function applyClassification(
     .digest("hex");
 
   if (result.needs_task) {
-    if (!ms365ListId || DRY_RUN) {
+    if (!taskListId || DRY_RUN) {
       if (DRY_RUN) {
         log.info("[dry-run] would create task", {
           subject: email.subject,
@@ -106,12 +107,12 @@ export async function applyClassification(
     }
     let taskId: string | null = null;
     let taskPreexisting = false;
-    if (!DRY_RUN && ms365ListId) {
-      taskId = await findMs365TaskByMarker(ms365ListId, auditMarker);
+    if (!DRY_RUN && taskListId) {
+      taskId = await taskWriter.findTaskByMarker(taskListId, auditMarker);
       taskPreexisting = Boolean(taskId);
       if (!taskId) {
-        taskId = await createMs365Task(
-          ms365ListId,
+        taskId = await taskWriter.createTask(
+          taskListId,
           cleanTitle,
           undefined,
           auditMarker,

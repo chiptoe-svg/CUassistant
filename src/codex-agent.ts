@@ -136,7 +136,9 @@ function runCodexExec(prompt: string): Promise<CodexExecResult> {
       if (code !== 0) {
         finish(() =>
           reject(
-            new Error(`codex exec exited ${code}: ${stderr.slice(0, 500)}`),
+            new Error(
+              `codex exec exited ${code}: stderr=${stderr.slice(0, 2000)} stdout=${stdout.slice(-2000)}`,
+            ),
           ),
         );
         return;

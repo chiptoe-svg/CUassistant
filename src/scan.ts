@@ -12,12 +12,8 @@ import {
   loadKnownContacts,
 } from "./loaders.js";
 import { log } from "./log.js";
-import {
-  computeDueIsoLocal,
-  createMs365Task,
-  findMs365TaskByMarker,
-  getDefaultTodoListId,
-} from "./ms365.js";
+import { computeDueIsoLocal } from "./ms365.js";
+import { getTaskWriter } from "./provider-registry.js";
 import {
   appendDecision,
   emailKey,
@@ -67,6 +63,7 @@ export async function runScan(): Promise<string> {
   const progress = loadProgress();
   const wantsAgent = MODE === "agent";
   const wantsCompare = MODE === "compare";
+  const taskWriter = getTaskWriter();
 
   // Carryover from prior scan: any pending residual whose email_id has a
   // logged decision is dropped; entries past MAX_PENDING_ATTEMPTS get a
@@ -153,7 +150,7 @@ export async function runScan(): Promise<string> {
     return formatSummary(outcome, null, scanRunId, compare);
   }
 
-  const ms365ListId = DRY_RUN ? "dry-run" : await getDefaultTodoListId();
+  const taskListId = DRY_RUN ? "dry-run" : await taskWriter.getDefaultListId();
 
   const overrideById = new Map(
     classification.overrides.map((o) => [o.email_id, o]),
@@ -221,7 +218,7 @@ export async function runScan(): Promise<string> {
             : undefined;
         let taskId: string | null = null;
         let taskPreexisting = false;
-        if (!DRY_RUN && ms365ListId) {
+        if (!DRY_RUN && taskListId) {
           appendDecision({
             scan_run_id: scanRunId,
             email_id: email.id,
@@ -237,11 +234,11 @@ export async function runScan(): Promise<string> {
             task_audit_marker: auditMarker,
             model_used: null,
           });
-          taskId = await findMs365TaskByMarker(ms365ListId, auditMarker);
+          taskId = await taskWriter.findTaskByMarker(taskListId, auditMarker);
           taskPreexisting = Boolean(taskId);
           if (!taskId) {
-            taskId = await createMs365Task(
-              ms365ListId,
+            taskId = await taskWriter.createTask(
+              taskListId,
               cleanTitle,
               due,
               auditMarker,
@@ -325,8 +322,18 @@ export async function runScan(): Promise<string> {
   // backend. MODE=compare returned earlier and never creates tasks.
   const api =
     MODE === "hybrid" && RESIDUAL_CLASSIFIER === "openai"
-      ? await classifyResidualsOpenAi(outcome, scanRunId, ms365ListId)
-      : await classifyResidualsCodex(outcome, scanRunId, ms365ListId);
+      ? await classifyResidualsOpenAi(
+          outcome,
+          scanRunId,
+          taskListId,
+          taskWriter,
+        )
+      : await classifyResidualsCodex(
+          outcome,
+          scanRunId,
+          taskListId,
+          taskWriter,
+        );
 
   if (!DRY_RUN) {
     const nowIso = new Date().toISOString();

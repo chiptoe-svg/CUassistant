@@ -4,6 +4,7 @@ import { loadTaxonomy } from "./loaders.js";
 import { log } from "./log.js";
 import { classifyEmailWithApi, openAiConfigured } from "./openai-classifier.js";
 import { computeCostUsd } from "./pricing.js";
+import { TaskWriter } from "./providers.js";
 import { appendUsage } from "./state.js";
 import { ApiOutcome, ScanOutcome } from "./types.js";
 import {
@@ -15,7 +16,8 @@ import {
 export async function classifyResidualsCodex(
   outcome: ScanOutcome,
   scanRunId: string,
-  ms365ListId: string | null,
+  taskListId: string | null,
+  taskWriter: TaskWriter,
 ): Promise<ApiOutcome> {
   const taxonomy = loadTaxonomy();
   const out = createApiOutcome();
@@ -49,7 +51,8 @@ export async function classifyResidualsCodex(
       result,
       scanRunId,
       "codex-cli",
-      ms365ListId,
+      taskListId,
+      taskWriter,
       out,
     );
   }
@@ -59,7 +62,8 @@ export async function classifyResidualsCodex(
 export async function classifyResidualsOpenAi(
   outcome: ScanOutcome,
   scanRunId: string,
-  ms365ListId: string | null,
+  taskListId: string | null,
+  taskWriter: TaskWriter,
 ): Promise<ApiOutcome> {
   const taxonomy = loadTaxonomy();
   const out = createApiOutcome();
@@ -95,7 +99,8 @@ export async function classifyResidualsOpenAi(
       result,
       scanRunId,
       "openai-direct",
-      ms365ListId,
+      taskListId,
+      taskWriter,
       out,
     );
   }

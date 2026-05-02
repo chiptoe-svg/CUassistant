@@ -7,7 +7,7 @@ tasks.
 The Codex agent is the default classifier and the benchmark for tuning. It
 receives bounded email candidates and returns JSON; the host does the actual
 mailbox reads, task creation, audit logging, and progress tracking.
-Deterministic rules and the optional lean residual classifier are cost controls,
+Deterministic rules and the optional lean residual classifier are token use and cost controls,
 and `MODE=compare` lets you measure shortcuts against the full-agent result.
 
 ## How it works

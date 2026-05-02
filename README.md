@@ -1,10 +1,18 @@
-# email-taskfinder
+# CUassistant
 
-A small, single-purpose personal assistant: scans your inbox a few times a day,
-identifies actionable mail, and creates Microsoft 365 To Do tasks.
+A personal assistant, built to grow capabilities over time. Today it has one:
+**email triage** — scans your inbox a few times a day, identifies actionable
+mail, and creates Microsoft 365 To Do tasks.
 
-Some shared ideas with sidestream project: [GC_Agent_Course](https://github.com/chiptoe-svg/nanoclaw_gccourse), but this one much simplified, and narrowly focussed on personal assistant aspects.
-No channels, no containers, no agent loop, no daemon.
+Some shared ideas with sidestream project: [GC_Agent_Course](https://github.com/chiptoe-svg/nanoclaw_gccourse), but this one is much simplified and narrowly focused on personal-assistant aspects.
+
+Today this is **mostly a deterministic script** that runs simple email-sort
+rules and only calls a small, handcuffed agent for the cases the rules can't
+decide. The agent classifies one email at a time and returns JSON; the host
+does the actual reading, task-creating, and audit-logging. That keeps the
+current footprint safe and easy to reason about, but the skill structure,
+agent persona flexibility, and permissions primitives are in place to
+increase capabilities over time.
 
 ## How it works
 
@@ -44,7 +52,7 @@ Pick one in `.env`:
 
 ```bash
 git clone <this-repo>
-cd email-taskfinder
+cd CUassistant
 npm install
 cp .env.example .env                # fill in MS365 + OpenAI / Codex
 cp config/accounts.example.yaml         config/accounts.yaml
@@ -79,8 +87,8 @@ Then wire to cron / launchd / systemd — twice daily is the recommended cadence
 
 ```cron
 # 7:00 AM and 4:30 PM, weekdays
-0  7  * * 1-5  cd /path/to/email-taskfinder && /usr/local/bin/npm run scan
-30 16 * * 1-5  cd /path/to/email-taskfinder && /usr/local/bin/npm run scan
+0  7  * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
+30 16 * * 1-5  cd /path/to/CUassistant && /usr/local/bin/npm run scan
 ```
 
 ## How it's organized
@@ -156,7 +164,7 @@ replies."
 
 Differences vs. this project:
 
-| | Codex Gmail use case | email-taskfinder |
+| | Codex Gmail use case | CUassistant (email triage) |
 | --- | --- | --- |
 | Architecture | LLM agent loop end-to-end | Deterministic cascade, LLM only on residuals |
 | Output | Gmail drafts | MS365 To Do tasks + audit JSONL |

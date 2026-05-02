@@ -7,7 +7,7 @@
 // Examples for later:
 //   - slack.ts:    post to a personal Slack via incoming webhook
 //   - email.ts:    send the summary to yourself via Graph send-mail
-//   - file.ts:     append to ~/Library/Logs/email-taskfinder.log
+//   - file.ts:     append to ~/Library/Logs/cuassistant.log
 //   - telegram.ts: bot-to-self DM
 
 import './stdout.js';

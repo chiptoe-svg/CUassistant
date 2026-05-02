@@ -111,12 +111,35 @@ Per scan you get four things:
   did this email become a task" or "why didn't it."
 - **`state/progress.yaml`.** Last-scanned timestamps so the next run only
   picks up new mail.
+- **`state/usage.jsonl`.** Append-only per-LLM-call usage: model, mode,
+  input/cached/output tokens, latency, API-equivalent USD cost.
 - **Per-run summary.** A short text block (scanned / created / by-bucket
-  counts and the task titles) is dispatched through the notifier registry.
-  Two notifiers are wired today:
+  counts, LLM cost line, task titles) is dispatched through the notifier
+  registry. Two notifiers are wired today:
   - `stdout` — captured by cron / launchd's `StandardOutPath`.
   - `file` — appends to `~/Library/Logs/cuassistant.log` (override path
     with `NOTIFY_LOG_FILE`).
+
+## Cost reporting
+
+Every LLM call is logged to `state/usage.jsonl` with model, token counts,
+and API-equivalent USD cost (rate cards live in `src/pricing.ts`). The
+"API-equivalent" framing means costs are computed from observed tokens at
+posted rates regardless of how billing actually happened — so a Codex run
+under a ChatGPT subscription is comparable to an OpenAI direct-API run.
+
+```bash
+npm run cost-report                              # all-time, grouped by day
+npm run cost-report -- --by mode                 # group by preclassifier/agent/hybrid
+npm run cost-report -- --by model
+npm run cost-report -- --since 2026-04-01
+npm run cost-report -- --simulate-mode agent     # "what if every email had been full agent?"
+```
+
+`--simulate-mode <mode>` extrapolates per-email token rates observed in that
+mode onto your total scanned-email count, then tells you the projected cost.
+Useful for comparing the cost of full-agent classification against the
+cascade-with-residuals optimization.
 
 ## How it's organized
 

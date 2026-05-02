@@ -23,11 +23,25 @@ function taxonomyAppendix(taxonomy: Taxonomy): string {
   return `Taxonomy (pick exactly one for sort_folder):\n${folderBullets}`;
 }
 
+export interface OpenAiUsage {
+  model: string;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  latency_ms: number;
+}
+
+export interface OpenAiClassifyOutput {
+  result: ClassificationResult | null;
+  usage: OpenAiUsage | null;
+}
+
 export async function classifyEmailWithApi(
   email: LlmCandidate,
   taxonomy: Taxonomy,
-): Promise<ClassificationResult | null> {
-  if (!OPENAI_API_KEY) return null;
+): Promise<OpenAiClassifyOutput> {
+  if (!OPENAI_API_KEY) return { result: null, usage: null };
+  const startMs = Date.now();
 
   const systemMsg = composeSystemPrompt('triage', taxonomyAppendix(taxonomy));
 
@@ -62,25 +76,43 @@ export async function classifyEmailWithApi(
         body: (await r.text()).slice(0, 200),
         emailId: email.id,
       });
-      return null;
+      return { result: null, usage: null };
     }
     const resp = (await r.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      };
     };
     const text = resp.choices?.[0]?.message?.content;
-    if (!text) return null;
+    const usage: OpenAiUsage | null = resp.usage
+      ? {
+          model: OPENAI_MODEL,
+          input_tokens: resp.usage.prompt_tokens ?? 0,
+          cached_input_tokens:
+            resp.usage.prompt_tokens_details?.cached_tokens ?? 0,
+          output_tokens: resp.usage.completion_tokens ?? 0,
+          latency_ms: Date.now() - startMs,
+        }
+      : null;
+    if (!text) return { result: null, usage };
     const parsed = JSON.parse(text) as Partial<ClassificationResult>;
     return {
-      needs_task: Boolean(parsed.needs_task),
-      sort_folder: String(parsed.sort_folder || 'To Delete'),
-      task_title: String(parsed.task_title || '').slice(0, 120),
-      reasoning: String(parsed.reasoning || '').slice(0, 500),
+      result: {
+        needs_task: Boolean(parsed.needs_task),
+        sort_folder: String(parsed.sort_folder || 'To Delete'),
+        task_title: String(parsed.task_title || '').slice(0, 120),
+        reasoning: String(parsed.reasoning || '').slice(0, 500),
+      },
+      usage,
     };
   } catch (err) {
     log.warn('classify-api: threw', {
       err: String(err),
       emailId: email.id,
     });
-    return null;
+    return { result: null, usage: null };
   }
 }

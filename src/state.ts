@@ -66,6 +66,52 @@ export function loadResolvedEmailIds(daysBack = 30): Set<string> {
   return out;
 }
 
+// --- usage.jsonl ---
+
+const USAGE_PATH = (): string => path.join(STATE_DIR, 'usage.jsonl');
+
+export interface UsageRecord {
+  scan_run_id: string;
+  email_ids: string[]; // multiple ids when a single LLM call batches several
+  mode: 'preclassifier' | 'agent' | 'hybrid';
+  caller: 'openai' | 'codex';
+  model: string;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens?: number;
+  latency_ms: number;
+  cost_usd: number;
+}
+
+export function appendUsage(rec: UsageRecord): void {
+  ensureStateDir();
+  fs.appendFileSync(
+    USAGE_PATH(),
+    JSON.stringify({ ts: new Date().toISOString(), ...rec }) + '\n',
+  );
+}
+
+export function readUsageRecords(sinceIso?: string): Array<
+  UsageRecord & { ts: string }
+> {
+  const p = USAGE_PATH();
+  if (!fs.existsSync(p)) return [];
+  const cutoffMs = sinceIso ? Date.parse(sinceIso) : 0;
+  const out: Array<UsageRecord & { ts: string }> = [];
+  for (const line of fs.readFileSync(p, 'utf-8').split('\n')) {
+    if (!line) continue;
+    try {
+      const r = JSON.parse(line) as UsageRecord & { ts: string };
+      if (cutoffMs && Date.parse(r.ts) < cutoffMs) continue;
+      out.push(r);
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
+}
+
 // --- pending_residuals.jsonl ---
 
 const PENDING_PATH = (): string =>

@@ -11,6 +11,7 @@
     "scan": "tsx src/index.ts",
     "scan:dry": "DRY_RUN=1 tsx src/index.ts",
     "ms365-login": "tsx scripts/ms365-login.ts",
+    "cost-report": "tsx scripts/cost-report.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",

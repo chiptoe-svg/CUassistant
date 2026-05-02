@@ -23,6 +23,20 @@ interface AgentBatchResult {
   reasoning: string;
 }
 
+export interface CodexUsage {
+  model: string;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  latency_ms: number;
+}
+
+interface CodexExecResult {
+  agentMessage: string;
+  usage: CodexUsage | null;
+}
+
 function buildBatchPrompt(
   candidates: LlmCandidate[],
   taxonomy: Taxonomy,
@@ -57,11 +71,20 @@ function buildBatchPrompt(
   return composeSystemPrompt('triage', appendix);
 }
 
-function runCodexExec(prompt: string): Promise<string> {
+function runCodexExec(prompt: string): Promise<CodexExecResult> {
+  const startMs = Date.now();
   return new Promise((resolve, reject) => {
     const proc = spawn(
       CODEX_BIN,
-      ['exec', '--model', CODEX_MODEL, '--output-format', 'text', '-'],
+      [
+        'exec',
+        '--model',
+        CODEX_MODEL,
+        '--json',
+        '--skip-git-repo-check',
+        '--ephemeral',
+        '-',
+      ],
       { stdio: ['pipe', 'pipe', 'pipe'] },
     );
     let stdout = '';
@@ -76,13 +99,57 @@ function runCodexExec(prompt: string): Promise<string> {
     proc.on('close', (code) => {
       if (code !== 0) {
         reject(new Error(`codex exec exited ${code}: ${stderr.slice(0, 500)}`));
-      } else {
-        resolve(stdout);
+        return;
+      }
+      try {
+        resolve(parseCodexJsonl(stdout, Date.now() - startMs));
+      } catch (err) {
+        reject(err);
       }
     });
     proc.stdin.write(prompt);
     proc.stdin.end();
   });
+}
+
+function parseCodexJsonl(raw: string, latencyMs: number): CodexExecResult {
+  let agentMessage = '';
+  let usage: CodexUsage | null = null;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let evt: Record<string, unknown>;
+    try {
+      evt = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (evt.type === 'item.completed') {
+      const item = evt.item as { type?: string; text?: string } | undefined;
+      if (item?.type === 'agent_message' && typeof item.text === 'string') {
+        agentMessage = item.text;
+      }
+    } else if (evt.type === 'turn.completed') {
+      const u = evt.usage as
+        | {
+            input_tokens?: number;
+            cached_input_tokens?: number;
+            output_tokens?: number;
+            reasoning_output_tokens?: number;
+          }
+        | undefined;
+      if (u) {
+        usage = {
+          model: CODEX_MODEL,
+          input_tokens: u.input_tokens ?? 0,
+          cached_input_tokens: u.cached_input_tokens ?? 0,
+          output_tokens: u.output_tokens ?? 0,
+          reasoning_output_tokens: u.reasoning_output_tokens ?? 0,
+          latency_ms: latencyMs,
+        };
+      }
+    }
+  }
+  return { agentMessage, usage };
 }
 
 function extractJsonArray(raw: string): string | null {
@@ -95,24 +162,30 @@ function extractJsonArray(raw: string): string | null {
   return null;
 }
 
+export interface CodexBatchOutput {
+  results: Map<string, ClassificationResult>;
+  usage: CodexUsage | null;
+}
+
 export async function classifyBatchWithCodex(
   candidates: LlmCandidate[],
   taxonomy: Taxonomy,
-): Promise<Map<string, ClassificationResult>> {
-  const out = new Map<string, ClassificationResult>();
+): Promise<CodexBatchOutput> {
+  const out: CodexBatchOutput = { results: new Map(), usage: null };
   if (candidates.length === 0) return out;
   const prompt = buildBatchPrompt(candidates, taxonomy);
-  let raw: string;
+  let exec: CodexExecResult;
   try {
-    raw = await runCodexExec(prompt);
+    exec = await runCodexExec(prompt);
   } catch (err) {
     log.warn('codex exec failed', { err: String(err) });
     return out;
   }
-  const json = extractJsonArray(raw);
+  out.usage = exec.usage;
+  const json = extractJsonArray(exec.agentMessage);
   if (!json) {
     log.warn('codex output did not contain a JSON array', {
-      preview: raw.slice(0, 200),
+      preview: exec.agentMessage.slice(0, 200),
     });
     return out;
   }
@@ -125,7 +198,7 @@ export async function classifyBatchWithCodex(
   }
   for (const r of parsed) {
     if (!r.email_id) continue;
-    out.set(r.email_id, {
+    out.results.set(r.email_id, {
       needs_task: Boolean(r.needs_task),
       sort_folder: String(r.sort_folder || 'To Delete'),
       task_title: String(r.task_title || '').slice(0, 120),

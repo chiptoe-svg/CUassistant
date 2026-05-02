@@ -32,11 +32,14 @@ import {
   listOutlook,
 } from './ms365.js';
 import { classifyEmailWithApi, openAiConfigured } from './openai-classifier.js';
+import { computeCostUsd } from './pricing.js';
 import {
   appendDecision,
+  appendUsage,
   loadPendingResiduals,
   loadProgress,
   loadResolvedEmailIds,
+  readUsageRecords,
   writePendingResiduals,
   writeProgress,
 } from './state.js';
@@ -187,7 +190,21 @@ async function classifyResidualsOpenAi(
     tasksCreated: [],
   };
   for (const email of outcome.llm_candidates) {
-    const result = await classifyEmailWithApi(email, taxonomy);
+    const { result, usage } = await classifyEmailWithApi(email, taxonomy);
+    if (usage) {
+      appendUsage({
+        scan_run_id: scanRunId,
+        email_ids: [email.id],
+        mode: MODE,
+        caller: 'openai',
+        model: usage.model,
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        latency_ms: usage.latency_ms,
+        cost_usd: computeCostUsd(usage.model, usage),
+      });
+    }
     if (!result) {
       out.apiFailureCount += 1;
       continue;
@@ -216,10 +233,25 @@ async function classifyResidualsCodex(
     apiFailureCount: 0,
     tasksCreated: [],
   };
-  const decisions = await classifyBatchWithCodex(
+  const { results: decisions, usage } = await classifyBatchWithCodex(
     outcome.llm_candidates,
     taxonomy,
   );
+  if (usage) {
+    appendUsage({
+      scan_run_id: scanRunId,
+      email_ids: outcome.llm_candidates.map((e) => e.id),
+      mode: MODE,
+      caller: 'codex',
+      model: usage.model,
+      input_tokens: usage.input_tokens,
+      cached_input_tokens: usage.cached_input_tokens,
+      output_tokens: usage.output_tokens,
+      reasoning_output_tokens: usage.reasoning_output_tokens,
+      latency_ms: usage.latency_ms,
+      cost_usd: computeCostUsd(usage.model, usage),
+    });
+  }
   for (const email of outcome.llm_candidates) {
     const result = decisions.get(email.id);
     if (!result) {
@@ -320,7 +352,7 @@ export async function runScan(): Promise<string> {
       });
       writePendingResiduals([]);
     }
-    return formatSummary(outcome, null);
+    return formatSummary(outcome, null, scanRunId);
   }
 
   // MODE selects who classifies bucket 3/4/5. In all modes, host runs
@@ -467,7 +499,7 @@ export async function runScan(): Promise<string> {
 
   if (outcome.llm_candidates.length === 0) {
     if (!DRY_RUN) writePendingResiduals([]);
-    return formatSummary(outcome, null);
+    return formatSummary(outcome, null, scanRunId);
   }
 
   await fetchBodies(outcome.llm_candidates);
@@ -509,10 +541,33 @@ export async function runScan(): Promise<string> {
     writePendingResiduals(pendingThisScan);
   }
 
-  return formatSummary(outcome, api);
+  return formatSummary(outcome, api, scanRunId);
 }
 
-function formatSummary(o: ScanOutcome, api: ApiOutcome | null): string {
+function summarizeRunUsage(scanRunId: string): {
+  calls: number;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  costUsd: number;
+} | null {
+  const records = readUsageRecords();
+  const mine = records.filter((r) => r.scan_run_id === scanRunId);
+  if (mine.length === 0) return null;
+  return {
+    calls: mine.length,
+    inputTokens: mine.reduce((a, r) => a + r.input_tokens, 0),
+    cachedTokens: mine.reduce((a, r) => a + r.cached_input_tokens, 0),
+    outputTokens: mine.reduce((a, r) => a + r.output_tokens, 0),
+    costUsd: mine.reduce((a, r) => a + r.cost_usd, 0),
+  };
+}
+
+function formatSummary(
+  o: ScanOutcome,
+  api: ApiOutcome | null,
+  scanRunId: string,
+): string {
   if (o.scanned === 0) return 'No new mail since last scan.';
   const preResolved =
     o.template_tasks + o.template_skips + o.skip_sender_count;
@@ -527,6 +582,13 @@ function formatSummary(o: ScanOutcome, api: ApiOutcome | null): string {
     parts.push(
       `LLM-classified: ${o.llm_candidates.length}  (task=${api.apiTaskCount}, skip=${api.apiSkipCount}${api.apiFailureCount ? `, failed=${api.apiFailureCount}` : ''})`,
     );
+    const u = summarizeRunUsage(scanRunId);
+    if (u) {
+      const fmt = (n: number) => n.toLocaleString('en-US');
+      parts.push(
+        `LLM cost: $${u.costUsd.toFixed(4)} (${u.calls} call${u.calls === 1 ? '' : 's'}, ${fmt(u.inputTokens)} in${u.cachedTokens ? ` / ${fmt(u.cachedTokens)} cached` : ''}, ${fmt(u.outputTokens)} out)`,
+      );
+    }
     if (api.tasksCreated.length > 0) {
       parts.push('');
       for (const t of api.tasksCreated.slice(0, 20)) {

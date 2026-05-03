@@ -44,6 +44,7 @@ export function listGmail(sinceIso: string | null): EmailMinimal[] | null {
         {
           encoding: "utf-8",
           env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+          stdio: ["ignore", "pipe", "pipe"],
           timeout: 20_000,
           maxBuffer: 8 * 1024 * 1024,
         },
@@ -84,6 +85,7 @@ export function listGmail(sinceIso: string | null): EmailMinimal[] | null {
         {
           encoding: "utf-8",
           env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+          stdio: ["ignore", "pipe", "pipe"],
           timeout: 15_000,
           maxBuffer: 4 * 1024 * 1024,
         },
@@ -133,6 +135,7 @@ export function fetchGmailBody(id: string): string {
       {
         encoding: "utf-8",
         env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+        stdio: ["ignore", "pipe", "pipe"],
         timeout: 15_000,
         maxBuffer: 8 * 1024 * 1024,
       },

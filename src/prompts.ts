@@ -49,6 +49,21 @@ export function loadSkill(handler: string): Skill | null {
   };
 }
 
+function loadSkillIncludes(handler: string): string[] {
+  const dir = path.join(ROOT, "skills", handler, "includes");
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => name.endsWith(".md"))
+    .sort()
+    .map((name) => readOptional(path.join(dir, name)).trim())
+    .filter(Boolean);
+}
+
 /** Compose the system prompt: persona (AGENT.md) → skill body
  *  (skills/<handler>/SKILL.md) → optional runtime-computed appendix
  *  (taxonomy bullets and candidate email rows).
@@ -61,6 +76,7 @@ export function composeSystemPrompt(
   const parts: string[] = [];
   const persona = loadAgent();
   if (persona) parts.push(persona);
+  parts.push(...loadSkillIncludes(handler));
   const skill = loadSkill(handler);
   if (skill?.body) parts.push(skill.body);
   if (appendix && appendix.trim()) parts.push(appendix.trim());

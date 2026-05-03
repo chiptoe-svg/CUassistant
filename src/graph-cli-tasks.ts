@@ -6,10 +6,11 @@ import {
 } from "./config.js";
 import { log } from "./log.js";
 import { assertGraphOperation } from "./permissions.js";
+import { formatTaskBody, taskMarkerNeedles } from "./task-body.js";
 
 let cachedToken: { value: string; expiresAtMs: number } | null = null;
 
-async function getGraphCliAccessToken(): Promise<string | null> {
+export async function getGraphCliAccessToken(): Promise<string | null> {
   if (!GRAPH_CLI_REFRESH_TOKEN) {
     log.debug("graph-cli tasks: not configured (missing refresh token)");
     return null;
@@ -96,7 +97,7 @@ export async function createGraphCliTask(
   const body: Record<string, unknown> = {
     title,
     body: {
-      content: auditMarker ? `CUassistant audit marker: ${auditMarker}` : "",
+      content: formatTaskBody(auditMarker),
       contentType: "text",
     },
     importance: "normal",
@@ -152,7 +153,12 @@ export async function findGraphCliTaskByMarker(
         "@odata.nextLink"?: string;
       };
       for (const task of body.value || []) {
-        if (task.body?.content?.includes(auditMarker)) {
+        const content = task.body?.content ?? "";
+        if (
+          taskMarkerNeedles(auditMarker).some((needle) =>
+            content.includes(needle),
+          )
+        ) {
           return task.id;
         }
       }

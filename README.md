@@ -94,7 +94,8 @@ CUassistant keeps mailbox access and task creation behind small provider
 interfaces:
 
 - `MailReader` — list new mail and fetch the body needed for classification.
-- `TaskWriter` — find an existing To Do task by audit marker and create a task.
+- `TaskWriter` — find an existing To Do task by CUassistant reference and
+  create a task.
 
 Today `src/provider-registry.ts` wires Gmail through `gws`, Outlook mail through
 the GCassistant Microsoft Graph app, and task creation through Microsoft Graph To
@@ -132,12 +133,21 @@ guard in `src/permissions.ts` permits only:
 - list Inbox messages
 - fetch a message body
 - list To Do lists
-- find a To Do task by CUassistant's audit marker
+- find a To Do task by CUassistant's dedupe reference
 - create a To Do task
 
 There is no host operation for sending mail, permanently deleting mail, moving
 mail, creating drafts, writing calendar events, or reading Teams chats in the
 shipping triage handler.
+
+Created To Do tasks keep user-visible fields clean: the task title is the
+action text only, and the note body stores a short `CUassistant ref` used for
+idempotency. If older tasks were created with route suffixes or long audit
+markers, run:
+
+```bash
+npm run tasks:cleanup-noise
+```
 
 Run the device-code login helper to populate `MS365_REFRESH_TOKEN` in `.env`:
 
@@ -180,6 +190,11 @@ MODE=agent OUTLOOK_MAIL_PROVIDER=codex OUTLOOK_CODEX_MAX_RESULTS=1 PROVIDER_SMOK
 # Check task-writer readiness without creating a task.
 MODE=agent TASK_PROVIDER=graph-cli PROVIDER_SMOKE_MAIL=0 PROVIDER_SMOKE_TASKS=1 npm run provider-smoke
 ```
+
+For scheduled `OUTLOOK_MAIL_PROVIDER=codex` runs, keep
+`OUTLOOK_CODEX_MAX_RESULTS` modest. The connector path is slower than direct
+Graph listing; `5` is a reasonable starting cap with
+`OUTLOOK_CODEX_TIMEOUT_MS=180000`.
 
 ### Schedule it
 
@@ -291,6 +306,13 @@ owns deterministic rules, `src/residual-classifiers.ts` chooses the classifier
 backend, and `src/scan-effects.ts` applies audit/task side effects through the
 configured task writer. `src/provider-registry.ts` is the narrow swap point for
 mail-read and task-write implementations.
+
+The Codex CLI classifier receives repo-local skill text, not just the model's
+generic behavior. `skills/triage/SKILL.md` is the source-of-truth task triage
+skill, and `skills/triage/includes/` can add advisory skill context. The first
+include mirrors the relevant Outlook inbox triage guidance from the Codex
+Desktop skill set while keeping CUassistant's stricter task JSON output and
+host-applied side-effect boundary.
 
 Additional capabilities fit beside `triage`, not inside it. A future capability
 would add `src/handlers/<name>.ts`, `skills/<name>/SKILL.md`, its declared

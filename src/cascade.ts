@@ -85,10 +85,10 @@ export function substituteTitle(template: string, email: EmailMinimal): string {
 
 export function buildCleanTitle(
   raw: string,
-  account: "gmail" | "outlook",
-  folder: string,
+  _account: "gmail" | "outlook",
+  _folder: string,
 ): string {
-  return `${raw} → /${account}/${folder}`;
+  return sanitizeTaskTitle(raw, raw);
 }
 
 export function validateSortFolder(

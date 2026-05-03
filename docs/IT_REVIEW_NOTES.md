@@ -31,6 +31,7 @@ The review surface is split by concern:
 | `src/residual-classifiers.ts` | Chooses Codex or optional OpenAI residual classification.   |
 | `src/openai-classifier.ts`    | Optional lean direct API classifier. Disabled by default.   |
 | `src/codex-agent.ts`          | Codex CLI invocation and schema-constrained output parsing. |
+| `src/prompts.ts`              | Loads AGENT.md, triage skill, and advisory skill includes.  |
 | `src/scan-effects.ts`         | Host-applied audit rows and To Do task creation.            |
 | `src/provider-registry.ts`    | Mail-reader and task-writer provider selection.             |
 | `src/providers.ts`            | Provider interfaces for mail reads and task writes.         |
@@ -85,9 +86,10 @@ functions:
 The mail reader does not expose send, delete, move, archive, draft, or calendar
 operations. The task writer does not receive the classifier prompt or mailbox
 body text; it receives only the clean task title, optional due date, target list,
-and CUassistant audit marker. The scan, preclassifier, classifier, audit log,
-and progress cursor code stay the same regardless of which provider
-implementation is selected.
+and a short CUassistant dedupe reference. The full audit record stays in local
+`decisions.jsonl`. The scan, preclassifier, classifier, audit log, and progress
+cursor code stay the same regardless of which provider implementation is
+selected.
 
 `OUTLOOK_MAIL_PROVIDER=codex` uses Codex CLI with the Outlook Email connector to
 read mail. `TASK_PROVIDER=graph-cli` uses the Microsoft Graph Command Line Tools
@@ -145,6 +147,8 @@ The Codex prompt contains:
 
 - `AGENT.md` persona text.
 - `skills/triage/SKILL.md` classification instructions.
+- Advisory files in `skills/triage/includes/`, including Outlook inbox triage
+  judgment guidance adapted from the Codex Desktop skill set.
 - The configured taxonomy folder names and descriptions.
 - For each candidate email: account label, email id, sender, subject, body
   hint, and normalized body text when body fetch succeeds.
@@ -205,7 +209,7 @@ permissions:
 For task creation, the audit sequence is intentionally durable:
 
 1. Append `task-intent`.
-2. Check for an existing task by CUassistant audit marker.
+2. Check for an existing task by CUassistant dedupe reference.
 3. Create the To Do task if needed.
 4. Append the terminal `task` row with the task id or recovered marker match.
 

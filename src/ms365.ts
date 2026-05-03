@@ -15,6 +15,7 @@ import {
 import { log } from "./log.js";
 import { normalizeBody } from "./normalize.js";
 import { assertGraphOperation } from "./permissions.js";
+import { formatTaskBody, taskMarkerNeedles } from "./task-body.js";
 import { EmailMinimal } from "./types.js";
 
 let cachedToken: { value: string; expiresAtMs: number } | null = null;
@@ -180,7 +181,7 @@ export async function createMs365Task(
   const body: Record<string, unknown> = {
     title,
     body: {
-      content: auditMarker ? `CUassistant audit marker: ${auditMarker}` : "",
+      content: formatTaskBody(auditMarker),
       contentType: "text",
     },
     importance: "normal",
@@ -236,7 +237,12 @@ export async function findMs365TaskByMarker(
         "@odata.nextLink"?: string;
       };
       for (const task of body.value || []) {
-        if (task.body?.content?.includes(auditMarker)) {
+        const content = task.body?.content ?? "";
+        if (
+          taskMarkerNeedles(auditMarker).some((needle) =>
+            content.includes(needle),
+          )
+        ) {
           return task.id;
         }
       }

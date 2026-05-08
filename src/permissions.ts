@@ -1,3 +1,5 @@
+import { getActionPolicy, getPolicyAction } from "./policy.js";
+
 // What this tool is allowed to call.
 //
 // Microsoft consent scopes and host-callable actions are deliberately separate.
@@ -20,6 +22,14 @@ const ALLOWED_GRAPH_OPERATIONS: Record<string, ReadonlyArray<string>> = {
     "todo.findTaskByMarker",
     "todo.createTask",
   ],
+};
+
+const POLICY_ACTION_BY_OPERATION: Record<string, string> = {
+  "mail.listInbox": "mail.list_inbox",
+  "mail.fetchBody": "mail.fetch_body",
+  "todo.listLists": "todo.list_lists",
+  "todo.findTaskByMarker": "todo.find_task_by_marker",
+  "todo.createTask": "todo.create_task",
 };
 
 // Handler context — set by the orchestrator before each handler runs and
@@ -56,10 +66,31 @@ export function assertGraphOperation(operation: string): void {
         `Edit src/permissions.ts to grant.`,
     );
   }
+  const actionId = POLICY_ACTION_BY_OPERATION[operation];
+  if (!actionId) {
+    throw new PermissionDeniedError(
+      `Graph operation "${operation}" has no mapped policy action. ` +
+        `Add it to src/permissions.ts and policy/action-policy.yaml.`,
+    );
+  }
+  const policyAction = getPolicyAction(actionId);
+  if (!policyAction) {
+    throw new PermissionDeniedError(
+      `Policy action "${actionId}" for operation "${operation}" is not defined in ` +
+        `policy/action-policy.yaml.`,
+    );
+  }
+  if (policyAction.approval !== "none") {
+    throw new PermissionDeniedError(
+      `Policy action "${actionId}" requires approval=${policyAction.approval}. ` +
+        `This host path only permits approval=none actions.`,
+    );
+  }
 }
 
 // One-line description of what this tool can do, for review-time enumeration.
 export function describeAllowed(): string {
+  const policy = getActionPolicy();
   const lines: string[] = [
     "Allowed Microsoft Graph host operations by handler:",
   ];
@@ -67,6 +98,15 @@ export function describeAllowed(): string {
     ALLOWED_GRAPH_OPERATIONS,
   )) {
     lines.push(`  ${handler}: ${operations.join(", ")}`);
+  }
+  lines.push(
+    `Structured policy: ${policy.policy_name} (version ${policy.policy_version})`,
+  );
+  lines.push("Operation -> policy action mapping:");
+  for (const [operation, actionId] of Object.entries(
+    POLICY_ACTION_BY_OPERATION,
+  )) {
+    lines.push(`  ${operation} -> ${actionId}`);
   }
   return lines.join("\n");
 }

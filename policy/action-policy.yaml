@@ -1,0 +1,150 @@
+# Structured policy spec for future host-side enforcement.
+# The intent is to keep action boundaries explicit and reviewable.
+
+policy_version: 1
+policy_name: personal_m365_agentic_workflow
+principal_scope:
+  tenancy: delegated_user_only
+  mailbox: self_only
+  calendar: self_only
+  tasks: self_only
+
+approved_graph_scopes:
+  - Mail.ReadWrite
+  - Tasks.ReadWrite
+  - Calendars.ReadWrite
+  - offline_access
+
+actions:
+  - id: mail.list_inbox
+    surface: mail
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_mailbox_only
+
+  - id: mail.fetch_body
+    surface: mail
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_mailbox_only
+
+  - id: todo.create_task
+    surface: tasks
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_task_list_only
+
+  - id: todo.list_lists
+    surface: tasks
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_task_list_only
+
+  - id: todo.find_task_by_marker
+    surface: tasks
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_task_list_only
+
+  - id: mail.move_message
+    surface: mail
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_mailbox_only
+      - destination_folder_allow_list
+      - no_delete_folder
+      - no_permanent_delete
+
+  - id: mail.create_draft
+    surface: mail
+    risk: low_medium
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_mailbox_only
+      - draft_only
+      - no_send
+
+  - id: calendar.create_personal_event
+    surface: calendar
+    risk: low_medium
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_primary_calendar_only
+      - no_attendees
+      - no_invites
+      - no_shared_or_delegated_calendar
+
+  - id: mail.send_message
+    surface: mail
+    risk: high
+    reversibility: hard_to_reverse
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: mail.delete_message
+    surface: mail
+    risk: high
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: mail.permanent_delete_message
+    surface: mail
+    risk: high
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: calendar.invite_attendees
+    surface: calendar
+    risk: high
+    reversibility: affects_other_users
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: calendar.modify_shared_event
+    surface: calendar
+    risk: high
+    reversibility: affects_other_users
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+audit_requirements:
+  before_action:
+    - timestamp
+    - action_id
+    - target_identifier
+    - normalized_payload
+    - policy_decision
+  after_action:
+    - timestamp
+    - action_id
+    - target_identifier
+    - result_identifier
+    - provider_response_status
+
+enforcement_requirements:
+  - host_enforced_allow_list
+  - no_direct_model_graph_access
+  - runtime_policy_check_per_action
+  - append_only_decision_logging
+  - append_only_usage_logging

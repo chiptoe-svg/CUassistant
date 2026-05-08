@@ -128,7 +128,8 @@ delegated scopes under the existing GCassistant consent envelope:
 
 That envelope is broader than the current triage code path. Today the runtime
 refreshes only for `Mail.ReadWrite + Tasks.ReadWrite`, and the host operation
-guard in `src/permissions.ts` permits only:
+guard in `src/permissions.ts` permits only the operations that also map to an
+`approval: none` action in `policy/action-policy.yaml`:
 
 - list Inbox messages
 - fetch a message body

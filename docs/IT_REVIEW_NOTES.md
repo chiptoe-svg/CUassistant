@@ -177,7 +177,9 @@ The active handler can call only these host operations:
 | `todo.createTask`       | Create an actionable-mail task.                          |
 
 The allow-list lives in `src/permissions.ts`. Every Graph helper asserts the
-active handler is allowed to perform the operation before making the request.
+active handler is allowed to perform the operation before making the request,
+and the same operation must map to an `approval: none` action in
+`policy/action-policy.yaml`.
 
 ## What It Does Not Do
 

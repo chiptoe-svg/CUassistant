@@ -1,0 +1,37 @@
+{
+  "_doc_format": "Provider plugin definition. Format follows the NanoClaw provider JSON convention used by CUagent's container/providers/*.json (e.g. ms365.json, gws.json) — declaring an MCP server, allowed tool prefix, agent docs, and an auth login command. NanoClaw v2 trunk does not currently ship data-source provider JSONs (channels/AI providers moved to dedicated branches), but the v1-fork plugin convention is the established shape and is what CUagent uses today; v2 reads the same shape via the host-side provider registry pattern.",
+
+  "id": "cuassistant",
+  "name": "CUassistant",
+  "description": "Email triage assistant — Outlook mail/calendar reads via Codex CLI Outlook connector, MS To Do reads/writes via Graph CLI client, and orchestration for the host-side scan loop. Mail/calendar writes present as stubs pending IT approval.",
+
+  "tokenPaths": {
+    "host": "~/.cuassistant",
+    "container": "/workspace/.cuassistant",
+    "readonly": false,
+    "requiredFile": ".cuassistant-marker"
+  },
+
+  "_doc_tokenPaths": "CUassistant credentials live host-side in the .env file (GRAPH_CLI_REFRESH_TOKEN, MS365_REFRESH_TOKEN, etc.). The MCP server is host-side stdio — it does NOT read tokens from /workspace/.cuassistant. The tokenPaths block exists only to satisfy the registry's availability check; requiredFile is a local marker, not a credential. Do not mount actual credential directories into any NanoClaw container.",
+
+  "mcp": {
+    "command": "npm",
+    "args": ["--prefix", "${env.CUASSISTANT_REPO}", "run", "mcp"],
+    "env": {
+      "CUASSISTANT_REPO": "${env.CUASSISTANT_REPO}"
+    }
+  },
+
+  "_doc_mcp": "Host-side stdio MCP server. CUASSISTANT_REPO must point at the CUassistant checkout on the host (e.g. /Users/<user>/Documents/ClaudeWorkingFolder/Projects/CUassistant). NanoClaw v2 spawns this command from the host shell, not inside a container.",
+
+  "allowedTools": ["mcp__cuassistant__*"],
+
+  "init": null,
+
+  "agentDocs": "## CUassistant\n\nYou have MCP tools prefixed with `mcp__cuassistant__` for the user's email-triage assistant. Use these for Outlook mail and calendar reads, Microsoft To Do task management, and triggering email scans.\n\nAvailable today:\n- *Mail (read)*: `list-mail-messages`, `get-mail-message`. Backed by Codex CLI's Outlook connector.\n- *Calendar (read)*: `list-calendar-events`, `get-calendar-event`, `get-calendar-view`. Backed by Codex CLI's Outlook connector.\n- *Tasks*: `list-todo-task-lists`, `list-todo-tasks`, `get-todo-task`, `create-todo-task`, `update-todo-task`, `delete-todo-task`. Backed by the Microsoft Graph CLI first-party client (Tasks.ReadWrite, already approved).\n- *Orchestration*: `trigger_scan` (run an email triage scan immediately, with optional dry_run), `get_scan_status` (read recent decisions), `get_pending_actions` (decisions that asked for a task but didn't produce one).\n\nStubs pending IT approval (return a structured stub_pending_approval error today):\n- *Mail (write)*: `move-mail-message`, `update-mail-message`, `create-draft-email` — pending Mail.ReadWrite consent on the Graph CLI client.\n- *Calendar (write)*: `create-calendar-event`, `update-calendar-event`, `delete-calendar-event`, `accept-calendar-event`, `decline-calendar-event`, `tentatively-accept-calendar-event` — pending Calendars.ReadWrite consent on the Graph CLI client.\n\n**There is no send-mail tool, by design.** The drafts surface ends at create-draft-email; the user sends from Outlook. Reflect that boundary when phrasing actions back to the user.\n\n**Routing**: when the user asks to add a task, remind them to follow up, or convert an email action item into a to-do, route through `create-todo-task` with the title text only. Set due dates from explicit user phrasing. Don't synthesize due dates from heuristics — ask if uncertain.",
+
+  "auth": {
+    "loginCommand": "cd ${env.CUASSISTANT_REPO} && npm run graph-cli-tasks-login",
+    "description": "Runs CUassistant's existing Graph CLI device-code login helper. Writes GRAPH_CLI_REFRESH_TOKEN into ${CUASSISTANT_REPO}/.env. Mail.ReadWrite and Calendars.ReadWrite are not requested here — those scopes come from a separate IT approval step that activates the corresponding stub tools."
+  }
+}

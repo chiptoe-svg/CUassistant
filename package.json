@@ -10,6 +10,7 @@
   "scripts": {
     "scan": "tsx src/index.ts",
     "scan:dry": "DRY_RUN=1 tsx src/index.ts",
+    "mcp": "tsx src/mcp-server.ts",
     "ms365-login": "tsx scripts/ms365-login.ts",
     "graph-cli-tasks-login": "tsx scripts/graph-cli-tasks-login.ts",
     "provider-smoke": "tsx scripts/provider-smoke.ts",
@@ -23,6 +24,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"*.{md,json}\""
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
     "yaml": "^2.5.0"
   },
   "devDependencies": {

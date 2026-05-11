@@ -1,5 +1,5 @@
 {
-  "_doc_format": "Provider plugin definition. Format follows the NanoClaw provider JSON convention used by CUagent's container/providers/*.json (e.g. ms365.json, gws.json) — declaring an MCP server, allowed tool prefix, agent docs, and an auth login command. NanoClaw v2 trunk does not currently ship data-source provider JSONs (channels/AI providers moved to dedicated branches), but the v1-fork plugin convention is the established shape and is what CUagent uses today; v2 reads the same shape via the host-side provider registry pattern.",
+  "_doc_format": "v1-fork compatibility artifact. NanoClaw v2 does not consume this file — v2 wires CUassistant via the /add-cuassistant install skill at skills/add-cuassistant/SKILL.md, which calls add_mcp_server programmatically. This JSON is kept for v1-era forks (CUagent-style) that load provider plugins by reading container/providers/*.json into a host-side provider registry. If you are on v2, ignore this directory and run /add-cuassistant.",
 
   "id": "cuassistant",
   "name": "CUassistant",

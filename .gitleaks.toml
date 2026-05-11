@@ -1,0 +1,26 @@
+# Gitleaks configuration for CUassistant.
+#
+# Inherits the default ruleset and adds an allowlist for known-safe patterns
+# that the default rules flag but that are NOT secrets.
+#
+# Used by:
+#   - The husky pre-commit hook (scans staged changes only)
+#   - The .github/workflows/gitleaks.yml CI workflow (scans every PR + push
+#     to main, plus a weekly full-history sweep)
+#   - On-demand history scans: `gitleaks git --no-banner -v`
+
+title = "CUassistant gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe patterns flagged as false positives by default rules"
+regexes = [
+  # Microsoft Graph Command Line Tools first-party application ID.
+  # Published by Microsoft as the well-known public client ID for the
+  # `mg` CLI / Graph CLI tools. Hardcoded as the default value of
+  # GRAPH_CLI_CLIENT_ID in src/config.ts and scripts/graph-cli-tasks-login.ts.
+  # Public OAuth client ID — different from a client_secret.
+  '''14d82eec-204b-4c2f-b7e8-296a70dab67e''',
+]

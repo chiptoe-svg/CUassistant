@@ -5,8 +5,7 @@ Microsoft 365 consent and data-flow shape. It intentionally describes what
 exists today, not the larger campus-agent direction.
 
 These notes were prepared after a Codex-assisted review of the current codebase.
-They are meant to make the implementation easier to inspect; they are not a
-formal security certification.
+They are meant to make the implementation easier to inspect.
 
 ## Summary
 
@@ -59,14 +58,13 @@ refreshes and uses only Mail + To Do access, and the code has no host operation
 for sending, deleting, moving, or drafting mail; writing calendar events; or
 reading Teams chats.
 
-There is also a possible ChatGPT Edu/Codex provider path: Codex can read Outlook
-through its sanctioned Outlook connector, while a separate task writer could
-create To Do tasks through an already consented Microsoft Graph CLI client. That
-path may avoid the GCassistant app for this narrow workflow, but it is a
-different review story: mail access depends on the Codex connector runtime and
-task writes depend on a separate first-party Microsoft client. The provider
-interfaces make that swap localized rather than changing the scan, classifier,
-or audit flow.
+There is also a possible ChatGPT Edu/Codex provider path: Codex can read
+Outlook through its Outlook connector, while a separate task writer could
+create To Do tasks through an already consented Microsoft Graph CLI client.
+That path may avoid the GCassistant app for this narrow workflow, but mail
+access depends on the Codex connector runtime and task writes depend on a
+separate first-party Microsoft client. The provider interfaces make that swap
+localized rather than changing the scan, classifier, or audit flow.
 
 The concrete environment switches are:
 
@@ -119,8 +117,12 @@ route.
      and advances no progress cursor.
      The deterministic shortcuts are local YAML/string matching only; they do not
      call OpenAI, Codex, or any model.
-6. If a classifier decision says `needs_task=true`, the host writes a durable
-   `task-intent` audit row before calling Graph.
+     Before classification, the host logs the listed message count by account and
+     splits classifier work into bounded batches. A failed classifier batch only
+     affects that batch's emails.
+6. If a classifier decision says `needs_task=true`, the host validates the
+   optional `due_date`, writes a durable `task-intent` audit row before calling
+   Graph, and passes the due date only to the task writer.
 7. The host checks for an existing To Do task with the same CUassistant audit
    marker, then creates a task only if needed.
 8. The host writes the terminal decision row to `state/decisions.jsonl`.
@@ -152,6 +154,7 @@ The Codex prompt contains:
 - The configured taxonomy folder names and descriptions.
 - For each candidate email: account label, email id, sender, subject, body
   hint, and normalized body text when body fetch succeeds.
+- The current date so relative deadlines can be resolved.
 
 The Codex prompt does not include:
 
@@ -163,6 +166,90 @@ The Codex prompt does not include:
 
 Codex is invoked with an isolated temporary working directory, read-only
 sandbox mode, ignored user config/rules, an output schema, and a timeout.
+
+## Codex CLI Sandboxing
+
+CUassistant invokes Codex CLI as a short-lived subprocess for two distinct
+roles: classification (`src/codex-agent.ts`) and Outlook/calendar connector
+reads (`src/codex-outlook.ts`, `src/mcp-tools/codex-calendar.ts`). Each
+invocation is a fresh OS process with no shared state, torn down when the
+subprocess exits.
+
+The flag set passed at every invocation:
+
+| Flag | Effect |
+| ---- | ------ |
+| `--sandbox read-only` (classifier) | Codex's tightest sandbox profile. No writes anywhere. The classifier path returns JSON and never needs to touch disk. |
+| `--sandbox workspace-write` (connector reads) | Codex's medium profile. Writes restricted to the ephemeral working directory only; everything outside is read-only. The connector needs a small scratch area for its own protocol state. |
+| `--ephemeral` | Codex treats the cwd as throwaway and does not persist any state to user config. |
+| `--cd <tempdir>` | The working directory is a freshly created `mkdtempSync(tmpdir(), "cuassistant-*-")` path. The host `rmSync`s it after the subprocess exits, even on timeout/error. |
+| `--ignore-rules` | Codex ignores any `AGENTS.md`, `.codexrc`, or user-level instruction files. The agent only sees the prompt CUassistant sends on stdin. |
+| `--output-schema <path>` | Output is constrained to match the JSON schema for that role — `triage-batch.schema.json`, `outlook-list.schema.json`, or `outlook-body.schema.json`. The model cannot return free-form text. |
+| `--skip-git-repo-check` | Codex does not look for or read any surrounding git repository. |
+| `--json` | Streaming JSONL output for parseability; no terminal control sequences. |
+
+### What the sandbox restricts
+
+The `--sandbox` profile is enforced by Codex CLI itself before any tool/shell
+action executes. Implementation differs by platform — macOS uses
+`sandbox-exec` / Seatbelt profiles, Linux uses namespaces + seccomp filters —
+but the contract is the same:
+
+- **No writes outside the ephemeral cwd** (`workspace-write`) or **no writes
+  at all** (`read-only`).
+- **No shell access**: CUassistant does not pass `--enable-shell` (or any
+  comparable flag) to Codex. The agent has no tool to spawn commands.
+- **No MCP tools, no file tools, no fetch tool**: the agent inside Codex has
+  no tool surface at all. It can read its prompt and return JSON. Connector
+  reads have one additional tool — the Outlook Email connector — and nothing
+  else.
+
+### What the sandbox does NOT restrict
+
+- **Reads outside the cwd are not blocked.** The Codex subprocess can read
+  `~/.ssh`, `~/.config/*`, the host's `/etc/`, and CUassistant's own `.env`
+  if it tries. The agent does not have a file-read tool, but the sandbox
+  itself does not technically prevent it — confinement here comes from the
+  absence of tools, not the sandbox profile.
+- **Network egress is not blocked.** Codex needs to reach OpenAI/ChatGPT Edu
+  endpoints (and the Outlook connector's hosts) to function. The sandbox
+  does not firewall arbitrary outbound HTTPS.
+- **The parent process is not sandboxed.** Only the Codex subprocess is.
+  CUassistant's own scan loop, MCP server, and Graph CLI calls run in the
+  unrestricted host process.
+
+### Why the practical confinement is tight despite those gaps
+
+The combined effect of (1) no tools, (2) schema-constrained output, (3)
+ephemeral cwd, and (4) `--ignore-rules` is that the Codex agent has no
+mechanism to act on anything it might read. A prompt-injection attempt that
+told the agent "exfiltrate `.env`" has no channel to put the exfiltrated
+content into — the output must conform to the schema (no free text),
+there's no file-write tool to drop a file, no shell to run `curl`, and the
+cwd is destroyed immediately after.
+
+The classifier path (`--sandbox read-only`) is the tightest configuration.
+The Outlook/calendar connector paths (`--sandbox workspace-write`) need
+write access to the cwd for the connector's own protocol but inherit every
+other restriction.
+
+### Comparison to a container
+
+A Docker/Podman container provides stronger filesystem isolation (separate
+mount namespace, can't read host files), separate network namespace
+(firewallable egress), and multi-layer defense (cgroups, AppArmor/seccomp,
+user namespacing). Codex's sandbox provides a single-layer per-subprocess
+profile. For an agent with tools (filesystem, shell, MCP) the container
+advantage is large; for CUassistant's tool-less, schema-bounded classifier
+the gap is much smaller because the gaps the sandbox leaves (reads outside
+cwd, network) have no path to exploitation through the agent's tool
+surface.
+
+CUassistant deliberately runs as a host script today (no container). The
+Codex sandbox + tool-less + schema-bounded design is the security shape
+that substitutes for container isolation. Adding container isolation later
+is straightforward (the scan flow is process-local) but not on the current
+roadmap.
 
 ## Microsoft Graph Operations
 

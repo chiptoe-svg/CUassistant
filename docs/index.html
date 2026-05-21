@@ -264,25 +264,12 @@
           for them. It never moves, archives, sends, or deletes mail.
         </p>
         <p>
-          The project is a deliberately stripped-down sibling of a larger
-          agent. Most of it is an ordinary deterministic script; an AI
-          classifier is called only for the cases plain rules can't decide.
-          The classifier returns JSON — it gets no mailbox tools and no
-          credentials. Every action that touches the world is performed by the
-          host process, against a reviewable allow-list.
+          Most of it is an ordinary deterministic script; an AI classifier is
+          called only for the cases plain rules can't decide. The classifier
+          returns JSON — it gets no mailbox tools and no credentials. Every
+          action that touches the world is performed by the host process,
+          against a reviewable allow-list.
         </p>
-
-        <div class="callout purple">
-          <p><strong>Why this side branch exists.</strong></p>
-          <p>
-            The parent project (CUagent) is a multi-capability agent that runs
-            in a container with its own channels and a long-running loop — the
-            right long-term shape, and also the shape that triggered an IT
-            security review. CUassistant is the same idea narrowed to one
-            capability and a much smaller surface, so the work can continue and
-            be evaluated while consent is re-established.
-          </p>
-        </div>
 
         <h3>Near-term goal</h3>
         <p>

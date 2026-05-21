@@ -702,7 +702,12 @@
               <code>Mail.ReadWrite</code> in particular grants more than the
               code exercises. Mitigation is the operation allow-list above plus
               reviewable absence of the call sites; the residual risk is
-              endpoint-level.
+              endpoint-level. An optional stronger mitigation would be a
+              host-side MCP server that surfaces only the operations permitted
+              by <code>policy/action-policy.yaml</code> — any agent or tool
+              calling into the host would be structurally limited to exactly
+              those five allowed actions rather than relying on code-level
+              allow-listing alone.
             </div>
           </div>
           <div class="sec-row">

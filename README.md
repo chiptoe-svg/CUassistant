@@ -4,6 +4,10 @@ CUassistant currently has one capability: **email triage**. It scans your inbox
 a few times a day, identifies actionable mail, and creates Microsoft 365 To Do
 tasks.
 
+📄 **[Codebase overview](https://chiptoe-svg.github.io/CUassistant/)** — a
+live, single-page walkthrough of the architecture, components, and security
+posture (source: [`docs/index.html`](docs/index.html)).
+
 The Codex agent is the default classifier and the benchmark for tuning. It
 receives bounded email candidates and returns JSON; the host does the actual
 mailbox reads, task creation, audit logging, and progress tracking.
@@ -61,6 +65,30 @@ Pick one in `.env`:
 
 The deterministic prefilter is local YAML/string matching only. It does not
 call OpenAI, Codex, or any other model.
+
+## Catch-Up Backfills
+
+If scheduled runs were missed, run bounded catch-up windows instead of editing
+`state/progress.yaml` directly:
+
+```bash
+DRY_RUN=1 BACKFILL_FROM=2026-04-27T00:00:00-04:00 BACKFILL_TO=2026-04-28T00:00:00-04:00 OUTLOOK_CODEX_MAX_RESULTS=50 OUTLOOK_CODEX_TIMEOUT_MS=300000 npm run scan
+BACKFILL_FROM=2026-04-27T00:00:00-04:00 BACKFILL_TO=2026-04-28T00:00:00-04:00 BACKFILL_ADVANCE_PROGRESS=1 OUTLOOK_CODEX_MAX_RESULTS=50 OUTLOOK_CODEX_TIMEOUT_MS=300000 npm run scan
+```
+
+`BACKFILL_FROM` overrides the saved cursor for the run. `BACKFILL_TO` adds an
+exclusive upper bound. By default, backfills write decisions and tasks but do
+not move the saved progress cursor; add `BACKFILL_ADVANCE_PROGRESS=1` only
+after the dry run shows the window is small enough for the configured provider
+limits.
+
+After listing, the scanner logs the number of messages it is about to process
+by account and splits classifier work into `CLASSIFIER_BATCH_SIZE` chunks
+(`10` by default). This avoids a large catch-up window becoming one oversized
+Codex call. If the Codex Outlook connector returns exactly
+`OUTLOOK_CODEX_MAX_RESULTS`, the log warns that the window may contain more
+Outlook mail than was returned; shrink the backfill window or raise the cap
+deliberately.
 
 For `MODE=hybrid`, choose the residual classifier separately:
 
@@ -163,12 +191,11 @@ token covers whatever scope envelope the Azure app is already consented to;
 runtime calls in `src/ms365.ts` then request only the Mail + To Do scopes the
 triage handler currently uses.
 
-An alternate ChatGPT Edu/Codex path may not need the GCassistant app for mail
-reads if Codex reads Outlook through its sanctioned Outlook connector, and may
-not need it for task writes if task creation is routed through an already
-consented Microsoft Graph CLI client. That is a different review story, not the
-current default: it depends on the Codex connector runtime for mail access and a
-separate task writer for To Do side effects.
+An alternate ChatGPT Edu/Codex path can read Outlook through the Outlook
+connector and can route task creation through an already consented Microsoft
+Graph CLI client. That is not the current default: it depends on the Codex
+connector runtime for mail access and a separate task writer for To Do side
+effects.
 
 To use the Graph CLI task-writer path, run:
 
@@ -284,14 +311,17 @@ After running `MODE=compare`, ask for reviewable rule suggestions:
 
 ```bash
 npm run preclassify:suggest
-npm run preclassify:suggest -- --days 14 --min-evidence 5
+npm run preclassify:suggest -- --days 30 --skip-min-evidence 10 --task-min-evidence 5
 ```
 
 The suggestion command reads `PRECLASSIFY.md`, current
 `config/classification.yaml`, and recent `pass: "compare"` rows in
 `state/decisions.jsonl`. It prints YAML snippets for possible `skip_senders`
 and `action_templates` additions, plus warnings for rules that disagreed with
-the agent. It does not edit config files.
+the agent. It does not edit config files. Suggestions are gated by accumulated
+evidence: skip rules require a higher no-task confidence threshold and no
+agent-confirmed task vetoes; task templates require repeated sender/subject
+patterns with high task confidence.
 
 ## How it's organized
 

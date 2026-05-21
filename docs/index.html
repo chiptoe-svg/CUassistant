@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CUassistant — Codebase Overview</title>
+    <style>
+      :root {
+        --orange: #f56600;
+        --purple: #522d80;
+        --ink: #1c1a17;
+        --muted: #6b6660;
+        --bg: #faf8f5;
+        --card: #ffffff;
+        --line: #e6e1d9;
+        --code-bg: #2b2620;
+        --good: #2f7d4f;
+        --warn: #b9770e;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        line-height: 1.62;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 940px; margin: 0 auto; padding: 0 24px; }
+      a { color: var(--orange); }
+
+      header {
+        background: linear-gradient(135deg, #522d80 0%, #3c2160 100%);
+        color: #fff;
+        padding: 56px 0 48px;
+        border-bottom: 5px solid var(--orange);
+      }
+      header h1 { margin: 0 0 6px; font-size: 2.5rem; letter-spacing: -0.5px; }
+      header .tag { font-size: 1.12rem; color: #e9e2f4; max-width: 660px; }
+      header .repo {
+        display: inline-block;
+        margin-top: 18px;
+        font-size: 0.92rem;
+        color: #fff;
+        background: rgba(255, 255, 255, 0.13);
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        padding: 6px 13px;
+        border-radius: 6px;
+        text-decoration: none;
+      }
+      header .repo:hover { background: rgba(255, 255, 255, 0.22); }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin: -34px auto 0;
+        position: relative;
+      }
+      .stat {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px 18px;
+        box-shadow: 0 6px 22px rgba(60, 33, 96, 0.08);
+      }
+      .stat .n {
+        font-size: 1.7rem;
+        font-weight: 700;
+        color: var(--purple);
+        line-height: 1.1;
+      }
+      .stat .l {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+
+      section { padding: 30px 0 8px; }
+      h2 {
+        font-size: 1.5rem;
+        margin: 18px 0 6px;
+        padding-bottom: 7px;
+        border-bottom: 2px solid var(--line);
+      }
+      h2 .num {
+        color: var(--orange);
+        font-weight: 700;
+        margin-right: 8px;
+      }
+      h3 { font-size: 1.08rem; margin: 22px 0 4px; color: var(--purple); }
+      p { margin: 10px 0; }
+      .lead { font-size: 1.06rem; }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 4px 22px 14px;
+        margin: 16px 0;
+      }
+      .callout {
+        border-left: 4px solid var(--orange);
+        background: #fff6ef;
+        padding: 12px 18px;
+        border-radius: 0 8px 8px 0;
+        margin: 16px 0;
+      }
+      .callout.purple { border-left-color: var(--purple); background: #f4f0fa; }
+      .callout.warn { border-left-color: var(--warn); background: #fdf6e8; }
+      .callout p:first-child { margin-top: 6px; }
+      .callout p:last-child { margin-bottom: 6px; }
+
+      code {
+        font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+        font-size: 0.86em;
+        background: #efe9e0;
+        color: #6b3a14;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 14px 0;
+        font-size: 0.92rem;
+      }
+      th, td {
+        text-align: left;
+        padding: 9px 11px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th {
+        background: #f3eee6;
+        color: var(--purple);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      tr:last-child td { border-bottom: none; }
+      td code { white-space: nowrap; }
+
+      ol.flow { counter-reset: step; list-style: none; padding-left: 0; }
+      ol.flow li {
+        position: relative;
+        padding: 8px 0 8px 44px;
+        border-bottom: 1px dashed var(--line);
+      }
+      ol.flow li:last-child { border-bottom: none; }
+      ol.flow li::before {
+        counter-increment: step;
+        content: counter(step);
+        position: absolute;
+        left: 0;
+        top: 8px;
+        width: 28px;
+        height: 28px;
+        background: var(--purple);
+        color: #fff;
+        border-radius: 50%;
+        text-align: center;
+        line-height: 28px;
+        font-weight: 700;
+        font-size: 0.85rem;
+      }
+
+      .diagram {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
+        margin: 16px 0;
+        overflow-x: auto;
+      }
+      .diagram svg { display: block; margin: 0 auto; }
+
+      .badge {
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        vertical-align: middle;
+      }
+      .badge.good { background: #e3f1e8; color: var(--good); }
+      .badge.warn { background: #fbf0d8; color: var(--warn); }
+      .badge.info { background: #ece5f5; color: var(--purple); }
+
+      .sec-grid { }
+      .sec-row {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        gap: 16px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .sec-row:last-child { border-bottom: none; }
+      .sec-row .k { font-weight: 700; color: var(--purple); }
+
+      footer {
+        margin-top: 40px;
+        background: #2b2620;
+        color: #cfc7bb;
+        padding: 26px 0;
+        font-size: 0.88rem;
+      }
+      footer a { color: #ffb27a; }
+      .muted { color: var(--muted); font-size: 0.9rem; }
+
+      @media (max-width: 720px) {
+        .stats { grid-template-columns: repeat(2, 1fr); }
+        .sec-row { grid-template-columns: 1fr; gap: 4px; }
+        header h1 { font-size: 2rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <h1>CUassistant</h1>
+        <div class="tag">
+          A narrowly-scoped personal assistant for university work. Today it has
+          one capability — email triage — built so an agent does the judgment
+          and a deterministic host owns every side effect.
+        </div>
+        <a class="repo" href="https://github.com/chiptoe-svg/CUassistant"
+          >github.com/chiptoe-svg/CUassistant</a
+        >
+      </div>
+    </header>
+
+    <div class="wrap">
+      <div class="stats">
+        <div class="stat">
+          <div class="n">~6,800</div>
+          <div class="l">Lines of TypeScript</div>
+        </div>
+        <div class="stat">
+          <div class="n">55</div>
+          <div class="l">TypeScript files</div>
+        </div>
+        <div class="stat">
+          <div class="n">2</div>
+          <div class="l">Runtime dependencies</div>
+        </div>
+        <div class="stat">
+          <div class="n">1</div>
+          <div class="l">Shipping capability</div>
+        </div>
+      </div>
+
+      <section>
+        <h2><span class="num">01</span>What this is</h2>
+        <p class="lead">
+          CUassistant scans an inbox a few times a day, decides which messages
+          create a real obligation, and creates Microsoft 365 To&nbsp;Do tasks
+          for them. It never moves, archives, sends, or deletes mail.
+        </p>
+        <p>
+          The project is a deliberately stripped-down sibling of a larger
+          agent. Most of it is an ordinary deterministic script; an AI
+          classifier is called only for the cases plain rules can't decide.
+          The classifier returns JSON — it gets no mailbox tools and no
+          credentials. Every action that touches the world is performed by the
+          host process, against a reviewable allow-list.
+        </p>
+
+        <div class="callout purple">
+          <p><strong>Why this side branch exists.</strong></p>
+          <p>
+            The parent project (CUagent) is a multi-capability agent that runs
+            in a container with its own channels and a long-running loop — the
+            right long-term shape, and also the shape that triggered an IT
+            security review. CUassistant is the same idea narrowed to one
+            capability and a much smaller surface, so the work can continue and
+            be evaluated while consent is re-established.
+          </p>
+        </div>
+
+        <h3>Near-term goal</h3>
+        <p>
+          Restore delegated admin consent on the existing
+          <code>GCassistant Office&nbsp;365</code> Azure AD app under the same
+          scope envelope IT already reviewed (<code>Mail.ReadWrite</code>,
+          <code>Tasks.ReadWrite</code>, <code>Calendars.ReadWrite</code>,
+          <code>Chat.Read</code>, <code>offline_access</code>). The narrow,
+          host-applied, fully-audited shape is meant to make that re-approval
+          straightforward to evaluate.
+        </p>
+        <h3>Long-term goal</h3>
+        <p>
+          A Clemson-sanctioned platform where faculty and staff can run modest,
+          well-scoped agents for teaching and administrative work — drafting
+          student replies, summarizing committee threads, outlining lectures,
+          triaging advisor inboxes. Starting narrow is how the project earns
+          the trust and operational track record to grow that catalog
+          responsibly.
+        </p>
+      </section>
+
+      <section>
+        <h2><span class="num">02</span>At a glance</h2>
+        <div class="card">
+          <table>
+            <tr>
+              <th>Aspect</th>
+              <th>Detail</th>
+            </tr>
+            <tr>
+              <td>Language</td>
+              <td>
+                TypeScript (ES2022, ESM, <code>strict</code>), run on Node
+                &ge;&nbsp;20 via <code>tsx</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Size</td>
+              <td>
+                ~6,800 lines across 55 <code>.ts</code> files (≈5,850 in
+                <code>src/</code>, ≈980 in <code>scripts/</code>)
+              </td>
+            </tr>
+            <tr>
+              <td>Dependencies</td>
+              <td>
+                <code>yaml</code> for config parsing;
+                <code>@modelcontextprotocol/sdk</code> for the (not-yet-shipping)
+                MCP server. No web framework, no ORM, no mail SDK — Graph is
+                called over plain <code>fetch</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>Runtime model</td>
+              <td>
+                Single-shot process. Acquires a lock, runs registered handlers,
+                exits. Scheduled by cron or <code>launchd</code> — no daemon.
+              </td>
+            </tr>
+            <tr>
+              <td>External services</td>
+              <td>
+                Microsoft Graph (mail + To&nbsp;Do), Codex CLI / OpenAI for
+                classification, optional <code>gws</code> CLI for Gmail.
+              </td>
+            </tr>
+            <tr>
+              <td>Quality gates</td>
+              <td>
+                TypeScript <code>strict</code>, Prettier, a
+                <code>gitleaks</code> pre-commit hook and CI workflow for secret
+                scanning.
+              </td>
+            </tr>
+            <tr>
+              <td>License</td>
+              <td>TBD</td>
+            </tr>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2><span class="num">03</span>How it works</h2>
+        <p>
+          A scheduled host script owns all external connections and side
+          effects. On each run it loads registered handlers and runs them in
+          order. The only handler today is email triage.
+        </p>
+        <div class="card">
+          <ol class="flow">
+            <li>
+              <strong>Host selects handlers.</strong> Registered capabilities
+              load from <code>src/handlers/</code>; the active handler context
+              is set before any provider call.
+            </li>
+            <li>
+              <strong>Triage lists mail.</strong> The handler lists new Inbox
+              message metadata through the configured provider (Microsoft
+              Graph, or the <code>gws</code> CLI for Gmail).
+            </li>
+            <li>
+              <strong>Mode chooses the path.</strong> <code>MODE=agent</code>
+              sends every message to the classifier. <code>MODE=hybrid</code>
+              applies deterministic rules first and only classifies the
+              residue. <code>MODE=compare</code> runs the agent as a benchmark
+              and records what the rules would have done — with no side
+              effects.
+            </li>
+            <li>
+              <strong>Rules resolve obvious cases.</strong> In hybrid mode,
+              local YAML/string matching skips known noise or creates a task
+              from a stable sender/subject template. No model call.
+            </li>
+            <li>
+              <strong>Classifier handles judgment.</strong> The host fetches and
+              normalizes the body (stripping quoted replies and footers) and
+              asks the classifier whether the message creates a real
+              obligation. Codex runs as a constrained, sandboxed subprocess;
+              the optional OpenAI path is a single tool-less JSON call.
+            </li>
+            <li>
+              <strong>Host applies side effects.</strong> The classifier never
+              receives Graph tools or credentials. It returns a decision; the
+              host validates it, writes the audit row, checks for an existing
+              task marker, and creates the To&nbsp;Do task only when needed.
+            </li>
+          </ol>
+        </div>
+        <p>
+          The scan is <strong>read + create-task only</strong>. Filing happens
+          separately, by hand, when the user completes the task in To&nbsp;Do.
+        </p>
+      </section>
+
+      <section>
+        <h2><span class="num">04</span>Architecture</h2>
+        <p>
+          The dashed boundary is the trust line: everything inside is the host
+          process you can audit. The classifier sits <em>outside</em> it — it
+          receives a prompt and returns JSON, nothing more.
+        </p>
+        <div class="diagram">
+          <svg
+            width="880"
+            height="494"
+            viewBox="0 0 880 494"
+            xmlns="http://www.w3.org/2000/svg"
+            font-family="-apple-system, Segoe UI, Roboto, sans-serif"
+          >
+            <defs>
+              <marker
+                id="arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M0,0 L10,5 L0,10 z" fill="#6b6660" />
+              </marker>
+            </defs>
+
+            <!-- scheduler -->
+            <rect x="350" y="14" width="180" height="40" rx="8"
+              fill="#522d80" />
+            <text x="440" y="39" fill="#fff" font-size="13"
+              font-weight="700" text-anchor="middle">
+              cron / launchd
+            </text>
+            <line x1="440" y1="54" x2="440" y2="78" stroke="#6b6660"
+              stroke-width="2" marker-end="url(#arrow)" />
+
+            <!-- host trust boundary -->
+            <rect x="24" y="80" width="832" height="232" rx="12"
+              fill="#ffffff" stroke="#522d80" stroke-width="2"
+              stroke-dasharray="7 5" />
+            <text x="44" y="103" fill="#522d80" font-size="12"
+              font-weight="700">
+              CUassistant host process — Node / TypeScript (trusted, audited)
+            </text>
+
+            <!-- orchestrator -->
+            <rect x="44" y="116" width="792" height="46" rx="8"
+              fill="#f4f0fa" stroke="#cdbfe3" />
+            <text x="440" y="138" fill="#3c2160" font-size="12.5"
+              font-weight="700" text-anchor="middle">
+              index.ts → handler registry → triage handler → scan orchestrator
+            </text>
+            <text x="440" y="153" fill="#6b6660" font-size="10.5"
+              text-anchor="middle">
+              scan-mail · preclassifier (deterministic rules) · residual-classifiers · scan-effects
+            </text>
+
+            <!-- permission gate -->
+            <rect x="44" y="174" width="792" height="34" rx="8"
+              fill="#fff6ef" stroke="#f1b98a" />
+            <text x="440" y="195" fill="#b9770e" font-size="11.5"
+              font-weight="700" text-anchor="middle">
+              permissions.ts allow-list  +  policy/action-policy.yaml (approval=none gate)
+            </text>
+
+            <!-- four host functions -->
+            <rect x="44" y="222" width="186" height="74" rx="8"
+              fill="#eef4f0" stroke="#bcd6c6" />
+            <text x="137" y="244" fill="#2f7d4f" font-size="11.5"
+              font-weight="700" text-anchor="middle">Mail readers</text>
+            <text x="137" y="262" fill="#4a4640" font-size="10"
+              text-anchor="middle">MS Graph REST</text>
+            <text x="137" y="277" fill="#4a4640" font-size="10"
+              text-anchor="middle">gws CLI · Codex connector</text>
+
+            <rect x="246" y="222" width="186" height="74" rx="8"
+              fill="#eef4f0" stroke="#bcd6c6" />
+            <text x="339" y="244" fill="#2f7d4f" font-size="11.5"
+              font-weight="700" text-anchor="middle">Task writer</text>
+            <text x="339" y="262" fill="#4a4640" font-size="10"
+              text-anchor="middle">MS Graph To Do</text>
+            <text x="339" y="277" fill="#4a4640" font-size="10"
+              text-anchor="middle">create / dedupe by marker</text>
+
+            <rect x="448" y="222" width="186" height="74" rx="8"
+              fill="#eef4f0" stroke="#bcd6c6" />
+            <text x="541" y="244" fill="#2f7d4f" font-size="11.5"
+              font-weight="700" text-anchor="middle">Local state</text>
+            <text x="541" y="262" fill="#4a4640" font-size="10"
+              text-anchor="middle">decisions · usage</text>
+            <text x="541" y="277" fill="#4a4640" font-size="10"
+              text-anchor="middle">progress · pending · lock</text>
+
+            <rect x="650" y="222" width="186" height="74" rx="8"
+              fill="#eef4f0" stroke="#bcd6c6" />
+            <text x="743" y="244" fill="#2f7d4f" font-size="11.5"
+              font-weight="700" text-anchor="middle">Notifiers</text>
+            <text x="743" y="262" fill="#4a4640" font-size="10"
+              text-anchor="middle">stdout</text>
+            <text x="743" y="277" fill="#4a4640" font-size="10"
+              text-anchor="middle">local log file</text>
+
+            <!-- classifier outside boundary -->
+            <line x1="440" y1="312" x2="440" y2="350" stroke="#6b6660"
+              stroke-width="2" marker-end="url(#arrow)"
+              marker-start="url(#arrow)" />
+            <text x="454" y="335" fill="#6b6660" font-size="10">
+              bounded candidates ⇄ JSON only
+            </text>
+
+            <rect x="210" y="352" width="460" height="80" rx="10"
+              fill="#fbeee4" stroke="#f56600" stroke-width="2" />
+            <text x="440" y="375" fill="#b9770e" font-size="12.5"
+              font-weight="700" text-anchor="middle">
+              Classifier — outside the trust boundary
+            </text>
+            <text x="440" y="394" fill="#4a4640" font-size="10.5"
+              text-anchor="middle">
+              Codex CLI subprocess: read-only sandbox · ephemeral cwd · schema-bounded
+            </text>
+            <text x="440" y="409" fill="#4a4640" font-size="10.5"
+              text-anchor="middle">
+              no tools · no shell · no Graph credentials · no MCP
+            </text>
+            <text x="440" y="424" fill="#6b6660" font-size="10"
+              text-anchor="middle">
+              (optional lean path: one tool-less OpenAI JSON call per email)
+            </text>
+
+            <!-- external services -->
+            <line x1="137" y1="296" x2="137" y2="456" stroke="#6b6660"
+              stroke-width="2" marker-end="url(#arrow)"
+              marker-start="url(#arrow)" />
+            <line x1="339" y1="296" x2="339" y2="456" stroke="#6b6660"
+              stroke-width="2" marker-end="url(#arrow)"
+              marker-start="url(#arrow)" />
+            <rect x="60" y="458" width="358" height="30" rx="7"
+              fill="#ece5f5" stroke="#cdbfe3" />
+            <text x="239" y="478" fill="#3c2160" font-size="11"
+              font-weight="700" text-anchor="middle">
+              Microsoft 365 — Outlook mail &amp; To Do (delegated consent)
+            </text>
+          </svg>
+        </div>
+      </section>
+
+      <section>
+        <h2><span class="num">05</span>Component map</h2>
+        <div class="card">
+          <table>
+            <tr>
+              <th>Area</th>
+              <th>Files</th>
+              <th>Responsibility</th>
+            </tr>
+            <tr>
+              <td>Orchestration</td>
+              <td><code>index.ts</code>, <code>scan.ts</code>,
+                <code>scan-mail.ts</code>, <code>scan-effects.ts</code>,
+                <code>scan-summary.ts</code></td>
+              <td>
+                Lock, handler loop, mail listing, side effects, run summary.
+              </td>
+            </tr>
+            <tr>
+              <td>Handlers</td>
+              <td><code>handlers/triage.ts</code>, <code>registry.ts</code></td>
+              <td>
+                Self-registering capabilities. Each declares its Graph scopes.
+                <code>triage</code> is the only one.
+              </td>
+            </tr>
+            <tr>
+              <td>Classification</td>
+              <td><code>codex-agent.ts</code>,
+                <code>openai-classifier.ts</code>,
+                <code>residual-classifiers.ts</code>,
+                <code>preclassifier.ts</code>, <code>compare.ts</code></td>
+              <td>
+                Codex subprocess invocation, optional lean OpenAI path,
+                deterministic rules, and compare-mode benchmarking.
+              </td>
+            </tr>
+            <tr>
+              <td>Providers</td>
+              <td><code>provider-registry.ts</code>, <code>providers.ts</code>,
+                <code>ms365.ts</code>, <code>gmail.ts</code>,
+                <code>codex-outlook.ts</code>, <code>graph-cli-tasks.ts</code></td>
+              <td>
+                Swappable <code>MailReader</code> / <code>TaskWriter</code>
+                implementations behind narrow interfaces.
+              </td>
+            </tr>
+            <tr>
+              <td>Guardrails</td>
+              <td><code>permissions.ts</code>, <code>policy.ts</code>,
+                <code>policy/action-policy.yaml</code>,
+                <code>schemas/*.json</code></td>
+              <td>
+                Graph operation allow-list, structured action policy, and
+                JSON schemas that bound classifier output.
+              </td>
+            </tr>
+            <tr>
+              <td>State &amp; output</td>
+              <td><code>state.ts</code>, <code>pricing.ts</code>,
+                <code>notifiers/*</code></td>
+              <td>
+                Append-only audit / usage / progress logs, cost rate cards,
+                and stdout + file notifiers.
+              </td>
+            </tr>
+            <tr>
+              <td>Persona &amp; skills</td>
+              <td><code>AGENT.md</code>, <code>skills/triage/SKILL.md</code>,
+                <code>prompts.ts</code></td>
+              <td>
+                Runtime-agnostic identity plus the triage skill, composed into
+                the classifier prompt.
+              </td>
+            </tr>
+            <tr>
+              <td>Not yet shipping</td>
+              <td><code>mcp-server.ts</code>, <code>mcp-tools/*</code></td>
+              <td>
+                A host-side MCP server (mail/calendar/To&nbsp;Do tools) exists
+                in the tree but is <em>not</em> invoked by the cron scan path.
+              </td>
+            </tr>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2><span class="num">06</span>Security posture</h2>
+        <p>
+          The design substitutes a reviewable, host-mediated boundary for
+          heavyweight isolation. The full IT-facing analysis lives in
+          <a
+            href="https://github.com/chiptoe-svg/CUassistant/blob/main/docs/IT_REVIEW_NOTES.md"
+            >docs/IT_REVIEW_NOTES.md</a
+          >; this is the summary.
+        </p>
+
+        <div class="sec-grid">
+          <div class="sec-row">
+            <div class="k">Agent confinement <span class="badge good">strong</span></div>
+            <div>
+              The classifier never receives Microsoft Graph tools or
+              credentials. Codex runs as a short-lived subprocess with a
+              <code>read-only</code> sandbox, an ephemeral throwaway working
+              directory, <code>--ignore-rules</code> (no local instruction
+              files), and a JSON output schema. It has no shell, no file tools,
+              no MCP surface. A prompt-injection attempt has no channel to act
+              on anything — output must match the schema and the cwd is
+              destroyed on exit.
+            </div>
+          </div>
+          <div class="sec-row">
+            <div class="k">Permission model <span class="badge good">strong</span></div>
+            <div>
+              Two layers. <code>permissions.ts</code> holds a per-handler
+              allow-list of the five Graph operations triage may perform; every
+              Graph call asserts against it. Each operation must also map to an
+              <code>approval: none</code> action in
+              <code>policy/action-policy.yaml</code>. There is simply no code
+              path for sending, deleting, moving, or drafting mail — the
+              absence is reviewable, not just disabled.
+            </div>
+          </div>
+          <div class="sec-row">
+            <div class="k">Consent scope <span class="badge warn">watch</span></div>
+            <div>
+              The Azure app's reviewed envelope (<code>Mail.ReadWrite</code>,
+              <code>Tasks.ReadWrite</code>, <code>Calendars.ReadWrite</code>,
+              <code>Chat.Read</code>) is broader than what triage uses — the
+              runtime refreshes only Mail + To&nbsp;Do scopes.
+              <code>Mail.ReadWrite</code> in particular grants more than the
+              code exercises. Mitigation is the operation allow-list above plus
+              reviewable absence of the call sites; the residual risk is
+              endpoint-level.
+            </div>
+          </div>
+          <div class="sec-row">
+            <div class="k">Data egress <span class="badge warn">watch</span></div>
+            <div>
+              Email bodies — which in a faculty inbox routinely include
+              FERPA-protected student information — are normalized and sent to
+              Codex / OpenAI for classification. That is the central compliance
+              consideration for a campus deployment. The roadmap answer is
+              policy-controlled local-LLM routing for high-sensitivity
+              categories; it is intentionally <em>not</em> in the current build
+              or consent ask. Codex's network egress is also not firewalled.
+            </div>
+          </div>
+          <div class="sec-row">
+            <div class="k">Secrets <span class="badge warn">watch</span></div>
+            <div>
+              A Microsoft refresh token (and optionally an
+              <code>OPENAI_API_KEY</code>) live in a local <code>.env</code> —
+              gitignored, written <code>0600</code> by the login helper, and
+              guarded by a <code>gitleaks</code> pre-commit hook and CI
+              workflow. Protecting the endpoint itself remains an
+              endpoint-management responsibility.
+            </div>
+          </div>
+          <div class="sec-row">
+            <div class="k">Auditability <span class="badge good">strong</span></div>
+            <div>
+              Every decision is an append-only row in
+              <code>decisions.jsonl</code> (sender, truncated subject, reasoning,
+              model used, body hash, task id). Task creation writes a durable
+              <code>task-intent</code> row <em>before</em> the Graph call and a
+              terminal row after — crash-safe and idempotent via a dedupe
+              marker. Token usage and cost land in <code>usage.jsonl</code>.
+            </div>
+          </div>
+          <div class="sec-row">
+            <div class="k">No container <span class="badge info">by design</span></div>
+            <div>
+              CUassistant runs as a host script. A container would add stronger
+              filesystem and network isolation, but for a tool-less,
+              schema-bounded classifier the gap is small — the sandbox's open
+              edges (reads outside cwd, network) have no exploitation path
+              without tools. Containerizing later is straightforward; it is not
+              on the current roadmap.
+            </div>
+          </div>
+        </div>
+
+        <div class="callout warn">
+          <p>
+            <strong>Bottom line.</strong> The agent is tightly confined and the
+            host boundary is small and auditable. The two items a reviewer
+            should weigh deliberately are the breadth of the
+            <code>Mail.ReadWrite</code> consent scope relative to what the code
+            uses, and the egress of student email content to a third-party
+            model — both known, both with documented mitigations and a roadmap.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <h2><span class="num">07</span>Current status</h2>
+        <p>
+          The scheduler (<code>launchd</code>) is installed but
+          <strong>not loaded</strong> — no scans are running. Admin consent on
+          the Azure app is currently revoked pending the IT security review,
+          so the Microsoft 365 path is paused. The Gmail path and the
+          classification, cost-tracking, and audit machinery are all
+          functional and tested.
+        </p>
+      </section>
+    </div>
+
+    <footer>
+      <div class="wrap">
+        <p>
+          <strong>CUassistant</strong> ·
+          <a href="https://github.com/chiptoe-svg/CUassistant"
+            >github.com/chiptoe-svg/CUassistant</a
+          >
+        </p>
+        <p class="muted" style="color: #9a9286">
+          Generated codebase overview. Figures reflect the <code>main</code>
+          branch. See <code>docs/IT_REVIEW_NOTES.md</code> and
+          <code>docs/CLEMSON_AGENTIC_CONTROLS.md</code> for the full review
+          material.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

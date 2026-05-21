@@ -287,7 +287,7 @@
         <h3>Near-term goal</h3>
         <p>
           Restore delegated admin consent on the existing
-          <code>GCassistant Office&nbsp;365</code> Azure AD app under the same
+          <code>GCassistant Office&nbsp;365</code> Microsoft 365 app registration under the same
           scope envelope IT already reviewed (<code>Mail.ReadWrite</code>,
           <code>Tasks.ReadWrite</code>, <code>Calendars.ReadWrite</code>,
           <code>Chat.Read</code>, <code>offline_access</code>). The narrow,
@@ -695,7 +695,7 @@
           <div class="sec-row">
             <div class="k">Consent scope <span class="badge warn">watch</span></div>
             <div>
-              The Azure app's reviewed envelope (<code>Mail.ReadWrite</code>,
+              The reviewed consent envelope (<code>Mail.ReadWrite</code>,
               <code>Tasks.ReadWrite</code>, <code>Calendars.ReadWrite</code>,
               <code>Chat.Read</code>) is broader than what triage uses — the
               runtime refreshes only Mail + To&nbsp;Do scopes.
@@ -769,7 +769,7 @@
         <p>
           The scheduler (<code>launchd</code>) is installed but
           <strong>not loaded</strong> — no scans are running. Admin consent on
-          the Azure app is currently revoked pending the IT security review,
+          the GCassistant app registration is currently revoked pending the IT security review,
           so the Microsoft 365 path is paused. The Gmail path and the
           classification, cost-tracking, and audit machinery are all
           functional and tested.

@@ -374,6 +374,22 @@
           triaging advisor inboxes. Starting narrow is how the project earns the
           trust and operational track record to grow that catalog responsibly.
         </p>
+        <div class="callout purple">
+          <p>
+            <strong>Related institutional path.</strong> CUassistant is a narrow
+            single-user prototype. The scalable campus version is a
+            Clemson-governed MCP gateway with central identity, approved tools,
+            data-classification policy, audit logging, and default-deny
+            authorization:
+            <a href="proposals/clemson-enterprise-mcp-gateway.html"
+              >Clemson Enterprise MCP Gateway Proposal</a
+            >
+            (<a
+              href="https://github.com/chiptoe-svg/CUassistant/blob/main/docs/proposals/CLEMSON_ENTERPRISE_MCP_GATEWAY.md"
+              >Markdown source</a
+            >).
+          </p>
+        </div>
       </section>
 
       <section>
@@ -1044,12 +1060,12 @@
               CUassistant does not give the classifier Microsoft Graph tools or
               credentials. For classification, Codex runs as a short-lived
               subprocess with a <code>read-only</code> sandbox, an ephemeral
-              throwaway working directory, <code>--ignore-rules</code> (no
-              local instruction files), ignored user config, and a JSON output
-              schema. CUassistant does not attach shell, MCP, or host-side
-              effect tools to that classifier process. A prompt-injection
-              attempt has no approved action channel: output must match the
-              schema, the host validates it, and the cwd is destroyed on exit.
+              throwaway working directory, <code>--ignore-rules</code> (no local
+              instruction files), ignored user config, and a JSON output schema.
+              CUassistant does not attach shell, MCP, or host-side effect tools
+              to that classifier process. A prompt-injection attempt has no
+              approved action channel: output must match the schema, the host
+              validates it, and the cwd is destroyed on exit.
             </div>
           </div>
           <div class="sec-row">
@@ -1115,8 +1131,8 @@
               The file is gitignored; login helpers create it with mode
               <code>0600</code> when new, and transfer scripts chmod it
               best-effort. A <code>gitleaks</code> pre-commit hook and CI
-              workflow guard against accidental commits. Protecting the
-              endpoint itself remains an endpoint-management responsibility.
+              workflow guard against accidental commits. Protecting the endpoint
+              itself remains an endpoint-management responsibility.
             </div>
           </div>
           <div class="sec-row">
@@ -1167,10 +1183,10 @@
           <p>
             <strong>Bottom line.</strong> The agent is tightly confined and the
             host boundary is small and auditable. The two items a reviewer
-            should weigh deliberately are the breadth of the
-            delegated mail/calendar consent scope relative to what the code
-            exposes, and the egress of student email content to a third-party
-            model — both known, both with documented mitigations and a roadmap.
+            should weigh deliberately are the breadth of the delegated
+            mail/calendar consent scope relative to what the code exposes, and
+            the egress of student email content to a third-party model — both
+            known, both with documented mitigations and a roadmap.
           </p>
         </div>
       </section>

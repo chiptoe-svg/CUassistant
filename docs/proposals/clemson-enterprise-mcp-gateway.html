@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clemson Enterprise MCP Gateway Proposal</title>
+    <style>
+      :root {
+        --orange: #f56600;
+        --purple: #522d80;
+        --ink: #1f2937;
+        --muted: #5f6b7a;
+        --line: #e5e7eb;
+        --bg: #f7f7fb;
+        --card: #ffffff;
+        --soft-orange: #fff3e8;
+        --soft-purple: #f3eef9;
+        --green: #22735d;
+        --red: #9f2d20;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        line-height: 1.55;
+      }
+      header {
+        background: linear-gradient(
+          135deg,
+          var(--purple),
+          #2a1645 60%,
+          #1d122f
+        );
+        color: white;
+        padding: 3rem 2rem 2.5rem;
+      }
+      header .wrap,
+      main,
+      footer {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 0.4rem;
+        font-size: clamp(2rem, 4vw, 3.2rem);
+        line-height: 1.05;
+      }
+      .subtitle {
+        max-width: 880px;
+        color: #f3edf8;
+        font-size: 1.1rem;
+      }
+      .pill {
+        display: inline-block;
+        background: var(--orange);
+        color: white;
+        border-radius: 999px;
+        padding: 0.35rem 0.75rem;
+        font-weight: 700;
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
+      }
+      main {
+        padding: 2rem;
+      }
+      section {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 1.4rem;
+        margin: 1rem 0;
+        box-shadow: 0 4px 16px rgba(31, 41, 55, 0.05);
+      }
+      h2 {
+        margin-top: 0;
+        color: var(--purple);
+        font-size: 1.35rem;
+      }
+      h3 {
+        margin-bottom: 0.35rem;
+      }
+      a {
+        color: var(--purple);
+      }
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1rem;
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 1rem;
+        background: #fff;
+      }
+      .card h3 {
+        margin-top: 0;
+        color: var(--purple);
+      }
+      .summary .card:nth-child(1) {
+        background: var(--soft-purple);
+      }
+      .summary .card:nth-child(2) {
+        background: var(--soft-orange);
+      }
+      .summary .card:nth-child(3) {
+        background: #eef8f5;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0.75rem 0;
+        font-size: 0.95rem;
+      }
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 0.65rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: var(--purple);
+        background: #faf8fd;
+      }
+      .architecture {
+        display: grid;
+        gap: 0.8rem;
+        margin: 1rem 0;
+      }
+      .layer {
+        border: 2px solid var(--line);
+        background: white;
+        border-radius: 16px;
+        padding: 1rem;
+        position: relative;
+      }
+      .layer strong {
+        color: var(--purple);
+        display: block;
+        margin-bottom: 0.15rem;
+      }
+      .arrow {
+        text-align: center;
+        color: var(--orange);
+        font-size: 1.5rem;
+        line-height: 1;
+        font-weight: 800;
+      }
+      .gateway {
+        border-color: var(--orange);
+        background: var(--soft-orange);
+      }
+      .flow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: stretch;
+        margin: 0.8rem 0;
+      }
+      .step {
+        flex: 1 1 130px;
+        min-width: 130px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: white;
+        padding: 0.75rem;
+        font-size: 0.9rem;
+      }
+      .step b {
+        color: var(--purple);
+      }
+      .ladder {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.75rem;
+      }
+      .rung {
+        padding: 1rem;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: #fff;
+        min-height: 125px;
+      }
+      .rung:nth-child(1) {
+        border-top: 6px solid #22735d;
+      }
+      .rung:nth-child(2) {
+        border-top: 6px solid #4f83cc;
+      }
+      .rung:nth-child(3) {
+        border-top: 6px solid #d17b00;
+      }
+      .rung:nth-child(4) {
+        border-top: 6px solid #9f2d20;
+      }
+      .roadmap {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.75rem;
+      }
+      .phase {
+        border-left: 5px solid var(--orange);
+        background: #fff;
+        border-radius: 12px;
+        padding: 0.9rem;
+        border-top: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .controls {
+        columns: 2;
+        column-gap: 2rem;
+      }
+      .controls li {
+        break-inside: avoid;
+        margin-bottom: 0.45rem;
+      }
+      blockquote {
+        border-left: 5px solid var(--orange);
+        margin: 1rem 0;
+        padding: 0.8rem 1rem;
+        background: var(--soft-orange);
+        border-radius: 0 12px 12px 0;
+      }
+      .callout {
+        border-left: 5px solid var(--purple);
+        background: var(--soft-purple);
+        border-radius: 0 12px 12px 0;
+        padding: 0.9rem 1rem;
+        margin: 1rem 0;
+      }
+      .small {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+      footer {
+        padding: 2rem;
+        color: var(--muted);
+      }
+      @media (max-width: 850px) {
+        .grid-3,
+        .grid-2,
+        .ladder,
+        .roadmap {
+          grid-template-columns: 1fr;
+        }
+        .controls {
+          columns: 1;
+        }
+        main {
+          padding: 1rem;
+        }
+      }
+      @media print {
+        body {
+          background: white;
+        }
+        section {
+          box-shadow: none;
+          break-inside: avoid;
+        }
+        header {
+          background: white;
+          color: var(--ink);
+          border-bottom: 3px solid var(--orange);
+        }
+        header .subtitle {
+          color: var(--ink);
+        }
+        .pill {
+          color: white;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <div class="pill">Working name: TigerMCP</div>
+        <h1>Clemson Enterprise MCP Gateway Proposal</h1>
+        <p class="subtitle">
+          A concise concept for a Clemson-governed MCP gateway that exposes
+          approved AI tools to authenticated users, approved AI clients, and
+          approved agentic workflows based on profile, data classification,
+          relationship to data, and institutional approval.
+        </p>
+        <p class="small" style="color: #eadff2">Prepared: May 2026</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary">
+        <h2>Executive summaries</h2>
+        <div class="grid-3">
+          <div class="card">
+            <h3>Leadership</h3>
+            <p>
+              Create a governed MCP gateway instead of allowing disconnected AI
+              plugins, bots, agents, or local MCP servers to spread across
+              campus.
+            </p>
+          </div>
+          <div class="card">
+            <h3>IT, security, stewards</h3>
+            <p>
+              Use Clemson SSO/MFA, OAuth authorization, default-deny tool
+              approval, approved client/agent registration, relationship checks,
+              and audit logging.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Pilot teams</h3>
+            <p>
+              Start with read-only Public and Internal Use tools. Add
+              personalized, administrative, and Confidential-data tools only
+              after core controls are proven.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>1. Core concept</h2>
+        <p>
+          MCP gives AI applications a standard way to discover and call external
+          tools, resources, and prompts. Clemson can use this pattern to provide
+          approved access to campus knowledge, services, and selected systems
+          while keeping authorization, logging, and data classification under
+          university control.
+        </p>
+        <p>
+          The proposal is not one large all-powerful AI server. It is a
+          <strong>Clemson-managed gateway</strong> that controls which tools a
+          user, client, or agent can see and use.
+        </p>
+      </section>
+
+      <section>
+        <h2>2. Proposed conceptual architecture</h2>
+        <div class="architecture">
+          <div class="layer">
+            <strong>Approved AI clients and agents</strong>ChatGPT Edu,
+            Microsoft Copilot, Clemson assistant, departmental assistants,
+            research agents, workflow agents, future approved AI clients
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer gateway">
+            <strong>TigerMCP Gateway</strong>SSO/MFA, OAuth, client/agent
+            registration, tool registry, RBAC/ABAC, data classification, DLP,
+            logs, rate limits, human confirmation, emergency disable
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer">
+            <strong>Domain MCP tool services</strong>Public knowledge, CCIT,
+            Canvas, advising, library, RCD, Microsoft 365, research, enrollment,
+            finance, curriculum
+          </div>
+          <div class="arrow">↓</div>
+          <div class="layer">
+            <strong>Systems of record and approved data sources</strong>Clemson
+            web content, ServiceNow, Canvas, Microsoft 365, Banner/iROAR where
+            approved, finance/HR where approved, research systems, departmental
+            databases
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Architecture principle:</strong> AI clients and agents should
+          not connect directly to Banner/iROAR, Canvas, finance, HR, research
+          systems, or other sensitive systems of record. They should request
+          approved tools through TigerMCP, and TigerMCP should enforce identity,
+          approved client/agent status, role, relationship to data, data
+          classification, logging, and approval rules before a tool is exposed
+          or executed.
+        </div>
+        <p class="small">
+          Sensitive tools should be segmented by data class and business
+          function. Internal network or VPN access can be required, but identity
+          and authorization should still be checked per request.
+        </p>
+      </section>
+
+      <section>
+        <h2>3. Approved clients, agents, and assistants</h2>
+        <p>
+          “Approved AI clients” should explicitly include
+          <strong>agentic systems</strong>, not just chat interfaces.
+        </p>
+        <table>
+          <tr>
+            <th>Category</th>
+            <th>Meaning</th>
+            <th>Example posture</th>
+          </tr>
+          <tr>
+            <td>AI client</td>
+            <td>
+              User-facing approved application that hosts the conversation or
+              workflow.
+            </td>
+            <td>ChatGPT Edu, Microsoft Copilot, Clemson web assistant.</td>
+          </tr>
+          <tr>
+            <td>AI assistant</td>
+            <td>
+              Clemson-facing experience built on an approved client or model.
+            </td>
+            <td>
+              Campus help assistant, department assistant, research support
+              assistant.
+            </td>
+          </tr>
+          <tr>
+            <td>AI agent</td>
+            <td>
+              Semi-autonomous or scheduled workflow that can plan, call tools,
+              or act on behalf of a user.
+            </td>
+            <td>
+              Department reporting agent, ticket triage agent, scheduled
+              enrollment-summary agent.
+            </td>
+          </tr>
+        </table>
+        <p class="small">
+          Agents should be registered separately from ordinary clients because
+          they may run scheduled tasks, chain tools, or operate with less
+          moment-by-moment user supervision.
+        </p>
+      </section>
+
+      <section>
+        <h2>4. Identity and authorization model</h2>
+        <p>
+          TigerMCP should use <strong>profile-conditioned tool access</strong>.
+          The user profile should combine identity, affiliation, role,
+          relationship to data, data classification, approved client/agent, and
+          operation risk.
+        </p>
+        <div class="flow">
+          <div class="step">
+            <b>1.</b><br />Authenticate user or service identity
+          </div>
+          <div class="step"><b>2.</b><br />Verify approved client or agent</div>
+          <div class="step">
+            <b>3.</b><br />Evaluate profile and entitlements
+          </div>
+          <div class="step"><b>4.</b><br />Filter visible tools</div>
+          <div class="step"><b>5.</b><br />Re-check at tool call</div>
+          <div class="step"><b>6.</b><br />Execute, redact, log</div>
+        </div>
+        <p>
+          The visible tool list is not the security boundary. Every tool must
+          still enforce authorization when called.
+        </p>
+      </section>
+
+      <section>
+        <h2>5. Data classification posture</h2>
+        <div class="ladder">
+          <div class="rung">
+            <h3>Public</h3>
+            <p>Best starting point for search and retrieval tools.</p>
+          </div>
+          <div class="rung">
+            <h3>Internal Use</h3>
+            <p>
+              Suitable for early pilots with authentication, logging, and
+              approval.
+            </p>
+          </div>
+          <div class="rung">
+            <h3>Confidential</h3>
+            <p>
+              Requires data steward approval, least privilege, relationship
+              checks, and stronger audit.
+            </p>
+          </div>
+          <div class="rung">
+            <h3>Restricted</h3>
+            <p>
+              Default deny unless a dedicated approved environment is created.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. Initial tool catalog</h2>
+        <table>
+          <tr>
+            <th>Phase</th>
+            <th>Example tools</th>
+            <th>Notes</th>
+          </tr>
+          <tr>
+            <td>1: Low-risk read-only</td>
+            <td>
+              AI guidance, public policy, CCIT KB, service catalog, library, RCD
+              docs
+            </td>
+            <td>Public/Internal Use only</td>
+          </tr>
+          <tr>
+            <td>2: Personalized read-only</td>
+            <td>
+              My tickets, my calendar, my Canvas courses, instructor
+              course-material lookup
+            </td>
+            <td>Own-data or relationship-scoped</td>
+          </tr>
+          <tr>
+            <td>3: Administrative and Confidential pilots</td>
+            <td>
+              Advisor support, department reports, enrollment summaries,
+              curriculum planning, research project search
+            </td>
+            <td>Data steward and compliance approval</td>
+          </tr>
+          <tr>
+            <td>4: Confirmed actions</td>
+            <td>
+              Create ticket, draft email, create calendar event, draft KB
+              article
+            </td>
+            <td>Human confirmation required</td>
+          </tr>
+        </table>
+        <p class="small">
+          Avoid grades, payroll, financial aid, health data, disciplinary
+          matters, legal records, unrestricted SIS access, and autonomous write
+          operations in the first pilots.
+        </p>
+      </section>
+
+      <section>
+        <h2>7. Administrative role examples</h2>
+        <p>
+          Administrative roles are a strong use case because they often need
+          summaries, trends, and planning support rather than unrestricted
+          record-level access.
+        </p>
+        <table>
+          <tr>
+            <th>Role</th>
+            <th>Example tools</th>
+            <th>Guardrails</th>
+          </tr>
+          <tr>
+            <td>Department chair</td>
+            <td>
+              Enrollment trends, section fill rates, waitlist/demand summaries,
+              course rotation gaps, curriculum-change status, faculty
+              teaching-load summaries, staffing-needs planning, department
+              budget summaries.
+            </td>
+            <td>
+              Department-scope and aggregate-first; no individual student
+              records, grades, payroll detail, or HR records unless separately
+              approved.
+            </td>
+          </tr>
+          <tr>
+            <td>Associate dean</td>
+            <td>
+              Cross-department enrollment, program health, curriculum pipeline,
+              accreditation evidence, resource planning.
+            </td>
+            <td>College-scope only; aggregate reporting by default.</td>
+          </tr>
+          <tr>
+            <td>Business officer</td>
+            <td>
+              Budget status summaries, procurement policy lookup, grant/spend
+              category explanations, draft justification language.
+            </td>
+            <td>
+              Financial summaries only; no unrestricted transaction authority or
+              payroll-level detail.
+            </td>
+          </tr>
+          <tr>
+            <td>Program or graduate coordinator</td>
+            <td>
+              Course schedule gaps, applicant/admit pipeline summaries,
+              milestone tracking, degree requirement explanations.
+            </td>
+            <td>
+              Program-scope only; student-level access requires explicit role
+              and relationship approval.
+            </td>
+          </tr>
+        </table>
+        <p class="small">
+          Example: a department chair might ask, “Which required courses are
+          over 90% full next fall?” without receiving access to grades,
+          financial aid, disciplinary records, or unrestricted student records.
+        </p>
+      </section>
+
+      <section>
+        <h2>8. Tool registry requirements</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Approval metadata</h3>
+            <p>
+              Tool name/version, business owner, technical owner, data steward,
+              data classification, review date, rollback path.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Access metadata</h3>
+            <p>
+              Allowed roles, relationship rules, required scopes, approved
+              clients/agents, operation type, rate limits.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Security metadata</h3>
+            <p>
+              Input schema, output filtering, logging plan, DLP controls, egress
+              rules, manifest signature or version pin.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Change control</h3>
+            <p>
+              Reapproval for changes to descriptions, schemas, scopes, data
+              sources, or side effects.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>9. Security controls</h2>
+        <ul class="controls">
+          <li>Clemson SSO/MFA and registered AI clients/agents only.</li>
+          <li>OAuth tokens with audience validation and short lifetimes.</li>
+          <li>Default-deny tool registry.</li>
+          <li>RBAC, ABAC, and relationship-based authorization.</li>
+          <li>Authorization at both tool discovery and execution.</li>
+          <li>
+            Stronger restrictions for scheduled or semi-autonomous agents.
+          </li>
+          <li>Human confirmation for sensitive reads and meaningful writes.</li>
+          <li>Prompt-injection defenses for retrieved content.</li>
+          <li>Signed or version-pinned tool manifests.</li>
+          <li>Segmented execution by data class and domain.</li>
+          <li>Parameter validation, DLP, rate limits, and egress controls.</li>
+          <li>Privacy-preserving audit logs.</li>
+          <li>
+            Emergency disable for tools, clients, agents, groups, or connectors.
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>10. Governance model</h2>
+        <p>
+          TigerMCP should be governed as institutional infrastructure, not a
+          departmental plugin project. Stakeholders should include CCIT,
+          Information Security, data trustees/stewards, Registrar and
+          FERPA/privacy partners, General Counsel/compliance, research
+          computing, research compliance, accessibility, procurement, CheckIT
+          reviewers, and system owners.
+        </p>
+        <blockquote>
+          No MCP tool goes live without a named owner, data classification,
+          approved users, approved clients/agents, relationship rules, allowed
+          operations, logging plan, rollback plan, and review date.
+        </blockquote>
+      </section>
+
+      <section>
+        <h2>11. Pilot plan</h2>
+        <div class="roadmap">
+          <div class="phase">
+            <strong>1. Discovery</strong><br />Scope, stakeholders, approval
+            path, non-goals.
+          </div>
+          <div class="phase">
+            <strong>2. Gateway POC</strong><br />SSO, client/agent registration,
+            tool list/call, logs.
+          </div>
+          <div class="phase">
+            <strong>3. Low-risk tools</strong><br />Policy, AI guidance, CCIT,
+            service catalog, library, RCD.
+          </div>
+          <div class="phase">
+            <strong>4. Personalized read-only</strong><br />My tickets,
+            calendar, course context.
+          </div>
+          <div class="phase">
+            <strong>5. Admin or Confidential pilot</strong><br />One approved
+            scoped use case.
+          </div>
+          <div class="phase">
+            <strong>6. Confirmed actions</strong><br />Draft or submit workflows
+            with visible confirmation.
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>12. Recommended decision request</h2>
+        <p>
+          Approve a limited discovery and proof-of-concept phase to form a
+          working group, confirm the governance path, select one approved AI
+          client and one limited agentic workflow, build a small remote gateway,
+          and launch only Public/Internal Use read-only tools first.
+        </p>
+        <p>
+          <strong>Success criterion:</strong> Clemson proves a repeatable,
+          governed pattern for safely exposing a small number of useful AI
+          tools. Tool count is not the measure of success.
+        </p>
+      </section>
+
+      <section>
+        <h2>References and links</h2>
+        <ul>
+          <li>
+            <a href="https://modelcontextprotocol.io/docs/learn/architecture"
+              >Model Context Protocol - Architecture Overview</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization"
+              >Model Context Protocol - Authorization Specification</a
+            >
+          </li>
+          <li>
+            <a href="https://www.clemson.edu/ai/tools/tool-data-use-guide.html"
+              >Clemson AI Tool and University Data Use Guide</a
+            >
+          </li>
+          <li>
+            <a href="https://www.clemson.edu/ai/guidelines/"
+              >Clemson Generative AI Guidelines</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.clemson.edu/ccit/cybersecurity/policy/data-classification.html"
+              >Clemson Data Classification Policy</a
+            >
+          </li>
+          <li>
+            <a href="https://www.clemson.edu/ccit/checkit/"
+              >Clemson CheckIT Technology Approval Process</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.clemson.edu/ccit/cybersecurity/policy/security-standards.html"
+              >Clemson IT Security Standards and Guidelines</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.clemson.edu/ccit/cybersecurity/how-to/duo-authentication.html"
+              >Clemson Duo Authentication</a
+            >
+          </li>
+          <li>
+            <a href="https://csrc.nist.gov/pubs/sp/800/207/final"
+              >NIST SP 800-207: Zero Trust Architecture</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.nsa.gov/Portals/75/documents/Cybersecurity/CSI_MCP_SECURITY.pdf"
+              >NSA: Model Context Protocol Security Design Considerations</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://genai.owasp.org/resource/owasp-top-10-for-llm-applications-2025/"
+              >OWASP Top 10 for LLM Applications 2025</a
+            >
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        This concise proposal is intended as a starting point for internal
+        discussion, governance review, and pilot scoping.
+      </p>
+      <p>
+        <a
+          href="https://github.com/chiptoe-svg/CUassistant/blob/main/docs/proposals/CLEMSON_ENTERPRISE_MCP_GATEWAY.md"
+          >Markdown source</a
+        >
+        ·
+        <a href="https://github.com/chiptoe-svg/CUassistant"
+          >CUassistant repository</a
+        >
+      </p>
+    </footer>
+  </body>
+</html>

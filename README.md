@@ -8,6 +8,14 @@ tasks.
 live, single-page walkthrough of the architecture, components, and security
 posture (source: [`docs/index.html`](docs/index.html)).
 
+🏛️ **Related institutional path:** CUassistant is a narrow single-user
+prototype. The scalable campus version of this pattern is a Clemson-governed MCP
+gateway with central identity, approved tools, data-classification policy, audit
+logging, and default-deny authorization:
+[`docs/proposals/CLEMSON_ENTERPRISE_MCP_GATEWAY.md`](docs/proposals/CLEMSON_ENTERPRISE_MCP_GATEWAY.md)
+or the
+[human-readable HTML proposal](https://chiptoe-svg.github.io/CUassistant/proposals/clemson-enterprise-mcp-gateway.html).
+
 The Codex agent is the default classifier and the benchmark for tuning. It
 receives bounded email candidates and returns JSON; the host does the actual
 mailbox reads, task creation, audit logging, and progress tracking.

@@ -1041,14 +1041,15 @@
               Agent confinement <span class="badge good">strong</span>
             </div>
             <div>
-              The classifier never receives Microsoft Graph tools or
-              credentials. Codex runs as a short-lived subprocess with a
-              <code>read-only</code> sandbox, an ephemeral throwaway working
-              directory, <code>--ignore-rules</code> (no local instruction
-              files), and a JSON output schema. It has no shell, no file tools,
-              no MCP surface. A prompt-injection attempt has no channel to act
-              on anything — output must match the schema and the cwd is
-              destroyed on exit.
+              CUassistant does not give the classifier Microsoft Graph tools or
+              credentials. For classification, Codex runs as a short-lived
+              subprocess with a <code>read-only</code> sandbox, an ephemeral
+              throwaway working directory, <code>--ignore-rules</code> (no
+              local instruction files), ignored user config, and a JSON output
+              schema. CUassistant does not attach shell, MCP, or host-side
+              effect tools to that classifier process. A prompt-injection
+              attempt has no approved action channel: output must match the
+              schema, the host validates it, and the cwd is destroyed on exit.
             </div>
           </div>
           <div class="sec-row">
@@ -1109,12 +1110,13 @@
           <div class="sec-row">
             <div class="k">Secrets <span class="badge warn">watch</span></div>
             <div>
-              A Microsoft refresh token (and optionally an
-              <code>OPENAI_API_KEY</code>) live in a local <code>.env</code> —
-              gitignored, written <code>0600</code> by the login helper, and
-              guarded by a <code>gitleaks</code> pre-commit hook and CI
-              workflow. Protecting the endpoint itself remains an
-              endpoint-management responsibility.
+              Microsoft refresh tokens (and optionally an
+              <code>OPENAI_API_KEY</code>) live in a local <code>.env</code>.
+              The file is gitignored; login helpers create it with mode
+              <code>0600</code> when new, and transfer scripts chmod it
+              best-effort. A <code>gitleaks</code> pre-commit hook and CI
+              workflow guard against accidental commits. Protecting the
+              endpoint itself remains an endpoint-management responsibility.
             </div>
           </div>
           <div class="sec-row">
@@ -1122,12 +1124,12 @@
               Auditability <span class="badge good">strong</span>
             </div>
             <div>
-              Every decision is an append-only row in
-              <code>decisions.jsonl</code> (sender, truncated subject,
-              reasoning, model used, body hash, task id). Task creation writes a
-              durable <code>task-intent</code> row <em>before</em> the Graph
-              call and a terminal row after — crash-safe and idempotent via a
-              dedupe marker. Token usage and cost land in
+              Decisions are append-only rows in <code>decisions.jsonl</code>,
+              with fields such as sender, truncated subject, reasoning, model
+              used, body hash, and task id when a task is created. Task creation
+              writes a durable <code>task-intent</code> row <em>before</em> the
+              Graph call and a terminal row after — crash-safe and idempotent
+              via a dedupe marker. Token usage and cost land in
               <code>usage.jsonl</code>.
             </div>
           </div>
@@ -1166,9 +1168,9 @@
             <strong>Bottom line.</strong> The agent is tightly confined and the
             host boundary is small and auditable. The two items a reviewer
             should weigh deliberately are the breadth of the
-            <code>Mail.ReadWrite</code> consent scope relative to what the code
-            uses, and the egress of student email content to a third-party model
-            — both known, both with documented mitigations and a roadmap.
+            delegated mail/calendar consent scope relative to what the code
+            exposes, and the egress of student email content to a third-party
+            model — both known, both with documented mitigations and a roadmap.
           </p>
         </div>
       </section>
@@ -1176,16 +1178,17 @@
       <section>
         <h2><span class="num">07</span>Current status</h2>
         <p>
-          The scheduler (<code>launchd</code>) is installed but
-          <strong>not loaded</strong> — no scans are running. Admin consent on
-          the GCassistant app registration is currently revoked pending IT
-          review. The Graph CLI To&nbsp;Do path works where
+          The <code>launchd</code> template is present, but activation is
+          explicit — no scans run until the job is loaded. Admin consent on the
+          GCassistant app registration is currently revoked pending IT review.
+          The Graph CLI To&nbsp;Do path works where
           <code>Tasks.ReadWrite</code> is consented; mail and calendar write
           tools remain stubbed pending the requested Graph CLI scopes. The Gmail
-          path and the classification, cost-tracking, and audit machinery are
-          functional and tested. The optional host MCP server currently exposes
-          12 policy-approved tools; task delete, mail writes, calendar writes,
-          and scan triggering are hidden.
+          path is implemented through <code>gws</code> when configured, and the
+          classification, cost-tracking, and audit machinery are functional and
+          tested. The optional host MCP server currently exposes 12
+          policy-approved tools; task delete, mail writes, calendar writes, and
+          scan triggering are hidden.
         </p>
       </section>
     </div>

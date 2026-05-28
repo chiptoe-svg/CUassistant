@@ -1,4 +1,4 @@
-# Clemson Agentic Workflow Control Memo
+# Clemson IT Control Mapping
 
 This memo frames the requested Microsoft 365 workflow against the ACSC guidance
 "Careful adoption of agentic AI services" published on 01 May 2026:
@@ -10,7 +10,7 @@ Single-user, local workflow operating only in the requestor's own Microsoft 365
 account:
 
 - read Inbox messages
-- create To Do tasks
+- create/edit/delete To Do tasks
 - move mail only between approved folders
 - create drafts only in Drafts
 - create events only on the requestor's personal calendar with no attendees
@@ -33,9 +33,7 @@ and begin with "clearly defined low-risk tasks."
 
 Argument:
 
-- The requested workflow is not a general-purpose agent platform.
-- It is a narrow personal productivity workflow bound to one mailbox, one To Do
-  list, and one calendar.
+- The workflow is bound to one mailbox, one To Do list, and one calendar.
 - The current repo already isolates capability by handler and host-applied side
   effects.
 
@@ -63,6 +61,11 @@ Policy artifact:
 
 - [action-policy.yaml](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/policy/action-policy.yaml)
 
+The policy file is the authorized-use list for the workflow. OAuth scopes
+describe what the delegated Microsoft or Google token may technically permit;
+the authorized-use list describes what this application is allowed to expose or
+execute.
+
 ### 3. Least privilege
 
 The guidance says to "limit privileges of AI agents to the minimum required"
@@ -71,14 +74,17 @@ and "restrict scope of privileges to narrowest possible level."
 Argument:
 
 - The workflow should use delegated access only.
-- The preferred path is a Microsoft first-party client rather than a custom
-  app registration.
+- The current policy assumes a Microsoft first-party client or other approved
+  delegated client path rather than a custom app registration.
 - The code should expose only the small action set required for this workflow.
 
 Current code shape:
 
 - The host operation allow-list is explicit in
   [src/permissions.ts](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/src/permissions.ts).
+- The optional host MCP server exposes only operations that are active in
+  [src/mcp-tools/permissions.ts](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/src/mcp-tools/permissions.ts)
+  and mapped to an `approval: none` action in the authorized-use list.
 - Durable audit and usage logs are written in
   [src/state.ts](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/src/state.ts).
 
@@ -112,14 +118,3 @@ Relevant implementation:
 
 - [src/state.ts](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/src/state.ts)
 - [docs/IT_REVIEW_NOTES.md](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/docs/IT_REVIEW_NOTES.md)
-
-## Request Framing
-
-The strongest request is not "approve agentic email and calendar automation."
-
-It is:
-
-"Approve a single-user, local, delegated workflow that uses a Microsoft
-first-party client, operates only within the requestor's own Microsoft 365
-account, and is restricted to a small set of reversible actions with durable
-audit logging and host-enforced policy boundaries."

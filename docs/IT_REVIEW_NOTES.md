@@ -177,16 +177,17 @@ subprocess exits.
 
 The flag set passed at every invocation:
 
-| Flag | Effect |
-| ---- | ------ |
-| `--sandbox read-only` (classifier) | Codex's tightest sandbox profile. No writes anywhere. The classifier path returns JSON and never needs to touch disk. |
-| `--sandbox workspace-write` (connector reads) | Codex's medium profile. Writes restricted to the ephemeral working directory only; everything outside is read-only. The connector needs a small scratch area for its own protocol state. |
-| `--ephemeral` | Codex treats the cwd as throwaway and does not persist any state to user config. |
-| `--cd <tempdir>` | The working directory is a freshly created `mkdtempSync(tmpdir(), "cuassistant-*-")` path. The host `rmSync`s it after the subprocess exits, even on timeout/error. |
-| `--ignore-rules` | Codex ignores any `AGENTS.md`, `.codexrc`, or user-level instruction files. The agent only sees the prompt CUassistant sends on stdin. |
-| `--output-schema <path>` | Output is constrained to match the JSON schema for that role — `triage-batch.schema.json`, `outlook-list.schema.json`, or `outlook-body.schema.json`. The model cannot return free-form text. |
-| `--skip-git-repo-check` | Codex does not look for or read any surrounding git repository. |
-| `--json` | Streaming JSONL output for parseability; no terminal control sequences. |
+| Flag                                          | Effect                                                                                                                                                                                        |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--sandbox read-only` (classifier)            | Codex's tightest sandbox profile. No writes anywhere. The classifier path returns JSON and never needs to touch disk.                                                                         |
+| `--sandbox workspace-write` (connector reads) | Codex's medium profile. Writes restricted to the ephemeral working directory only; everything outside is read-only. The connector needs a small scratch area for its own protocol state.      |
+| `--ephemeral`                                 | Codex treats the cwd as throwaway and does not persist any state to user config.                                                                                                              |
+| `--cd <tempdir>`                              | The working directory is a freshly created `mkdtempSync(tmpdir(), "cuassistant-*-")` path. The host `rmSync`s it after the subprocess exits, even on timeout/error.                           |
+| `--ignore-user-config`                        | Codex ignores user-level configuration.                                                                                                                                                       |
+| `--ignore-rules`                              | Codex ignores any `AGENTS.md`, `.codexrc`, or user-level instruction files. The agent only sees the prompt CUassistant sends on stdin.                                                        |
+| `--output-schema <path>`                      | Output is constrained to match the JSON schema for that role — `triage-batch.schema.json`, `outlook-list.schema.json`, or `outlook-body.schema.json`. The model cannot return free-form text. |
+| `--skip-git-repo-check`                       | Codex does not look for or read any surrounding git repository.                                                                                                                               |
+| `--json`                                      | Streaming JSONL output for parseability; no terminal control sequences.                                                                                                                       |
 
 ### What the sandbox restricts
 
@@ -268,20 +269,31 @@ active handler is allowed to perform the operation before making the request,
 and the same operation must map to an `approval: none` action in
 `policy/action-policy.yaml`.
 
-## What It Does Not Do
+## What The Scheduled Scan Does Not Do
 
-The current code does not:
+The scheduled scan path does not:
 
 - Send email.
 - Create drafts.
 - Move, archive, or permanently delete email.
 - Write calendar events.
 - Read Teams chats.
-- Run an MCP server.
 - Run as a daemon.
 - Provide the agent with Microsoft Graph tools.
 - Send notifications to Slack, Teams, email, webhooks, or any other outbound
   channel.
+
+The repository also contains an optional host-side MCP server for agent clients.
+That server is not required for the scheduled scan path. When started, it
+registers only operations that are active in `src/mcp-tools/permissions.ts` and
+mapped to an `approval: none` action in `policy/action-policy.yaml`. Stubbed
+or policy-blocked operations are not exposed to the agent.
+
+`policy/action-policy.yaml` is the authorized-use list. OAuth scopes describe
+what a delegated token may technically permit; the authorized-use list describes
+what CUassistant is allowed to expose or execute. The MCP server reads that list
+at startup and withholds tools whose operation is missing, stubbed, or not
+approved.
 
 ## Local State And Audit
 

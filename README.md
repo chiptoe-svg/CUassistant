@@ -169,6 +169,21 @@ There is no host operation for sending mail, permanently deleting mail, moving
 mail, creating drafts, writing calendar events, or reading Teams chats in the
 shipping triage handler.
 
+### Optional host MCP path
+
+The repo also contains a host-side MCP server for agent clients that need a
+tool interface instead of the scheduled scan. It is not required for the cron
+triage path. When used, the server registers only operations that are both
+active in `src/mcp-tools/permissions.ts` and mapped to an `approval: none`
+action in `policy/action-policy.yaml`. Stubbed or policy-blocked operations are
+not exposed to the agent.
+
+That policy file is the authorized-use list. OAuth scopes describe what the
+delegated token may technically permit; the authorized-use list describes what
+CUassistant is allowed to expose or execute. The MCP server reads that list at
+startup and withholds tools whose operation is missing, stubbed, or not
+approved.
+
 Created To Do tasks keep user-visible fields clean: the task title is the
 action text only, and the note body stores a short `CUassistant ref` used for
 idempotency. If older tasks were created with route suffixes or long audit

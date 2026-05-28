@@ -318,9 +318,9 @@
               <td>Dependencies</td>
               <td>
                 <code>yaml</code> for config parsing;
-                <code>@modelcontextprotocol/sdk</code> for the (not-yet-shipping)
-                MCP server. No web framework, no ORM, no mail SDK — Graph is
-                called over plain <code>fetch</code>.
+                <code>@modelcontextprotocol/sdk</code> for the optional
+                host-side MCP server. No web framework, no ORM, no mail SDK —
+                Graph is called over plain <code>fetch</code>.
               </td>
             </tr>
             <tr>
@@ -631,11 +631,13 @@
               </td>
             </tr>
             <tr>
-              <td>Not yet shipping</td>
+              <td>Optional host MCP</td>
               <td><code>mcp-server.ts</code>, <code>mcp-tools/*</code></td>
               <td>
                 A host-side MCP server (mail/calendar/To&nbsp;Do tools) exists
-                in the tree but is <em>not</em> invoked by the cron scan path.
+                for agent clients but is <em>not</em> invoked by the cron scan
+                path. It exposes only active operations mapped to
+                <code>approval: none</code> in the authorized-use list.
               </td>
             </tr>
           </table>
@@ -674,9 +676,11 @@
               allow-list of the five Graph operations triage may perform; every
               Graph call asserts against it. Each operation must also map to an
               <code>approval: none</code> action in
-              <code>policy/action-policy.yaml</code>. There is simply no code
-              path for sending, deleting, moving, or drafting mail — the
-              absence is reviewable, not just disabled.
+              <code>policy/action-policy.yaml</code>, the authorized-use list.
+              There is simply no scan-path code for sending, deleting, moving,
+              or drafting mail — the absence is reviewable, not just disabled.
+              The optional host MCP server uses the same authorized-use list
+              before registering tools for an agent.
             </div>
           </div>
           <div class="sec-row">
@@ -688,13 +692,13 @@
               runtime refreshes only Mail + To&nbsp;Do scopes.
               <code>Mail.ReadWrite</code> in particular grants more than the
               code exercises. Mitigation is the operation allow-list above plus
-              reviewable absence of the call sites; the residual risk is
-              endpoint-level. An optional stronger mitigation would be a
-              host-side MCP server that surfaces only the operations permitted
-              by <code>policy/action-policy.yaml</code> — any agent or tool
-              calling into the host would be structurally limited to exactly
-              those five allowed actions rather than relying on code-level
-              allow-listing alone.
+              reviewable absence of scan-path call sites; the residual risk is
+              endpoint-level. For agent-client workflows, the optional host-side
+              MCP server surfaces only operations permitted by the
+              authorized-use list in <code>policy/action-policy.yaml</code>.
+              OAuth scopes describe what the delegated token may technically
+              permit; the authorized-use list describes what CUassistant is
+              allowed to expose or execute.
             </div>
           </div>
           <div class="sec-row">
@@ -769,7 +773,9 @@
           the GCassistant app registration is currently revoked pending the IT security review,
           so the Microsoft 365 path is paused. The Gmail path and the
           classification, cost-tracking, and audit machinery are all
-          functional and tested.
+          functional and tested. The optional host MCP server is available for
+          agent clients, but its tool list is filtered by the authorized-use
+          policy before the agent sees it.
         </p>
       </section>
     </div>
@@ -785,7 +791,7 @@
         <p class="muted" style="color: #9a9286">
           Generated codebase overview. Figures reflect the <code>main</code>
           branch. See <code>docs/IT_REVIEW_NOTES.md</code> and
-          <code>docs/CLEMSON_AGENTIC_CONTROLS.md</code> for the full review
+          <code>docs/CLEMSON_IT_CONTROL_MAPPING.md</code> for the full review
           material.
         </p>
       </div>

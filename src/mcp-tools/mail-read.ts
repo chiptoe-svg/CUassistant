@@ -5,12 +5,16 @@
 // familiar shapes here. The backend is different (Codex Outlook connector
 // instead of MSAL+Graph) but the input shape is preserved.
 
-import { listOutlookWithCodex, fetchOutlookBodyWithCodex } from "../codex-outlook.js";
+import {
+  listOutlookWithCodex,
+  fetchOutlookBodyWithCodex,
+} from "../codex-outlook.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
 const listMailMessages: McpToolDefinition = {
+  operation: "mail.list_messages",
   tool: {
     name: "list-mail-messages",
     description:
@@ -45,13 +49,16 @@ const listMailMessages: McpToolDefinition = {
     const untilIso = (args.untilIso as string | null | undefined) ?? null;
     const messages = await listOutlookWithCodex(sinceIso, untilIso);
     if (messages === null) {
-      return err("Codex Outlook connector returned no result (provider may be unavailable).");
+      return err(
+        "Codex Outlook connector returned no result (provider may be unavailable).",
+      );
     }
     return okJson({ messages });
   },
 };
 
 const getMailMessage: McpToolDefinition = {
+  operation: "mail.get_message",
   tool: {
     name: "get-mail-message",
     description:

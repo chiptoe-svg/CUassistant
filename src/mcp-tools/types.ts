@@ -6,6 +6,7 @@ import {
 } from "./permissions.js";
 
 export interface McpToolDefinition {
+  operation?: string;
   tool: Tool;
   handler: (args: Record<string, unknown>) => Promise<CallToolResult>;
 }
@@ -27,7 +28,10 @@ export function err(text: string): CallToolResult {
   };
 }
 
-export function stubError(operation: string, pendingScope: string): CallToolResult {
+export function stubError(
+  operation: string,
+  pendingScope: string,
+): CallToolResult {
   return {
     content: [
       {

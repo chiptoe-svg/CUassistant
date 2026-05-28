@@ -2,9 +2,10 @@
 //
 // Tool names mirror CUagent's @softeria/ms-365-mcp-server surface
 // (list-todo-task-lists, list-todo-tasks, get-todo-task, create-todo-task,
-// update-todo-task, delete-todo-task). All five are active today: the Graph
-// CLI client is consented for Tasks.ReadWrite at Clemson and the refresh
-// token already lives in CUassistant's .env.
+// update-todo-task, delete-todo-task). The server registers only the task
+// tools that are active and policy-approved; delete is intentionally
+// policy-blocked by default even though Tasks.ReadWrite would technically
+// permit it.
 //
 // Every write tool wraps its backend call in startMcpAudit/finishMcpAudit
 // so state/decisions.jsonl gets a durable intent + terminal pair.
@@ -23,12 +24,13 @@ import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
 const listTodoTaskLists: McpToolDefinition = {
+  operation: "todo.list_lists",
   tool: {
     name: "list-todo-task-lists",
     description:
       "List the user's MS To Do task lists. Returns id, displayName, and " +
       "wellknownListName. The default list is the one with " +
-      "wellknownListName = \"defaultList\".",
+      'wellknownListName = "defaultList".',
     inputSchema: { type: "object" as const, properties: {} },
   },
   async handler(_args) {
@@ -44,6 +46,7 @@ const listTodoTaskLists: McpToolDefinition = {
 };
 
 const listTodoTasksTool: McpToolDefinition = {
+  operation: "todo.list_tasks",
   tool: {
     name: "list-todo-tasks",
     description:
@@ -78,6 +81,7 @@ const listTodoTasksTool: McpToolDefinition = {
 };
 
 const getTodoTaskTool: McpToolDefinition = {
+  operation: "todo.get_task",
   tool: {
     name: "get-todo-task",
     description: "Fetch a single To Do task by listId + taskId.",
@@ -106,6 +110,7 @@ const getTodoTaskTool: McpToolDefinition = {
 };
 
 const createTodoTaskTool: McpToolDefinition = {
+  operation: "todo.create_task",
   tool: {
     name: "create-todo-task",
     description:
@@ -123,7 +128,7 @@ const createTodoTaskTool: McpToolDefinition = {
           description:
             "Optional due date as ISO 8601 in the user's local timezone " +
             "(no offset; the host applies TIMEZONE). Example: " +
-            "\"2026-05-15T17:00:00\".",
+            '"2026-05-15T17:00:00".',
         },
         importance: {
           type: "string",
@@ -190,6 +195,7 @@ const createTodoTaskTool: McpToolDefinition = {
 };
 
 const updateTodoTaskTool: McpToolDefinition = {
+  operation: "todo.update_task",
   tool: {
     name: "update-todo-task",
     description:
@@ -277,6 +283,7 @@ const updateTodoTaskTool: McpToolDefinition = {
 };
 
 const deleteTodoTaskTool: McpToolDefinition = {
+  operation: "todo.delete_task",
   tool: {
     name: "delete-todo-task",
     description:

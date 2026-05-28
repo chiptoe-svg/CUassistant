@@ -1,5 +1,7 @@
-# Structured policy spec for future host-side enforcement.
-# The intent is to keep action boundaries explicit and reviewable.
+# Authorized-use list for host-side enforcement.
+# The intent is to keep action boundaries explicit and reviewable. OAuth scopes
+# describe what the delegated token may technically permit; this file describes
+# what CUassistant is authorized to expose or execute.
 
 policy_version: 1
 policy_name: personal_m365_agentic_workflow
@@ -32,6 +34,65 @@ actions:
     constraints:
       - own_mailbox_only
 
+  - id: mail.update_message
+    surface: mail
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_mailbox_only
+      - metadata_only
+      - no_body_rewrite
+      - no_send
+      - no_delete
+
+  - id: mail.move_message
+    surface: mail
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_mailbox_only
+      - destination_folder_allow_list
+      - no_delete_folder
+      - no_junk_folder
+      - no_recoverable_items
+      - no_permanent_delete
+
+  - id: mail.create_draft
+    surface: mail
+    risk: low_medium
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_mailbox_only
+      - draft_only
+      - no_send
+
+  - id: calendar.list_events
+    surface: calendar
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_primary_calendar_only
+
+  - id: calendar.get_event
+    surface: calendar
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_primary_calendar_only
+
+  - id: calendar.get_view
+    surface: calendar
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_primary_calendar_only
+
   - id: todo.create_task
     surface: tasks
     risk: low
@@ -48,6 +109,22 @@ actions:
     constraints:
       - own_task_list_only
 
+  - id: todo.list_tasks
+    surface: tasks
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_task_list_only
+
+  - id: todo.get_task
+    surface: tasks
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_task_list_only
+
   - id: todo.find_task_by_marker
     surface: tasks
     risk: low
@@ -56,26 +133,29 @@ actions:
     constraints:
       - own_task_list_only
 
-  - id: mail.move_message
-    surface: mail
+  - id: todo.update_task
+    surface: tasks
     risk: low
     reversibility: reversible
     approval: none
     constraints:
-      - own_mailbox_only
-      - destination_folder_allow_list
-      - no_delete_folder
-      - no_permanent_delete
+      - own_task_list_only
 
-  - id: mail.create_draft
-    surface: mail
-    risk: low_medium
-    reversibility: reversible
+  - id: host.get_scan_status
+    surface: host_state
+    risk: low
+    reversibility: read_only
     approval: none
     constraints:
-      - own_mailbox_only
-      - draft_only
-      - no_send
+      - local_state_only
+
+  - id: host.get_pending_actions
+    surface: host_state
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - local_state_only
 
   - id: calendar.create_personal_event
     surface: calendar
@@ -87,6 +167,34 @@ actions:
       - no_attendees
       - no_invites
       - no_shared_or_delegated_calendar
+
+  - id: calendar.update_personal_event
+    surface: calendar
+    risk: low_medium
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_primary_calendar_only
+      - no_attendees
+      - no_invites
+      - no_shared_or_delegated_calendar
+
+  - id: host.trigger_scan
+    surface: host_scan
+    risk: medium
+    reversibility: creates_downstream_tasks
+    approval: human_required
+    constraints:
+      - disabled_by_default
+      - dry_run_only_unless_explicitly_enabled
+
+  - id: todo.delete_task
+    surface: tasks
+    risk: medium
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
 
   - id: mail.send_message
     surface: mail
@@ -121,6 +229,22 @@ actions:
       - disabled_by_default
 
   - id: calendar.modify_shared_event
+    surface: calendar
+    risk: high
+    reversibility: affects_other_users
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: calendar.delete_event
+    surface: calendar
+    risk: high
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: calendar.respond_to_invite
     surface: calendar
     risk: high
     reversibility: affects_other_users

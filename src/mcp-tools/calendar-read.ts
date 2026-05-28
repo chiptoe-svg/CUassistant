@@ -13,6 +13,7 @@ import {
 } from "./codex-calendar.js";
 
 const listCalendarEvents: McpToolDefinition = {
+  operation: "calendar.list_events",
   tool: {
     name: "list-calendar-events",
     description:
@@ -24,11 +25,13 @@ const listCalendarEvents: McpToolDefinition = {
       properties: {
         fromIso: {
           type: ["string", "null"],
-          description: "Lower bound on start time, ISO 8601. Pass null to omit.",
+          description:
+            "Lower bound on start time, ISO 8601. Pass null to omit.",
         },
         toIso: {
           type: ["string", "null"],
-          description: "Upper bound on start time, ISO 8601. Pass null to omit.",
+          description:
+            "Upper bound on start time, ISO 8601. Pass null to omit.",
         },
       },
     },
@@ -43,13 +46,16 @@ const listCalendarEvents: McpToolDefinition = {
     const toIso = (args.toIso as string | null | undefined) ?? null;
     const events = await listCalendarEventsWithCodex({ fromIso, toIso });
     if (events === null) {
-      return err("Codex Outlook connector returned no result for calendar list.");
+      return err(
+        "Codex Outlook connector returned no result for calendar list.",
+      );
     }
     return okJson({ events });
   },
 };
 
 const getCalendarEvent: McpToolDefinition = {
+  operation: "calendar.get_event",
   tool: {
     name: "get-calendar-event",
     description:
@@ -80,6 +86,7 @@ const getCalendarEvent: McpToolDefinition = {
 };
 
 const getCalendarView: McpToolDefinition = {
+  operation: "calendar.get_view",
   tool: {
     name: "get-calendar-view",
     description:
@@ -113,7 +120,9 @@ const getCalendarView: McpToolDefinition = {
     if (!startIso || !endIso) return err("startIso and endIso are required");
     const events = await getCalendarViewWithCodex({ startIso, endIso });
     if (events === null) {
-      return err("Codex Outlook connector returned no result for calendar view.");
+      return err(
+        "Codex Outlook connector returned no result for calendar view.",
+      );
     }
     return okJson({ events });
   },

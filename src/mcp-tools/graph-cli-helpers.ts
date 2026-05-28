@@ -73,9 +73,7 @@ function asTaskSummary(t: Record<string, unknown>): TodoTaskSummary {
   const dt = t.dueDateTime as
     | { dateTime?: string; timeZone?: string }
     | undefined;
-  const body = t.body as
-    | { content?: string; contentType?: string }
-    | undefined;
+  const body = t.body as { content?: string; contentType?: string } | undefined;
   return {
     id: String(t.id ?? ""),
     title: String(t.title ?? ""),
@@ -168,7 +166,12 @@ export async function updateTodoTask(
   taskId: string,
   patch: {
     title?: string;
-    status?: "notStarted" | "inProgress" | "completed" | "deferred" | "waitingOnOthers";
+    status?:
+      | "notStarted"
+      | "inProgress"
+      | "completed"
+      | "deferred"
+      | "waitingOnOthers";
     importance?: "low" | "normal" | "high";
     dueIsoLocal?: string | null;
     bodyContent?: string;

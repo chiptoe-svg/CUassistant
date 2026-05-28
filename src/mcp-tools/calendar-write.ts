@@ -12,6 +12,7 @@ import { registerTools } from "./server.js";
 import { err, permissionErr, type McpToolDefinition } from "./types.js";
 
 const createCalendarEvent: McpToolDefinition = {
+  operation: "calendar.create_event",
   tool: {
     name: "create-calendar-event",
     description:
@@ -81,6 +82,7 @@ const createCalendarEvent: McpToolDefinition = {
 };
 
 const updateCalendarEvent: McpToolDefinition = {
+  operation: "calendar.update_event",
   tool: {
     name: "update-calendar-event",
     description:
@@ -134,6 +136,7 @@ const updateCalendarEvent: McpToolDefinition = {
 };
 
 const deleteCalendarEvent: McpToolDefinition = {
+  operation: "calendar.delete_event",
   tool: {
     name: "delete-calendar-event",
     description:
@@ -179,6 +182,7 @@ function rsvpTool(
   graphAction: "accept" | "decline" | "tentativelyAccept",
 ): McpToolDefinition {
   return {
+    operation,
     tool: {
       name: toolName,
       description:
@@ -188,7 +192,10 @@ function rsvpTool(
         type: "object" as const,
         properties: {
           id: { type: "string", description: "Event id." },
-          comment: { type: "string", description: "Optional response comment." },
+          comment: {
+            type: "string",
+            description: "Optional response comment.",
+          },
           sendResponse: {
             type: "boolean",
             description: "Whether to email the organizer the response.",

@@ -68,6 +68,7 @@ function runConnector(prompt: string, schema: object): Promise<string> {
         "--ephemeral",
         "--sandbox",
         "workspace-write",
+        "--ignore-user-config",
         "--ignore-rules",
         "--output-schema",
         schemaPath,

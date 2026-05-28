@@ -23,6 +23,7 @@ import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
 const triggerScan: McpToolDefinition = {
+  operation: "host.trigger_scan",
   tool: {
     name: "trigger_scan",
     description:
@@ -88,6 +89,7 @@ const triggerScan: McpToolDefinition = {
 };
 
 const getScanStatus: McpToolDefinition = {
+  operation: "host.get_scan_status",
   tool: {
     name: "get_scan_status",
     description:
@@ -99,12 +101,12 @@ const getScanStatus: McpToolDefinition = {
       properties: {
         n: {
           type: "integer",
-          description: "Max rows to return when since_timestamp is not set (default 20).",
+          description:
+            "Max rows to return when since_timestamp is not set (default 20).",
         },
         since_timestamp: {
           type: "string",
-          description:
-            "Optional ISO 8601 lower bound on the row's `ts` field.",
+          description: "Optional ISO 8601 lower bound on the row's `ts` field.",
         },
       },
     },
@@ -123,6 +125,7 @@ const getScanStatus: McpToolDefinition = {
 };
 
 const getPendingActions: McpToolDefinition = {
+  operation: "host.get_pending_actions",
   tool: {
     name: "get_pending_actions",
     description:
@@ -134,8 +137,7 @@ const getPendingActions: McpToolDefinition = {
       properties: {
         since_timestamp: {
           type: "string",
-          description:
-            "Optional ISO 8601 lower bound on the row's `ts` field.",
+          description: "Optional ISO 8601 lower bound on the row's `ts` field.",
         },
       },
     },
@@ -147,7 +149,10 @@ const getPendingActions: McpToolDefinition = {
       return permissionErr(e);
     }
     const sinceTimestamp = args.since_timestamp as string | undefined;
-    const rows = readDecisions({ n: Number.MAX_SAFE_INTEGER, sinceIso: sinceTimestamp });
+    const rows = readDecisions({
+      n: Number.MAX_SAFE_INTEGER,
+      sinceIso: sinceTimestamp,
+    });
     const pending = rows.filter((r) => {
       const decision = String(r.decision ?? "");
       const taskId = r.task_id_created;

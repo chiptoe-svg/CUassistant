@@ -1,9 +1,9 @@
 # CUassistant MCP server — IT review manifest
 
 This is the human-readable companion to `src/mcp-server.ts`. It enumerates
-every tool the server exposes, what backend each one uses, what permission it
-requires, and whether it is active or pending IT approval. It is the document
-that accompanies the Graph CLI permission request to IT.
+the MCP operation surface, what backend each operation uses, what permission it
+requires, and whether the tool is exposed to the agent. It is the document that
+accompanies the Graph CLI permission request to IT.
 
 ## Architecture summary
 
@@ -14,45 +14,52 @@ that accompanies the Graph CLI permission request to IT.
   `${CUASSISTANT_REPO}/.env` is read by the host process and never crosses
   any boundary. NanoClaw containers connect to the MCP server via stdio and
   request operations through tools — they never receive credentials directly.
-- **Allow-list.** `src/mcp-tools/permissions.ts` is the single allow-list of
-  operations this server can perform. Every tool calls `assertMcpOperation()`
-  before any backend call. An operation that has no entry cannot be invoked.
+- **Allow-list.** `src/mcp-tools/permissions.ts` is the operation registry for
+  this server, and `policy/action-policy.yaml` is the policy registry. A tool
+  is exposed only when its operation is active and maps to an `approval: none`
+  policy action. Every tool still calls `assertMcpOperation()` before any
+  backend call.
+- **Authorized use.** `policy/action-policy.yaml` is the authorized-use list.
+  OAuth scopes describe what the delegated token may technically permit; the
+  authorized-use list describes what CUassistant is allowed to expose or
+  execute.
 - **Audit.** Every write tool wraps its backend call in an intent + terminal
   pair written to `state/decisions.jsonl` via the same `appendDecision()` the
   scan flow uses. Reviewers see one source of truth for "what changed and
   why."
-- **Stubs.** Tools whose Graph permission is pending IT approval return a
-  structured `stub_pending_approval` error identifying the missing scope and
-  do not silently fail. The stub form preserves the tool's input shape so
-  activation is a localized edit rather than a rewrite.
+- **Stubs.** Tools whose Graph permission is pending IT approval are present
+  in code but not registered with the MCP server. If a stub is accidentally
+  invoked directly, it returns a structured `stub_pending_approval` error. The
+  stub form preserves the tool's input shape so activation is a localized edit
+  rather than a rewrite.
 
-## Tool table
+## Operation table
 
-| Tool                               | Operation key                       | Backend                | Permission required            | Status                           |
-| ---------------------------------- | ----------------------------------- | ---------------------- | ------------------------------ | -------------------------------- |
-| `list-mail-messages`               | `mail.list_messages`                | Codex CLI Outlook conn | (Outlook connector consent)    | active                           |
-| `get-mail-message`                 | `mail.get_message`                  | Codex CLI Outlook conn | (Outlook connector consent)    | active                           |
-| `list-calendar-events`             | `calendar.list_events`              | Codex CLI Outlook conn | (Outlook connector consent)    | active                           |
-| `get-calendar-event`               | `calendar.get_event`                | Codex CLI Outlook conn | (Outlook connector consent)    | active                           |
-| `get-calendar-view`                | `calendar.get_view`                 | Codex CLI Outlook conn | (Outlook connector consent)    | active                           |
-| `list-todo-task-lists`             | `todo.list_lists`                   | Graph CLI              | Tasks.ReadWrite                | active                           |
-| `list-todo-tasks`                  | `todo.list_tasks`                   | Graph CLI              | Tasks.ReadWrite                | active                           |
-| `get-todo-task`                    | `todo.get_task`                     | Graph CLI              | Tasks.ReadWrite                | active                           |
-| `create-todo-task`                 | `todo.create_task`                  | Graph CLI              | Tasks.ReadWrite                | active                           |
-| `update-todo-task`                 | `todo.update_task`                  | Graph CLI              | Tasks.ReadWrite                | active                           |
-| `delete-todo-task`                 | `todo.delete_task`                  | Graph CLI              | Tasks.ReadWrite                | active                           |
-| `move-mail-message`                | `mail.move_message`                 | Graph CLI (stub)       | Mail.ReadWrite                 | **pending IT approval**          |
-| `update-mail-message`              | `mail.update_message`               | Graph CLI (stub)       | Mail.ReadWrite                 | **pending IT approval**          |
-| `create-draft-email`               | `mail.create_draft`                 | Graph CLI (stub)       | Mail.ReadWrite                 | **pending IT approval**          |
-| `create-calendar-event`            | `calendar.create_event`             | Graph CLI (stub)       | Calendars.ReadWrite            | **pending IT approval**          |
-| `update-calendar-event`            | `calendar.update_event`             | Graph CLI (stub)       | Calendars.ReadWrite            | **pending IT approval**          |
-| `delete-calendar-event`            | `calendar.delete_event`             | Graph CLI (stub)       | Calendars.ReadWrite            | **pending IT approval**          |
-| `accept-calendar-event`            | `calendar.accept_event`             | Graph CLI (stub)       | Calendars.ReadWrite            | **pending IT approval**          |
-| `decline-calendar-event`           | `calendar.decline_event`            | Graph CLI (stub)       | Calendars.ReadWrite            | **pending IT approval**          |
-| `tentatively-accept-calendar-event`| `calendar.tentatively_accept_event` | Graph CLI (stub)       | Calendars.ReadWrite            | **pending IT approval**          |
-| `trigger_scan`                     | `host.trigger_scan`                 | host (runs scan.ts)    | (uses scan flow's existing scopes) | active                       |
-| `get_scan_status`                  | `host.get_scan_status`              | host (state file read) | none                           | active                           |
-| `get_pending_actions`              | `host.get_pending_actions`          | host (state file read) | none                           | active                           |
+| Tool                                | Operation key                       | Policy action                    | Backend                | Permission required         | Exposed            |
+| ----------------------------------- | ----------------------------------- | -------------------------------- | ---------------------- | --------------------------- | ------------------ |
+| `list-mail-messages`                | `mail.list_messages`                | `mail.list_inbox`                | Codex CLI Outlook conn | Outlook connector consent   | yes                |
+| `get-mail-message`                  | `mail.get_message`                  | `mail.fetch_body`                | Codex CLI Outlook conn | Outlook connector consent   | yes                |
+| `list-calendar-events`              | `calendar.list_events`              | `calendar.list_events`           | Codex CLI Outlook conn | Outlook connector consent   | yes                |
+| `get-calendar-event`                | `calendar.get_event`                | `calendar.get_event`             | Codex CLI Outlook conn | Outlook connector consent   | yes                |
+| `get-calendar-view`                 | `calendar.get_view`                 | `calendar.get_view`              | Codex CLI Outlook conn | Outlook connector consent   | yes                |
+| `list-todo-task-lists`              | `todo.list_lists`                   | `todo.list_lists`                | Graph CLI              | Tasks.ReadWrite             | yes                |
+| `list-todo-tasks`                   | `todo.list_tasks`                   | `todo.list_tasks`                | Graph CLI              | Tasks.ReadWrite             | yes                |
+| `get-todo-task`                     | `todo.get_task`                     | `todo.get_task`                  | Graph CLI              | Tasks.ReadWrite             | yes                |
+| `create-todo-task`                  | `todo.create_task`                  | `todo.create_task`               | Graph CLI              | Tasks.ReadWrite             | yes                |
+| `update-todo-task`                  | `todo.update_task`                  | `todo.update_task`               | Graph CLI              | Tasks.ReadWrite             | yes                |
+| `delete-todo-task`                  | `todo.delete_task`                  | `todo.delete_task`               | Graph CLI              | Tasks.ReadWrite             | no: policy-blocked |
+| `move-mail-message`                 | `mail.move_message`                 | `mail.move_message`              | Graph CLI (stub)       | Mail.ReadWrite              | no: stub           |
+| `update-mail-message`               | `mail.update_message`               | `mail.update_message`            | Graph CLI (stub)       | Mail.ReadWrite              | no: stub           |
+| `create-draft-email`                | `mail.create_draft`                 | `mail.create_draft`              | Graph CLI (stub)       | Mail.ReadWrite              | no: stub           |
+| `create-calendar-event`             | `calendar.create_event`             | `calendar.create_personal_event` | Graph CLI (stub)       | Calendars.ReadWrite         | no: stub           |
+| `update-calendar-event`             | `calendar.update_event`             | `calendar.update_personal_event` | Graph CLI (stub)       | Calendars.ReadWrite         | no: stub           |
+| `delete-calendar-event`             | `calendar.delete_event`             | `calendar.delete_event`          | Graph CLI (stub)       | Calendars.ReadWrite         | no: policy-blocked |
+| `accept-calendar-event`             | `calendar.accept_event`             | `calendar.respond_to_invite`     | Graph CLI (stub)       | Calendars.ReadWrite         | no: policy-blocked |
+| `decline-calendar-event`            | `calendar.decline_event`            | `calendar.respond_to_invite`     | Graph CLI (stub)       | Calendars.ReadWrite         | no: policy-blocked |
+| `tentatively-accept-calendar-event` | `calendar.tentatively_accept_event` | `calendar.respond_to_invite`     | Graph CLI (stub)       | Calendars.ReadWrite         | no: policy-blocked |
+| `trigger_scan`                      | `host.trigger_scan`                 | `host.trigger_scan`              | host (runs scan.ts)    | scan flow's existing scopes | no: policy-blocked |
+| `get_scan_status`                   | `host.get_scan_status`              | `host.get_scan_status`           | host (state file read) | none                        | yes                |
+| `get_pending_actions`               | `host.get_pending_actions`          | `host.get_pending_actions`       | host (state file read) | none                        | yes                |
 
 ## Tool details
 
@@ -92,7 +99,8 @@ and is already exercised by the scan flow's task creation path.
   via CUassistant's existing `formatTaskBody()` so MCP-created tasks share
   the same dedupe convention as scan-created tasks.
 - `update-todo-task` — patch title, status, importance, due date, body.
-- `delete-todo-task` — delete a task.
+- `delete-todo-task` — present in code but not exposed by default because
+  `todo.delete_task` is policy-blocked.
 
 ### Mail writes — STUB pending Mail.ReadWrite consent on Graph CLI
 

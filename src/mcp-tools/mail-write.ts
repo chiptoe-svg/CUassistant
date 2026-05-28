@@ -29,6 +29,7 @@ import { registerTools } from "./server.js";
 import { err, permissionErr, type McpToolDefinition } from "./types.js";
 
 const moveMailMessage: McpToolDefinition = {
+  operation: "mail.move_message",
   tool: {
     name: "move-mail-message",
     description:
@@ -49,8 +50,7 @@ const moveMailMessage: McpToolDefinition = {
   async handler(args) {
     const id = args.id as string | undefined;
     const destinationId = args.destinationId as string | undefined;
-    if (!id || !destinationId)
-      return err("id and destinationId are required");
+    if (!id || !destinationId) return err("id and destinationId are required");
     const audit = startMcpAudit({
       operation: "mail.move_message",
       toolName: "move-mail-message",
@@ -84,6 +84,7 @@ const moveMailMessage: McpToolDefinition = {
 };
 
 const updateMailMessage: McpToolDefinition = {
+  operation: "mail.update_message",
   tool: {
     name: "update-mail-message",
     description:
@@ -150,6 +151,7 @@ const updateMailMessage: McpToolDefinition = {
 };
 
 const createDraftEmail: McpToolDefinition = {
+  operation: "mail.create_draft",
   tool: {
     name: "create-draft-email",
     description:

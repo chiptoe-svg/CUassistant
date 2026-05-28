@@ -12,6 +12,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import type { McpToolDefinition } from "./types.js";
+import { isMcpOperationExposed } from "./permissions.js";
 
 function log(msg: string): void {
   process.stderr.write(`[cuassistant-mcp] ${msg}\n`);
@@ -22,6 +23,13 @@ const toolMap = new Map<string, McpToolDefinition>();
 
 export function registerTools(tools: McpToolDefinition[]): void {
   for (const t of tools) {
+    if (t.operation && !isMcpOperationExposed(t.operation)) {
+      log(
+        `skipping tool "${t.tool.name}" because operation ` +
+          `"${t.operation}" is not active and policy-approved`,
+      );
+      continue;
+    }
     if (toolMap.has(t.tool.name)) {
       log(`warning: duplicate tool "${t.tool.name}" — skipping`);
       continue;

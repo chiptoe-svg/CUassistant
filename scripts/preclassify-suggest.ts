@@ -14,12 +14,18 @@ interface Args {
   since?: string;
   days: number;
   minEvidence: number;
+  skipMinEvidence: number;
+  taskMinEvidence: number;
+  skipConfidence: number;
+  taskConfidence: number;
   limit: number;
 }
 
 interface CompareRow {
   ts?: string;
   pass?: string;
+  email_id?: string;
+  account?: string;
   decision?: string;
   sender?: string;
   subject?: string;
@@ -38,14 +44,32 @@ interface Group<T> {
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { days: 30, minEvidence: 3, limit: 20 };
+  const out: Args = {
+    days: 30,
+    minEvidence: 3,
+    skipMinEvidence: 10,
+    taskMinEvidence: 5,
+    skipConfidence: 0.95,
+    taskConfidence: 0.9,
+    limit: 20,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--since") out.since = argv[++i];
     else if (arg === "--days") out.days = Number(argv[++i]);
     else if (arg === "--min-evidence") out.minEvidence = Number(argv[++i]);
-    else if (arg === "--limit") out.limit = Number(argv[++i]);
+    else if (arg === "--skip-min-evidence") {
+      out.skipMinEvidence = Number(argv[++i]);
+    } else if (arg === "--task-min-evidence") {
+      out.taskMinEvidence = Number(argv[++i]);
+    } else if (arg === "--skip-confidence") {
+      out.skipConfidence = Number(argv[++i]);
+    } else if (arg === "--task-confidence") {
+      out.taskConfidence = Number(argv[++i]);
+    } else if (arg === "--limit") out.limit = Number(argv[++i]);
   }
+  out.skipMinEvidence = Math.max(out.skipMinEvidence, out.minEvidence);
+  out.taskMinEvidence = Math.max(out.taskMinEvidence, out.minEvidence);
   return out;
 }
 
@@ -81,7 +105,24 @@ function readCompareRows(args: Args): CompareRow[] {
       /* skip malformed */
     }
   }
-  return rows;
+  return dedupeCompareRows(rows);
+}
+
+function dedupeCompareRows(rows: CompareRow[]): CompareRow[] {
+  const byEmail = new Map<string, CompareRow>();
+  const withoutKey: CompareRow[] = [];
+  for (const row of rows) {
+    if (!row.email_id) {
+      withoutKey.push(row);
+      continue;
+    }
+    const key = `${row.account ?? ""}:${row.email_id}`;
+    const previous = byEmail.get(key);
+    if (!previous || (row.ts ?? "") > (previous.ts ?? "")) {
+      byEmail.set(key, row);
+    }
+  }
+  return [...byEmail.values(), ...withoutKey];
 }
 
 function senderAddress(sender: string | undefined): string {
@@ -143,6 +184,30 @@ function printHeader(title: string): void {
   console.log("-".repeat(title.length));
 }
 
+function agentDecisionStats(rows: CompareRow[]): {
+  total: number;
+  task: number;
+  skip: number;
+  taskRate: number;
+  skipRate: number;
+} {
+  const decided = rows.filter((r) => typeof r.agent_needs_task === "boolean");
+  const task = decided.filter((r) => r.agent_needs_task === true).length;
+  const skip = decided.filter((r) => r.agent_needs_task === false).length;
+  const total = decided.length;
+  return {
+    total,
+    task,
+    skip,
+    taskRate: total ? task / total : 0,
+    skipRate: total ? skip / total : 0,
+  };
+}
+
+function pct(n: number): string {
+  return `${Math.round(n * 100)}%`;
+}
+
 function sample(rows: CompareRow, field: keyof CompareRow): string;
 function sample(rows: CompareRow[], field: keyof CompareRow): string;
 function sample(
@@ -181,34 +246,38 @@ function main(): void {
     `Policy: ${policy ? "PRECLASSIFY.md loaded" : "PRECLASSIFY.md missing"}`,
   );
   console.log(`Config: ${path.join(CONFIG_DIR, "classification.yaml")}`);
-  console.log(`Minimum evidence: ${args.minEvidence}`);
-
-  const agentNeeded = rows.filter(
-    (r) =>
-      r.decision === "compare-agent-needed" &&
-      typeof r.agent_needs_task === "boolean",
+  console.log(
+    [
+      `Skip gate: ${args.skipMinEvidence}+ examples, ${pct(args.skipConfidence)}+ no-task confidence, 0 task vetoes`,
+      `Task gate: ${args.taskMinEvidence}+ examples, ${pct(args.taskConfidence)}+ task confidence`,
+    ].join("\n"),
   );
 
-  const skipCandidates = groupBy(
-    agentNeeded.filter((r) => r.agent_needs_task === false),
-    (r) => senderAddress(r.sender),
-  )
-    .filter((g) => g.rows.length >= args.minEvidence)
+  const rowsWithAgent = rows.filter(
+    (r) => typeof r.agent_needs_task === "boolean",
+  );
+  const agentNeeded = rowsWithAgent.filter(
+    (r) => r.decision === "compare-agent-needed",
+  );
+
+  const skipCandidates = groupBy(rowsWithAgent, (r) => senderAddress(r.sender))
+    .map((g) => ({ ...g, stats: agentDecisionStats(g.rows) }))
+    .filter((g) => g.stats.total >= args.skipMinEvidence)
+    .filter((g) => g.stats.skipRate >= args.skipConfidence)
+    .filter((g) => g.stats.task === 0)
     .filter((g) => !existingSkipAddresses.has(g.key))
     .filter((g) => !existingSkipDomains.has(senderDomain(g.key)))
     .slice(0, args.limit);
 
   printHeader("Suggested skip_senders additions");
   if (skipCandidates.length === 0) {
-    console.log(
-      "No address-level skip suggestions met the evidence threshold.",
-    );
+    console.log("No address-level skip suggestions met the evidence gate.");
   } else {
     for (const group of skipCandidates) {
       const domain = senderDomain(group.key);
       console.log();
       console.log(
-        `# ${group.rows.length} agent no-task decisions; domain=${domain}`,
+        `# confidence=${pct(group.stats.skipRate)} evidence=${group.stats.skip}/${group.stats.total}; domain=${domain}`,
       );
       console.log(`- from_address: ${group.key}`);
       console.log(`  folder: /noise/review`);
@@ -222,15 +291,18 @@ function main(): void {
   }
 
   const taskCandidates = groupBy(
-    agentNeeded.filter((r) => r.agent_needs_task === true),
+    agentNeeded,
     (r) => `${senderAddress(r.sender)}\t${subjectNeedle(r.subject)}`,
   )
-    .filter((g) => g.rows.length >= args.minEvidence)
+    .map((g) => ({ ...g, stats: agentDecisionStats(g.rows) }))
+    .filter((g) => g.stats.total >= args.taskMinEvidence)
+    .filter((g) => g.stats.taskRate >= args.taskConfidence)
+    .filter((g) => g.stats.task > 0)
     .slice(0, args.limit);
 
   printHeader("Suggested action_templates additions");
   if (taskCandidates.length === 0) {
-    console.log("No sender+subject task templates met the evidence threshold.");
+    console.log("No sender+subject task templates met the evidence gate.");
   } else {
     for (const group of taskCandidates) {
       const [address, needle] = group.key.split("\t");
@@ -243,7 +315,9 @@ function main(): void {
         ? `${baseName}-${group.rows.length}x`
         : baseName;
       console.log();
-      console.log(`# ${group.rows.length} agent task decisions`);
+      console.log(
+        `# confidence=${pct(group.stats.taskRate)} evidence=${group.stats.task}/${group.stats.total}`,
+      );
       console.log(`- name: ${name}`);
       console.log(`  match:`);
       console.log(`    from_address: ${address}`);

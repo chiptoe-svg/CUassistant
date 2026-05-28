@@ -24,6 +24,7 @@ interface AgentBatchResult {
   needs_task: boolean;
   sort_folder: string;
   task_title: string;
+  due_date?: string | null;
   reasoning: string;
 }
 
@@ -67,6 +68,8 @@ function buildBatchPrompt(
   const appendix = [
     `Taxonomy (pick exactly one for sort_folder):`,
     folderBullets,
+    "",
+    `Current date for resolving relative due dates: ${new Date().toISOString().slice(0, 10)}`,
     "",
     "Candidates:",
     candidateRows,
@@ -199,10 +202,23 @@ function extractJsonArray(raw: string): string | null {
   // Codex sometimes wraps output in ```json fences or a leading sentence.
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) return fenced[1].trim();
+  const objectStart = raw.indexOf("{");
+  const objectEnd = raw.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    return raw.slice(objectStart, objectEnd + 1);
+  }
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
   if (start >= 0 && end > start) return raw.slice(start, end + 1);
   return null;
+}
+
+function parseBatchResults(json: string): AgentBatchResult[] {
+  const parsed = JSON.parse(json) as
+    | AgentBatchResult[]
+    | { results?: AgentBatchResult[] };
+  if (Array.isArray(parsed)) return parsed;
+  return Array.isArray(parsed.results) ? parsed.results : [];
 }
 
 export interface CodexBatchOutput {
@@ -234,7 +250,7 @@ export async function classifyBatchWithCodex(
   }
   let parsed: AgentBatchResult[];
   try {
-    parsed = JSON.parse(json) as AgentBatchResult[];
+    parsed = parseBatchResults(json);
   } catch (err) {
     log.warn("codex output JSON parse failed", { err: String(err) });
     return out;
@@ -245,6 +261,7 @@ export async function classifyBatchWithCodex(
       needs_task: Boolean(r.needs_task),
       sort_folder: String(r.sort_folder || "To Delete"),
       task_title: String(r.task_title || "").slice(0, 120),
+      due_date: r.due_date ? String(r.due_date).slice(0, 10) : null,
       reasoning: String(r.reasoning || "").slice(0, 500),
     });
   }

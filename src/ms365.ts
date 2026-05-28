@@ -69,6 +69,7 @@ export async function getMs365AccessToken(): Promise<string | null> {
 
 export async function listOutlook(
   sinceIso: string | null,
+  untilIso?: string | null,
 ): Promise<EmailMinimal[] | null> {
   assertGraphOperation("mail.listInbox");
   const token = await getMs365AccessToken();
@@ -78,7 +79,10 @@ export async function listOutlook(
     $top: "50",
     $orderby: "receivedDateTime desc",
   });
-  if (sinceIso) params.set("$filter", `receivedDateTime ge ${sinceIso}`);
+  const filters: string[] = [];
+  if (sinceIso) filters.push(`receivedDateTime ge ${sinceIso}`);
+  if (untilIso) filters.push(`receivedDateTime lt ${untilIso}`);
+  if (filters.length > 0) params.set("$filter", filters.join(" and "));
   let url: string | null =
     `https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages?${params}`;
   const out: EmailMinimal[] = [];

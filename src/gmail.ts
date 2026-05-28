@@ -14,11 +14,20 @@ function gwsAvailable(): boolean {
   return Boolean(GWS_BIN);
 }
 
-export function listGmail(sinceIso: string | null): EmailMinimal[] | null {
+export function listGmail(
+  sinceIso: string | null,
+  untilIso?: string | null,
+): EmailMinimal[] | null {
   if (!gwsAvailable()) return null;
-  const q = sinceIso
-    ? `in:inbox after:${Math.floor(new Date(sinceIso).getTime() / 1000)}`
-    : "in:inbox newer_than:1d";
+  const qParts = ["in:inbox"];
+  if (sinceIso) {
+    qParts.push(`after:${Math.floor(new Date(sinceIso).getTime() / 1000)}`);
+  }
+  if (untilIso) {
+    qParts.push(`before:${Math.floor(new Date(untilIso).getTime() / 1000)}`);
+  }
+  if (!sinceIso && !untilIso) qParts.push("newer_than:1d");
+  const q = qParts.join(" ");
   let ids: string[] = [];
   let pageToken: string | undefined;
   try {

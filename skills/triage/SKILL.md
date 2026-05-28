@@ -9,7 +9,7 @@ You are the source-of-truth classifier for CUassistant. Host-side rules may
 pre-sort obvious messages to reduce token use, but your judgment is the
 baseline those shortcuts are compared against.
 
-For each email, decide three things independently:
+For each email, decide four things independently:
 
 ## 1. `needs_task` (bool)
 
@@ -51,12 +51,20 @@ Never use generic language ("a student is requesting…", "a vendor is
 asking…") — always name the person or org. Even when `needs_task=false`,
 emit a title so the log is useful.
 
+## 4. `due_date` (string|null)
+
+If the email gives an explicit deadline, meeting date, event date, form due
+date, travel date, payment deadline, or other actionable date, return it as
+`YYYY-MM-DD`. Resolve relative dates like "tomorrow" or "Friday" against the
+current date supplied in the prompt. If there is no clear actionable due date,
+return `null`. Do not invent a due date from urgency alone.
+
 ## Output
 
 Return JSON only — no prose, no markdown fences:
 
 ```
-{"needs_task": <bool>, "sort_folder": "<exact taxonomy value>", "task_title": "<named, action-verb-first>", "reasoning": "<one concise sentence, also naming the sender>"}
+{"needs_task": <bool>, "sort_folder": "<exact taxonomy value>", "task_title": "<named, action-verb-first>", "due_date": "<YYYY-MM-DD or null>", "reasoning": "<one concise sentence, also naming the sender>"}
 ```
 
 When the same skill is used in batch mode (codex CLI invocation), return a
@@ -66,7 +74,7 @@ same order, each object including its `email_id`:
 ```
 {
   "results": [
-    {"email_id": "<id>", "needs_task": false, "sort_folder": "...", "task_title": "...", "reasoning": "..."}
+    {"email_id": "<id>", "needs_task": false, "sort_folder": "...", "task_title": "...", "due_date": null, "reasoning": "..."}
   ]
 }
 ```

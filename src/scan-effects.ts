@@ -37,6 +37,16 @@ export function taskAuditMarker(email: EmailMinimal): string {
   );
 }
 
+function dueIsoLocalFromResult(
+  result: ClassificationResult,
+): string | undefined {
+  if (!result.due_date) return undefined;
+  const date = String(result.due_date).match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+  if (!date) return undefined;
+  if (Number.isNaN(Date.parse(`${date}T12:00:00`))) return undefined;
+  return `${date}T17:00:00`;
+}
+
 export function noteApiFailure(out: ApiOutcome, email: EmailMinimal): void {
   out.apiFailureCount += 1;
   out.failedEmailKeys.add(emailKey(email.account, email.id));
@@ -66,6 +76,7 @@ export async function applyClassification(
           subject: email.subject,
           folder: validatedFolder,
           title: result.task_title,
+          due_date: result.due_date ?? null,
         });
       } else {
         log.warn("no MS365 list - leaving email in pending for retry", {
@@ -85,6 +96,7 @@ export async function applyClassification(
       email.account,
       validatedFolder,
     );
+    const dueIsoLocal = dueIsoLocalFromResult(result);
     const auditMarker = taskAuditMarker(email);
     if (!DRY_RUN) {
       appendDecision({
@@ -100,6 +112,7 @@ export async function applyClassification(
         reasoning: result.reasoning,
         task_id_created: null,
         task_audit_marker: auditMarker,
+        task_due_date: dueIsoLocal?.slice(0, 10) ?? null,
         model_used: modelLabel,
         body_sha256: bodySha256,
         body_chars_sent: bodyChars,
@@ -114,7 +127,7 @@ export async function applyClassification(
         taskId = await taskWriter.createTask(
           taskListId,
           cleanTitle,
-          undefined,
+          dueIsoLocal,
           auditMarker,
         );
       }
@@ -138,6 +151,7 @@ export async function applyClassification(
       reasoning: result.reasoning,
       task_id_created: taskId,
       task_audit_marker: auditMarker,
+      task_due_date: dueIsoLocal?.slice(0, 10) ?? null,
       task_preexisting: taskPreexisting || undefined,
       model_used: modelLabel,
       body_sha256: bodySha256,

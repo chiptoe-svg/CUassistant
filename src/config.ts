@@ -62,6 +62,11 @@ export const OUTLOOK_MAIL_PROVIDER = outlookMailProvider(
 export const TASK_PROVIDER = taskProvider(process.env.TASK_PROVIDER);
 
 export const DRY_RUN = process.env.DRY_RUN === "1";
+export const BACKFILL_FROM = process.env.BACKFILL_FROM || "";
+export const BACKFILL_TO = process.env.BACKFILL_TO || "";
+export const BACKFILL_ACTIVE = Boolean(BACKFILL_FROM || BACKFILL_TO);
+export const BACKFILL_ADVANCE_PROGRESS =
+  process.env.BACKFILL_ADVANCE_PROGRESS === "1";
 
 export const CONFIG_DIR = path.resolve(
   process.env.CONFIG_DIR || path.join(process.cwd(), "config"),
@@ -75,6 +80,10 @@ export const TIMEZONE = process.env.TZ || "America/New_York";
 export const CODEX_BIN = process.env.CODEX_BIN || "codex";
 export const CODEX_MODEL = process.env.CODEX_MODEL || "gpt-5.4-mini";
 export const CODEX_TIMEOUT_MS = Number(process.env.CODEX_TIMEOUT_MS || 90_000);
+export const CLASSIFIER_BATCH_SIZE = Math.max(
+  1,
+  Number(process.env.CLASSIFIER_BATCH_SIZE || 10),
+);
 export const OUTLOOK_CODEX_TIMEOUT_MS = Number(
   process.env.OUTLOOK_CODEX_TIMEOUT_MS || CODEX_TIMEOUT_MS,
 );

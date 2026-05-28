@@ -94,6 +94,7 @@ export interface ClassificationResult {
   needs_task: boolean;
   sort_folder: string;
   task_title: string;
+  due_date?: string | null;
   reasoning: string;
 }
 

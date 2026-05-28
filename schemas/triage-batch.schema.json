@@ -15,6 +15,7 @@
           "needs_task",
           "sort_folder",
           "task_title",
+          "due_date",
           "reasoning"
         ],
         "properties": {
@@ -33,6 +34,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 120
+          },
+          "due_date": {
+            "type": ["string", "null"],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           },
           "reasoning": {
             "type": "string",

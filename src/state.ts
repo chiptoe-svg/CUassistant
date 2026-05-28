@@ -81,8 +81,10 @@ export function loadResolvedEmailIds(daysBack = 30): Set<string> {
         account?: Account;
         pass?: string;
         decision?: string;
+        dry_run?: boolean;
       };
       if (!entry.email_id) continue;
+      if (entry.dry_run) continue;
       if (entry.decision && entry.decision.endsWith("-intent")) continue;
       if (entry.pass === "compare") continue;
       if (entry.ts) {

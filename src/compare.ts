@@ -1,15 +1,22 @@
 import { validateSortFolder } from "./cascade.js";
 import { classifyBatchWithCodex } from "./codex-agent.js";
-import { MODE } from "./config.js";
+import { CLASSIFIER_BATCH_SIZE, MODE } from "./config.js";
 import { loadTaxonomy } from "./loaders.js";
+import { log } from "./log.js";
 import { computeCostUsd } from "./pricing.js";
 import { appendDecision, appendUsage } from "./state.js";
-import { Classification, CompareOutcome, EmailMinimal } from "./types.js";
+import {
+  Classification,
+  ClassificationResult,
+  CompareOutcome,
+  EmailMinimal,
+} from "./types.js";
 import { fetchBodies } from "./scan-mail.js";
 import {
   candidateFromEmail,
   deterministicDecisionFor,
 } from "./preclassifier.js";
+import { chunksOf } from "./batching.js";
 
 export async function compareAgentToPrefilter(
   emails: EmailMinimal[],
@@ -24,21 +31,42 @@ export async function compareAgentToPrefilter(
   await fetchBodies(candidates);
 
   const taxonomy = loadTaxonomy();
-  const { results, usage } = await classifyBatchWithCodex(candidates, taxonomy);
-  if (usage) {
-    appendUsage({
-      scan_run_id: scanRunId,
-      email_ids: candidates.map((e) => e.id),
-      mode: MODE,
-      caller: "codex",
-      model: usage.model,
-      input_tokens: usage.input_tokens,
-      cached_input_tokens: usage.cached_input_tokens,
-      output_tokens: usage.output_tokens,
-      reasoning_output_tokens: usage.reasoning_output_tokens,
-      latency_ms: usage.latency_ms,
-      cost_usd: computeCostUsd(usage.model, usage),
+  const results = new Map<string, ClassificationResult>();
+  const batches = chunksOf(candidates, CLASSIFIER_BATCH_SIZE);
+  log.info("compare codex batches", {
+    candidates: candidates.length,
+    batch_size: CLASSIFIER_BATCH_SIZE,
+    batches: batches.length,
+  });
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    log.info("compare codex batch", {
+      batch: i + 1,
+      batches: batches.length,
+      emails: batch.length,
     });
+    const { results: batchResults, usage } = await classifyBatchWithCodex(
+      batch,
+      taxonomy,
+    );
+    for (const [emailId, result] of batchResults.entries()) {
+      results.set(emailId, result);
+    }
+    if (usage) {
+      appendUsage({
+        scan_run_id: scanRunId,
+        email_ids: batch.map((e) => e.id),
+        mode: MODE,
+        caller: "codex",
+        model: usage.model,
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+        latency_ms: usage.latency_ms,
+        cost_usd: computeCostUsd(usage.model, usage),
+      });
+    }
   }
 
   const out: CompareOutcome = {

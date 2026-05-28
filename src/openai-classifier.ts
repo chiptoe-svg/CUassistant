@@ -31,14 +31,16 @@ function buildLeanSystemPrompt(taxonomy: Taxonomy): string {
     "1. needs_task: true only if the email creates a real obligation, deadline, direct ask, official consequence, or follow-up the recipient owns. Default false.",
     "2. sort_folder: exactly one taxonomy value.",
     "3. task_title: 4-10 words, action verb first, naming the sender or organization.",
-    "4. reasoning: one concise sentence.",
+    "4. due_date: YYYY-MM-DD only when the email gives an explicit actionable deadline/date; otherwise null. Resolve relative dates against today's date.",
+    "5. reasoning: one concise sentence.",
     "",
     "Prefer false negatives over noisy false positives.",
+    `Today's date: ${new Date().toISOString().slice(0, 10)}`,
     "",
     "Taxonomy:",
     folderBullets,
     "",
-    'Return JSON only: {"needs_task": boolean, "sort_folder": string, "task_title": string, "reasoning": string}',
+    'Return JSON only: {"needs_task": boolean, "sort_folder": string, "task_title": string, "due_date": null, "reasoning": string}',
   ].join("\n");
 }
 
@@ -120,6 +122,7 @@ export async function classifyEmailWithApi(
         needs_task: Boolean(parsed.needs_task),
         sort_folder: String(parsed.sort_folder || "To Delete"),
         task_title: String(parsed.task_title || "").slice(0, 120),
+        due_date: parsed.due_date ? String(parsed.due_date).slice(0, 10) : null,
         reasoning: String(parsed.reasoning || "").slice(0, 500),
       },
       usage,

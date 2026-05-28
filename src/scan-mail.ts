@@ -10,10 +10,16 @@ import {
   ProgressAccount,
 } from "./types.js";
 
-export async function listAllNewMail(progress: {
-  gmail?: string;
-  outlook?: string;
-}): Promise<MailListing> {
+export async function listAllNewMail(
+  progress: {
+    gmail?: string;
+    outlook?: string;
+  },
+  window?: {
+    fromIso?: string;
+    toIso?: string;
+  },
+): Promise<MailListing> {
   const accounts = loadAccounts();
   const out: EmailMinimal[] = [];
   const completedAccounts = new Set<ProgressAccount>();
@@ -21,8 +27,11 @@ export async function listAllNewMail(progress: {
   for (const acc of accounts) {
     const provider = mailProviderForAccount(acc);
     if (!provider) continue;
+    const sinceIso =
+      window?.fromIso || progress[provider.progressAccount] || null;
     const messages = await provider.reader.listNew(
-      progress[provider.progressAccount] ?? null,
+      sinceIso,
+      window?.toIso || null,
     );
     if (messages) {
       out.push(...messages);
@@ -65,6 +74,7 @@ export function writeCompletedProgress(
   completedAccounts: Set<ProgressAccount>,
   scanStartedIso: string,
   scanRunId: string,
+  advanceToIso?: string,
 ): void {
   const last_scan_date = { ...(previous.last_scan_date ?? {}) };
   if (
@@ -72,14 +82,18 @@ export function writeCompletedProgress(
     accounts.some((a) => a.type === "gws")
   ) {
     last_scan_date.gmail =
-      latestReceivedIso(listedEmails, "gmail") ?? scanStartedIso;
+      advanceToIso ??
+      latestReceivedIso(listedEmails, "gmail") ??
+      scanStartedIso;
   }
   if (
     completedAccounts.has("outlook") &&
     accounts.some((a) => a.type === "ms365")
   ) {
     last_scan_date.outlook =
-      latestReceivedIso(listedEmails, "outlook") ?? scanStartedIso;
+      advanceToIso ??
+      latestReceivedIso(listedEmails, "outlook") ??
+      scanStartedIso;
   }
   writeProgress({
     ...previous,

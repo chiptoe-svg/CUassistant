@@ -25,8 +25,8 @@ interface MailProvider {
 }
 
 const gmailReader: MailReader = {
-  async listNew(sinceIso) {
-    return listGmail(sinceIso);
+  async listNew(sinceIso, untilIso) {
+    return listGmail(sinceIso, untilIso);
   },
   async fetchBody(id) {
     return fetchGmailBody(id);

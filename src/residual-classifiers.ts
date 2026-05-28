@@ -1,5 +1,5 @@
 import { classifyBatchWithCodex } from "./codex-agent.js";
-import { MODE } from "./config.js";
+import { CLASSIFIER_BATCH_SIZE, MODE } from "./config.js";
 import { loadTaxonomy } from "./loaders.js";
 import { log } from "./log.js";
 import { classifyEmailWithApi, openAiConfigured } from "./openai-classifier.js";
@@ -12,6 +12,7 @@ import {
   createApiOutcome,
   noteApiFailure,
 } from "./scan-effects.js";
+import { chunksOf } from "./batching.js";
 
 export async function classifyResidualsCodex(
   outcome: ScanOutcome,
@@ -21,40 +22,54 @@ export async function classifyResidualsCodex(
 ): Promise<ApiOutcome> {
   const taxonomy = loadTaxonomy();
   const out = createApiOutcome();
-  const { results: decisions, usage } = await classifyBatchWithCodex(
-    outcome.llm_candidates,
-    taxonomy,
-  );
-  if (usage) {
-    appendUsage({
-      scan_run_id: scanRunId,
-      email_ids: outcome.llm_candidates.map((e) => e.id),
-      mode: MODE,
-      caller: "codex",
-      model: usage.model,
-      input_tokens: usage.input_tokens,
-      cached_input_tokens: usage.cached_input_tokens,
-      output_tokens: usage.output_tokens,
-      reasoning_output_tokens: usage.reasoning_output_tokens,
-      latency_ms: usage.latency_ms,
-      cost_usd: computeCostUsd(usage.model, usage),
+  const batches = chunksOf(outcome.llm_candidates, CLASSIFIER_BATCH_SIZE);
+  log.info("classifying with codex batches", {
+    candidates: outcome.llm_candidates.length,
+    batch_size: CLASSIFIER_BATCH_SIZE,
+    batches: batches.length,
+  });
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    log.info("codex classifier batch", {
+      batch: i + 1,
+      batches: batches.length,
+      emails: batch.length,
     });
-  }
-  for (const email of outcome.llm_candidates) {
-    const result = decisions.get(email.id);
-    if (!result) {
-      noteApiFailure(out, email);
-      continue;
-    }
-    await applyClassification(
-      email,
-      result,
-      scanRunId,
-      "codex-cli",
-      taskListId,
-      taskWriter,
-      out,
+    const { results: decisions, usage } = await classifyBatchWithCodex(
+      batch,
+      taxonomy,
     );
+    if (usage) {
+      appendUsage({
+        scan_run_id: scanRunId,
+        email_ids: batch.map((e) => e.id),
+        mode: MODE,
+        caller: "codex",
+        model: usage.model,
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+        latency_ms: usage.latency_ms,
+        cost_usd: computeCostUsd(usage.model, usage),
+      });
+    }
+    for (const email of batch) {
+      const result = decisions.get(email.id);
+      if (!result) {
+        noteApiFailure(out, email);
+        continue;
+      }
+      await applyClassification(
+        email,
+        result,
+        scanRunId,
+        "codex-cli",
+        taskListId,
+        taskWriter,
+        out,
+      );
+    }
   }
   return out;
 }

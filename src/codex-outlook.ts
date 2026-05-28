@@ -50,6 +50,7 @@ function runCodexConnector(
         "--ephemeral",
         "--sandbox",
         "workspace-write",
+        "--ignore-user-config",
         "--ignore-rules",
         "--output-schema",
         schemaPath,
@@ -139,18 +140,30 @@ function parseJsonObject<T>(raw: string): T | null {
   }
 }
 
-function sinceInstruction(sinceIso: string | null): string {
-  if (!sinceIso) return "No saved cursor exists; list recent Inbox mail.";
-  return `List Inbox mail received at or after this ISO timestamp: ${sinceIso}.`;
+function windowInstruction(
+  sinceIso: string | null,
+  untilIso?: string | null,
+): string {
+  if (sinceIso && untilIso) {
+    return `List Inbox mail received at or after this ISO timestamp and before the end timestamp: from ${sinceIso} to ${untilIso}.`;
+  }
+  if (sinceIso) {
+    return `List Inbox mail received at or after this ISO timestamp: ${sinceIso}.`;
+  }
+  if (untilIso) {
+    return `List recent Inbox mail received before this ISO timestamp: ${untilIso}.`;
+  }
+  return "No saved cursor exists; list recent Inbox mail.";
 }
 
 export async function listOutlookWithCodex(
   sinceIso: string | null,
+  untilIso?: string | null,
 ): Promise<EmailMinimal[] | null> {
   const prompt = [
     "Use the Outlook Email connector only. Do not use shell commands.",
     "List messages from the signed-in user's Outlook Inbox, newest first.",
-    sinceInstruction(sinceIso),
+    windowInstruction(sinceIso, untilIso),
     `Return at most ${OUTLOOK_CODEX_MAX_RESULTS} messages.`,
     "Return only JSON matching the provided schema.",
     "For each message include id, from email address, subject, conversationId when available, and receivedIso when available.",
@@ -159,6 +172,13 @@ export async function listOutlookWithCodex(
     const exec = await runCodexConnector(prompt, "outlook-list.schema.json");
     const parsed = parseJsonObject<OutlookListResult>(exec.agentMessage);
     if (!parsed?.messages) return null;
+    if (parsed.messages.length >= OUTLOOK_CODEX_MAX_RESULTS) {
+      log.warn("codex outlook list returned configured max", {
+        returned: parsed.messages.length,
+        max_results: OUTLOOK_CODEX_MAX_RESULTS,
+        note: "window may contain more Outlook mail than was returned",
+      });
+    }
     return parsed.messages
       .filter((m) => m.id)
       .map((m) => ({

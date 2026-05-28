@@ -1,4 +1,12 @@
-import { DRY_RUN, MODE, RESIDUAL_CLASSIFIER } from "./config.js";
+import {
+  BACKFILL_ACTIVE,
+  BACKFILL_ADVANCE_PROGRESS,
+  BACKFILL_FROM,
+  BACKFILL_TO,
+  DRY_RUN,
+  MODE,
+  RESIDUAL_CLASSIFIER,
+} from "./config.js";
 import {
   buildCleanTitle,
   matchActionTemplate,
@@ -63,6 +71,17 @@ export async function runScan(): Promise<string> {
   const progress = loadProgress();
   const wantsAgent = MODE === "agent";
   const wantsCompare = MODE === "compare";
+  const backfillWindow = BACKFILL_ACTIVE
+    ? {
+        fromIso: BACKFILL_FROM || undefined,
+        toIso: BACKFILL_TO || undefined,
+      }
+    : undefined;
+  const shouldWriteProgress = !BACKFILL_ACTIVE || BACKFILL_ADVANCE_PROGRESS;
+  const progressAdvanceIso =
+    BACKFILL_ACTIVE && BACKFILL_ADVANCE_PROGRESS
+      ? BACKFILL_TO || scanStartedIso
+      : undefined;
   const taskWriter = getTaskWriter();
 
   // Carryover from prior scan: any pending residual whose email_id has a
@@ -106,9 +125,25 @@ export async function runScan(): Promise<string> {
     carryover.map((e) => [emailKey(e.account, e.email_id), e]),
   );
 
-  const listing = await listAllNewMail(progress.last_scan_date ?? {});
+  const listing = await listAllNewMail(
+    progress.last_scan_date ?? {},
+    backfillWindow,
+  );
   outcome.errors.push(...listing.errors);
   const listedEmails = listing.emails;
+  const listedByAccount = listedEmails.reduce<Record<string, number>>(
+    (acc, email) => {
+      acc[email.account] = (acc[email.account] ?? 0) + 1;
+      return acc;
+    },
+    {},
+  );
+  log.info("mail listing complete", {
+    listed: listedEmails.length,
+    by_account: listedByAccount,
+    backfill_from: backfillWindow?.fromIso,
+    backfill_to: backfillWindow?.toIso,
+  });
   const freshEmails = listedEmails.filter(
     (e) => !resolvedIds.has(emailKey(e.account, e.id)),
   );
@@ -127,14 +162,17 @@ export async function runScan(): Promise<string> {
   if (emails.length === 0) {
     if (!DRY_RUN && !wantsCompare) {
       writePendingResiduals([]);
-      writeCompletedProgress(
-        progress,
-        accounts,
-        listedEmails,
-        listing.completedAccounts,
-        scanStartedIso,
-        scanRunId,
-      );
+      if (shouldWriteProgress) {
+        writeCompletedProgress(
+          progress,
+          accounts,
+          listedEmails,
+          listing.completedAccounts,
+          scanStartedIso,
+          scanRunId,
+          progressAdvanceIso,
+        );
+      }
     }
     return formatSummary(outcome, null, scanRunId);
   }
@@ -303,14 +341,17 @@ export async function runScan(): Promise<string> {
   if (outcome.llm_candidates.length === 0) {
     if (!DRY_RUN) {
       writePendingResiduals([]);
-      writeCompletedProgress(
-        progress,
-        accounts,
-        listedEmails,
-        listing.completedAccounts,
-        scanStartedIso,
-        scanRunId,
-      );
+      if (shouldWriteProgress) {
+        writeCompletedProgress(
+          progress,
+          accounts,
+          listedEmails,
+          listing.completedAccounts,
+          scanStartedIso,
+          scanRunId,
+          progressAdvanceIso,
+        );
+      }
     }
     return formatSummary(outcome, null, scanRunId);
   }
@@ -353,14 +394,17 @@ export async function runScan(): Promise<string> {
         };
       });
     writePendingResiduals(pendingThisScan);
-    writeCompletedProgress(
-      progress,
-      accounts,
-      listedEmails,
-      listing.completedAccounts,
-      scanStartedIso,
-      scanRunId,
-    );
+    if (shouldWriteProgress) {
+      writeCompletedProgress(
+        progress,
+        accounts,
+        listedEmails,
+        listing.completedAccounts,
+        scanStartedIso,
+        scanRunId,
+        progressAdvanceIso,
+      );
+    }
   }
 
   return formatSummary(outcome, api, scanRunId);

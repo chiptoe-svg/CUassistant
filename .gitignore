@@ -19,6 +19,7 @@ config/*.local.yaml
 
 # Local agent/worktree state
 .claude/
+.superpowers/
 
 # Generated review attachments
 docs/*.pdf

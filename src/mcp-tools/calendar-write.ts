@@ -68,7 +68,7 @@ const createCalendarEvent: McpToolDefinition = {
       //         attendees: attendees?.map(a => ({ emailAddress: { address: a }, type: "required" })),
       //       }),
       //     });
-      assertMcpOperation("calendar.create_event");
+      assertMcpOperation("calendar.create_event", { input: args });
       finishMcpAudit(audit, { result: "error", detail: "unreachable" });
       return err("unreachable");
     } catch (e) {
@@ -122,7 +122,7 @@ const updateCalendarEvent: McpToolDefinition = {
       // Active call:
       //   mg form: mg me events update --event-id <id> --body @patch.json
       //   HTTP form: await authedFetch(`/me/events/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
-      assertMcpOperation("calendar.update_event");
+      assertMcpOperation("calendar.update_event", { input: args });
       finishMcpAudit(audit, { result: "error", detail: "unreachable" });
       return err("unreachable");
     } catch (e) {
@@ -160,7 +160,7 @@ const deleteCalendarEvent: McpToolDefinition = {
       // Active call:
       //   mg form: mg me events delete --event-id <id>
       //   HTTP form: await authedFetch(`/me/events/${id}`, { method: "DELETE" });
-      assertMcpOperation("calendar.delete_event");
+      assertMcpOperation("calendar.delete_event", { input: args });
       finishMcpAudit(audit, { result: "error", detail: "unreachable" });
       return err("unreachable");
     } catch (e) {
@@ -224,7 +224,7 @@ function rsvpTool(
         //       method: "POST",
         //       body: JSON.stringify({ comment, sendResponse }),
         //     });
-        assertMcpOperation(operation);
+        assertMcpOperation(operation, { input: args });
         finishMcpAudit(audit, { result: "error", detail: "unreachable" });
         return err("unreachable");
       } catch (e) {

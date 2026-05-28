@@ -182,7 +182,16 @@ That policy file is the authorized-use list. OAuth scopes describe what the
 delegated token may technically permit; the authorized-use list describes what
 CUassistant is allowed to expose or execute. The MCP server reads that list at
 startup and withholds tools whose operation is missing, stubbed, or not
-approved.
+approved. Registration fails closed when a tool has no operation mapping, and
+write tools pass their inputs through policy constraint validators before any
+backend call.
+
+The optional MCP workflow uses a local host MCP server. For Outlook
+mail/calendar reads, that host server currently spawns a local Codex CLI
+subprocess with an isolated temporary working directory, ignored user
+config/rules, schema-constrained output, and Codex CLI sandbox settings. That
+path is Codex-mediated through the Outlook connector; it is not
+Docker/container isolation and it is not a direct local Microsoft Graph read.
 
 Created To Do tasks keep user-visible fields clean: the task title is the
 action text only, and the note body stores a short `CUassistant ref` used for

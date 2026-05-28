@@ -6,7 +6,7 @@ import {
 } from "./permissions.js";
 
 export interface McpToolDefinition {
-  operation?: string;
+  operation: string;
   tool: Tool;
   handler: (args: Record<string, unknown>) => Promise<CallToolResult>;
 }

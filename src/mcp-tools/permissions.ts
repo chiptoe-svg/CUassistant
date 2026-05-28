@@ -15,6 +15,7 @@
 //      assertMcpOperation(...) before the backend call.
 
 import { getPolicyAction } from "../policy.js";
+import type { PolicyAction } from "../policy.js";
 
 export type McpOperationStatus = "active" | "stub-pending-approval";
 
@@ -195,13 +196,138 @@ export class McpStubPendingError extends Error {
   }
 }
 
+export interface McpOperationContext {
+  input?: Record<string, unknown>;
+}
+
+function hasKey(input: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some((key) => input[key] !== undefined && input[key] !== null);
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function normalizeToken(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function rejectSharedCalendarInput(
+  input: Record<string, unknown>,
+): string | null {
+  return hasKey(input, [
+    "calendarId",
+    "calendar_id",
+    "mailbox",
+    "mailboxId",
+    "userId",
+    "userPrincipalName",
+  ])
+    ? "primary calendar actions must not include delegated/shared calendar selectors"
+    : null;
+}
+
+function validateDestinationAllowList(destination: string): string | null {
+  const allowed = (process.env.MCP_ALLOWED_MAIL_DESTINATIONS ?? "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  if (!destination)
+    return "destination_folder_allow_list requires destinationId";
+  if (allowed.length === 0) {
+    return "destination_folder_allow_list requires MCP_ALLOWED_MAIL_DESTINATIONS";
+  }
+  return allowed.includes(destination)
+    ? null
+    : "destination_folder_allow_list rejected destinationId";
+}
+
+function validateConstraint(
+  constraint: string,
+  input: Record<string, unknown>,
+): string | null {
+  const destination = normalizeToken(input.destinationId);
+  switch (constraint) {
+    case "own_mailbox_only":
+    case "own_task_list_only":
+    case "local_state_only":
+    case "no_delete":
+    case "no_permanent_delete":
+      return null;
+    case "own_primary_calendar_only":
+    case "no_shared_or_delegated_calendar":
+      return rejectSharedCalendarInput(input);
+    case "metadata_only":
+    case "no_body_rewrite":
+      return hasKey(input, ["body", "bodyContent", "bodyContentType"])
+        ? `${constraint} forbids message body changes`
+        : null;
+    case "no_send":
+      return input.send === true || input.sendNow === true
+        ? "no_send forbids sending or send-and-save behavior"
+        : null;
+    case "draft_only":
+      return input.send === true || input.sendNow === true
+        ? "draft_only permits draft creation only"
+        : null;
+    case "destination_folder_allow_list":
+      return validateDestinationAllowList(destination);
+    case "no_delete_folder":
+      return destination.includes("deleted") || destination.includes("trash")
+        ? "no_delete_folder rejected destinationId"
+        : null;
+    case "no_junk_folder":
+      return destination.includes("junk") || destination.includes("spam")
+        ? "no_junk_folder rejected destinationId"
+        : null;
+    case "no_recoverable_items":
+      return destination.includes("recoverable")
+        ? "no_recoverable_items rejected destinationId"
+        : null;
+    case "no_attendees":
+    case "no_invites":
+      return asStringArray(input.attendees).length > 0
+        ? `${constraint} forbids attendee invitations`
+        : null;
+    case "disabled_by_default":
+      return "disabled_by_default blocks this operation";
+    case "dry_run_only_unless_explicitly_enabled":
+      return input.dryRun === true
+        ? null
+        : "dry_run_only_unless_explicitly_enabled requires dryRun=true";
+    default:
+      return `no validator for policy constraint "${constraint}"`;
+  }
+}
+
+function assertPolicyConstraints(
+  operation: string,
+  action: PolicyAction,
+  context: McpOperationContext,
+): void {
+  const input = context.input ?? {};
+  for (const constraint of action.constraints ?? []) {
+    const failure = validateConstraint(constraint, input);
+    if (failure) {
+      throw new McpPermissionDeniedError(
+        `MCP operation "${operation}" violates policy constraint ` +
+          `"${constraint}": ${failure}.`,
+      );
+    }
+  }
+}
+
 /**
  * Assert that an MCP operation is in the allow-list. Stubs throw a structured
  * error identifying the missing permission.
  *
  * Every tool calls this before any backend exec/fetch.
  */
-export function assertMcpOperation(operation: string): McpOperationSpec {
+export function assertMcpOperation(
+  operation: string,
+  context: McpOperationContext = {},
+): McpOperationSpec {
   const spec = MCP_ALLOWED_OPERATIONS[operation];
   if (!spec) {
     throw new McpPermissionDeniedError(
@@ -222,6 +348,7 @@ export function assertMcpOperation(operation: string): McpOperationSpec {
         `"${spec.policyActionId}" (approval=${policyAction.approval}).`,
     );
   }
+  assertPolicyConstraints(operation, policyAction, context);
   if (spec.status === "stub-pending-approval") {
     throw new McpStubPendingError(operation, spec.pendingScope ?? "(unknown)");
   }

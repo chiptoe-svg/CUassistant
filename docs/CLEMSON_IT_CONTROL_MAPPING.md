@@ -10,7 +10,7 @@ Single-user, local workflow operating only in the requestor's own Microsoft 365
 account:
 
 - read Inbox messages
-- create/edit/delete To Do tasks
+- create/edit To Do tasks
 - move mail only between approved folders
 - create drafts only in Drafts
 - create events only on the requestor's personal calendar with no attendees
@@ -19,6 +19,7 @@ Out of scope:
 
 - send mail
 - delete or permanently delete mail
+- delete To Do tasks
 - shared or delegated mailbox actions
 - shared or delegated calendar actions
 - invitations, attendee management, meeting cancellation
@@ -85,6 +86,11 @@ Current code shape:
 - The optional host MCP server exposes only operations that are active in
   [src/mcp-tools/permissions.ts](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/src/mcp-tools/permissions.ts)
   and mapped to an `approval: none` action in the authorized-use list.
+- The optional MCP workflow uses a local host MCP server. When it needs
+  Codex-mediated Outlook reads, it spawns a local Codex CLI subprocess with
+  an isolated temporary working directory, ignored user config/rules,
+  schema-constrained output, and Codex CLI sandbox settings. It is not
+  Docker/container isolation.
 - Durable audit and usage logs are written in
   [src/state.ts](/Users/tonkin/Documents/ClaudeWorkingFolder/Projects/CUassistant/src/state.ts).
 

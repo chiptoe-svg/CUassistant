@@ -8,17 +8,20 @@ accompanies the Graph CLI permission request to IT.
 ## Architecture summary
 
 - **Transport.** stdio (`@modelcontextprotocol/sdk` `StdioServerTransport`).
-  The server is host-side: NanoClaw v2 spawns it from the host shell, not
-  inside a container. Stdio is the only listener — no HTTP, no socket.
+  The server is a local host MCP server, not a containerized service. Stdio is
+  the only listener — no HTTP, no socket.
 - **Credentials.** Host-only. The Graph CLI refresh token in
   `${CUASSISTANT_REPO}/.env` is read by the host process and never crosses
-  any boundary. NanoClaw containers connect to the MCP server via stdio and
-  request operations through tools — they never receive credentials directly.
+  any boundary. If a containerized agent runtime launches this MCP server, it
+  connects through stdio and requests operations through tools — it never
+  receives credentials directly.
 - **Allow-list.** `src/mcp-tools/permissions.ts` is the operation registry for
   this server, and `policy/action-policy.yaml` is the policy registry. A tool
   is exposed only when its operation is active and maps to an `approval: none`
-  policy action. Every tool still calls `assertMcpOperation()` before any
-  backend call.
+  policy action. Tool registration fails closed if the tool has no operation
+  mapping. Every tool still calls `assertMcpOperation()` before any backend
+  call, and write tools pass their normalized inputs through policy constraint
+  validators.
 - **Authorized use.** `policy/action-policy.yaml` is the authorized-use list.
   OAuth scopes describe what the delegated token may technically permit; the
   authorized-use list describes what CUassistant is allowed to expose or
@@ -67,6 +70,13 @@ accompanies the Graph CLI permission request to IT.
 
 Already approved at Clemson via the Outlook Email connector. No additional
 Graph permission requested for these calls.
+
+These reads are Codex-mediated: the host MCP server spawns a local Codex CLI
+subprocess with an isolated temporary working directory, ignored user
+config/rules, schema-constrained output, and Codex CLI sandbox settings. The
+subprocess uses the Outlook connector and returns structured JSON to the host
+MCP server. It is not Docker/container isolation, and it is not a direct local
+Microsoft Graph read.
 
 - `list-mail-messages` — list Outlook Inbox messages, newest first. Optional
   `sinceIso` and `untilIso` filters. Returns minimal metadata only; bodies
@@ -146,16 +156,27 @@ client, activation is a localized edit:
 2. Update the `scope` set in the corresponding token-refresh helper
    (`src/graph-cli-tasks.ts` for the existing flow; a parallel mail/calendar
    helper alongside it for the new scopes).
-3. Flip the `status` from `"stub-pending-approval"` to `"active"` in
+3. Confirm the action's policy constraints are enforced by validators in
+   `src/mcp-tools/permissions.ts`. Activation should not rely only on
+   changing `approval` or `status`.
+4. Flip the `status` from `"stub-pending-approval"` to `"active"` in
    `src/mcp-tools/permissions.ts` for each operation key in the activated
    group.
-4. Replace the stub body in the matching tool file
+5. Replace the stub body in the matching tool file
    (`src/mcp-tools/mail-write.ts` or `src/mcp-tools/calendar-write.ts`) with
    the active backend call. Each handler already has the active call sketched
    in a comment; the activation amounts to uncommenting it and removing the
    `assertMcpOperation` branch that throws today.
-5. Re-run `npm run typecheck`. The IT manifest table above should be updated
-   to mark the activated tools as `active`.
+6. Re-run `npm test` and `npm run typecheck`. The IT manifest table above
+   should be updated to mark the activated tools as `active`.
+
+## Dependency note
+
+`npm audit --omit=dev` currently reports moderate findings in the MCP SDK's
+Express dependency chain. This server uses stdio only, not an HTTP listener, so
+the practical exposure is narrower than a network service. The finding is
+tracked openly and should be remediated when the upstream SDK ships a fixed
+dependency path.
 
 ## What this server does not do
 

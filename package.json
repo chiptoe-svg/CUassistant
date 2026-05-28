@@ -19,6 +19,7 @@
     "preclassify:suggest": "tsx scripts/preclassify-suggest.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "test": "node --import tsx --test test/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write \"src/**/*.ts\" \"*.{md,json}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"*.{md,json}\"",

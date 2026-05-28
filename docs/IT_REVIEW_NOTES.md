@@ -169,7 +169,7 @@ sandbox mode, ignored user config/rules, an output schema, and a timeout.
 
 ## Codex CLI Sandboxing
 
-CUassistant invokes Codex CLI as a short-lived subprocess for two distinct
+CUassistant invokes Codex CLI as a short-lived local subprocess for two distinct
 roles: classification (`src/codex-agent.ts`) and Outlook/calendar connector
 reads (`src/codex-outlook.ts`, `src/mcp-tools/codex-calendar.ts`). Each
 invocation is a fresh OS process with no shared state, torn down when the
@@ -283,17 +283,30 @@ The scheduled scan path does not:
 - Send notifications to Slack, Teams, email, webhooks, or any other outbound
   channel.
 
-The repository also contains an optional host-side MCP server for agent clients.
+The repository also contains an optional local host MCP server for agent
+clients. It is host-side; it is not a containerized service. If a containerized
+agent runtime launches it, the agent connects through stdio and requests
+operations through tools, but credentials remain in the host process.
+
 That server is not required for the scheduled scan path. When started, it
 registers only operations that are active in `src/mcp-tools/permissions.ts` and
 mapped to an `approval: none` action in `policy/action-policy.yaml`. Stubbed
 or policy-blocked operations are not exposed to the agent.
 
+When this optional MCP path needs Outlook mail/calendar reads, the host MCP
+server spawns a local Codex CLI subprocess with an isolated temporary working
+directory, ignored user config/rules, schema-constrained output, and Codex CLI
+sandbox settings. That path is Codex-mediated through the Outlook connector; it
+is not Docker/container isolation and it is not a direct local Microsoft Graph
+read.
+
 `policy/action-policy.yaml` is the authorized-use list. OAuth scopes describe
 what a delegated token may technically permit; the authorized-use list describes
 what CUassistant is allowed to expose or execute. The MCP server reads that list
 at startup and withholds tools whose operation is missing, stubbed, or not
-approved.
+approved. Registration fails closed if a tool has no operation mapping, and
+write operations pass their normalized inputs through policy constraint
+validators before any backend call.
 
 ## Local State And Audit
 
@@ -370,8 +383,8 @@ management story, and quality benchmark against the Codex classifier.
 ## Notes And Tradeoffs
 
 - `Mail.ReadWrite` is a broad delegated scope even though the code does not
-  expose send/delete/move/draft operations. The mitigation is code-level
-  operation allow-listing plus reviewable absence of those call sites.
+  expose send/delete operations. The mitigation is code-level operation
+  allow-listing plus reviewable absence of exposed send/delete call sites.
 - The local `.env` contains a refresh token. It is gitignored and the login
   helper writes it with mode `0600`, but endpoint hardening is still an
   endpoint-management responsibility.
@@ -380,3 +393,8 @@ management story, and quality benchmark against the Codex classifier.
   controls.
 - Optional Gmail support uses a local `gws` CLI if configured. It is separate
   from the Microsoft consent ask and can be disabled by leaving `GWS_BIN` unset.
+- `npm audit --omit=dev` currently reports moderate findings in the MCP SDK's
+  Express dependency chain. The MCP server uses stdio only, not an HTTP
+  listener, so the practical exposure is narrower than a network service. The
+  finding is tracked openly and should be remediated when the upstream SDK ships
+  a fixed dependency path.

@@ -67,7 +67,7 @@ const moveMailMessage: McpToolDefinition = {
       //       method: "POST",
       //       body: JSON.stringify({ destinationId }),
       //     });
-      assertMcpOperation("mail.move_message");
+      assertMcpOperation("mail.move_message", { input: args });
       finishMcpAudit(audit, {
         result: "error",
         detail: "unreachable: stub gate should have refused",
@@ -134,7 +134,7 @@ const updateMailMessage: McpToolDefinition = {
       //       method: "PATCH",
       //       body: JSON.stringify(patch),
       //     });
-      assertMcpOperation("mail.update_message");
+      assertMcpOperation("mail.update_message", { input: args });
       finishMcpAudit(audit, {
         result: "error",
         detail: "unreachable: stub gate should have refused",
@@ -212,7 +212,7 @@ const createDraftEmail: McpToolDefinition = {
       //         ...
       //       }),
       //     });
-      assertMcpOperation("mail.create_draft");
+      assertMcpOperation("mail.create_draft", { input: args });
       finishMcpAudit(audit, {
         result: "error",
         detail: "unreachable: stub gate should have refused",

@@ -21,12 +21,20 @@ function log(msg: string): void {
 const allTools: McpToolDefinition[] = [];
 const toolMap = new Map<string, McpToolDefinition>();
 
+export function shouldRegisterMcpTool(t: Partial<McpToolDefinition>): boolean {
+  if (!t.operation) {
+    return false;
+  }
+  return isMcpOperationExposed(t.operation);
+}
+
 export function registerTools(tools: McpToolDefinition[]): void {
   for (const t of tools) {
-    if (t.operation && !isMcpOperationExposed(t.operation)) {
+    if (!shouldRegisterMcpTool(t)) {
       log(
         `skipping tool "${t.tool.name}" because operation ` +
-          `"${t.operation}" is not active and policy-approved`,
+          `"${t.operation ?? "(missing)"}" is not active and ` +
+          `policy-approved`,
       );
       continue;
     }

@@ -152,7 +152,7 @@ const createTodoTaskTool: McpToolDefinition = {
   },
   async handler(args) {
     try {
-      assertMcpOperation("todo.create_task");
+      assertMcpOperation("todo.create_task", { input: args });
     } catch (e) {
       return permissionErr(e);
     }
@@ -230,7 +230,7 @@ const updateTodoTaskTool: McpToolDefinition = {
   },
   async handler(args) {
     try {
-      assertMcpOperation("todo.update_task");
+      assertMcpOperation("todo.update_task", { input: args });
     } catch (e) {
       return permissionErr(e);
     }
@@ -301,7 +301,7 @@ const deleteTodoTaskTool: McpToolDefinition = {
   },
   async handler(args) {
     try {
-      assertMcpOperation("todo.delete_task");
+      assertMcpOperation("todo.delete_task", { input: args });
     } catch (e) {
       return permissionErr(e);
     }

@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
+import { buildChildEnv } from "./child-env.js";
 import { CODEX_BIN, CODEX_MODEL, CODEX_TIMEOUT_MS } from "./config.js";
 import { log } from "./log.js";
 import { composeSystemPrompt } from "./prompts.js";
@@ -107,7 +108,11 @@ function runCodexExec(prompt: string): Promise<CodexExecResult> {
         isolatedCwd,
         "-",
       ],
-      { stdio: ["pipe", "pipe", "pipe"], cwd: isolatedCwd },
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: isolatedCwd,
+        env: buildChildEnv(),
+      },
     );
     const finish = (fn: () => void): void => {
       if (settled) return;

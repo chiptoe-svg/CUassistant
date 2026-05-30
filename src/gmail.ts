@@ -5,6 +5,7 @@
 
 import { execFileSync } from "child_process";
 
+import { buildChildEnv } from "./child-env.js";
 import { GWS_BIN } from "./config.js";
 import { log } from "./log.js";
 import { MAX_BODY_CHARS, normalizeBody } from "./normalize.js";
@@ -52,7 +53,7 @@ export function listGmail(
         ],
         {
           encoding: "utf-8",
-          env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+          env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 20_000,
           maxBuffer: 8 * 1024 * 1024,
@@ -93,7 +94,7 @@ export function listGmail(
         ],
         {
           encoding: "utf-8",
-          env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+          env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 15_000,
           maxBuffer: 4 * 1024 * 1024,

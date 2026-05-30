@@ -385,9 +385,12 @@ management story, and quality benchmark against the Codex classifier.
 - `Mail.ReadWrite` is a broad delegated scope even though the code does not
   expose send/delete operations. The mitigation is code-level operation
   allow-listing plus reviewable absence of exposed send/delete call sites.
-- The local `.env` contains a refresh token. It is gitignored and the login
-  helper writes it with mode `0600`, but endpoint hardening is still an
-  endpoint-management responsibility.
+- The local `.env` contains a refresh token. It is gitignored, and the login
+  helpers `chmod` it to `0600` after every token write (the `writeFile` `mode`
+  option alone is a no-op on a pre-existing file, e.g. one created by
+  `cp .env.example .env`, so an explicit `chmod` is required). Endpoint
+  hardening of the host filesystem is still an endpoint-management
+  responsibility.
 - `OPENAI_API_KEY`, when configured for `RESIDUAL_CLASSIFIER=openai`, is also a
   local secret in `.env` and should be handled under the same endpoint-secret
   controls.

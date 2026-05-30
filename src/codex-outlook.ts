@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
+import { buildChildEnv } from "./child-env.js";
 import {
   CODEX_BIN,
   CODEX_MODEL,
@@ -58,7 +59,11 @@ function runCodexConnector(
         isolatedCwd,
         "-",
       ],
-      { stdio: ["pipe", "pipe", "pipe"], cwd: isolatedCwd },
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: isolatedCwd,
+        env: buildChildEnv(),
+      },
     );
     const finish = (fn: () => void): void => {
       if (settled) return;

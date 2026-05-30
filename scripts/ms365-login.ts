@@ -116,6 +116,10 @@ async function updateEnv(refreshToken: string) {
     ? body.replace(/^MS365_REFRESH_TOKEN=.*$/m, line)
     : body.replace(/\n?$/, `\n${line}\n`);
   await fs.writeFile(envPath, replaced, { mode: 0o600 });
+  // writeFile's `mode` only applies when it creates a new file; an existing
+  // .env (e.g. from `cp .env.example .env`) keeps its prior, possibly
+  // group/world-readable mode. Force private perms now that it holds a token.
+  await fs.chmod(envPath, 0o600);
 }
 
 main().catch((err) => {

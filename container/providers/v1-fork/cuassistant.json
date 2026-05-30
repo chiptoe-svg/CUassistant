@@ -24,7 +24,23 @@
 
   "_doc_mcp": "Host-side stdio MCP server. CUASSISTANT_REPO must point at the CUassistant checkout on the host (e.g. /Users/<user>/Documents/ClaudeWorkingFolder/Projects/CUassistant). NanoClaw v2 spawns this command from the host shell, not inside a container.",
 
-  "allowedTools": ["mcp__cuassistant__*"],
+  "allowedTools": [
+    "mcp__cuassistant__list-mail-messages",
+    "mcp__cuassistant__get-mail-message",
+    "mcp__cuassistant__list-calendar-events",
+    "mcp__cuassistant__get-calendar-event",
+    "mcp__cuassistant__get-calendar-view",
+    "mcp__cuassistant__list-todo-task-lists",
+    "mcp__cuassistant__list-todo-tasks",
+    "mcp__cuassistant__get-todo-task",
+    "mcp__cuassistant__create-todo-task",
+    "mcp__cuassistant__update-todo-task",
+    "mcp__cuassistant__delete-todo-task",
+    "mcp__cuassistant__trigger_scan",
+    "mcp__cuassistant__get_scan_status",
+    "mcp__cuassistant__get_pending_actions"
+  ],
+  "_doc_allowedTools": "Explicit allow-list of the currently-active tools only (no wildcard). The stub-pending-approval mail/calendar write tools (move-mail-message, update-mail-message, create-draft-email, create/update/delete/accept/decline/tentatively-accept-calendar-event) are intentionally omitted: activating them must be a deliberate review step that adds the exact tool name here, not an automatic grant via `mcp__cuassistant__*`.",
 
   "init": null,
 

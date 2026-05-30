@@ -88,6 +88,12 @@ const triggerScan: McpToolDefinition = {
   },
 };
 
+// Hard upper bound on rows any state-read tool will return, regardless of the
+// caller-supplied `n` or how wide a since_timestamp window is. Bounds memory
+// and response size so an MCP caller can't force a full unbounded read of
+// decisions.jsonl (CWE-770).
+const MAX_DECISION_ROWS = 1000;
+
 const getScanStatus: McpToolDefinition = {
   operation: "host.get_scan_status",
   tool: {
@@ -102,7 +108,8 @@ const getScanStatus: McpToolDefinition = {
         n: {
           type: "integer",
           description:
-            "Max rows to return when since_timestamp is not set (default 20).",
+            "Max rows to return when since_timestamp is not set (default 20, " +
+            "capped at 1000).",
         },
         since_timestamp: {
           type: "string",
@@ -150,7 +157,7 @@ const getPendingActions: McpToolDefinition = {
     }
     const sinceTimestamp = args.since_timestamp as string | undefined;
     const rows = readDecisions({
-      n: Number.MAX_SAFE_INTEGER,
+      n: MAX_DECISION_ROWS,
       sinceIso: sinceTimestamp,
     });
     const pending = rows.filter((r) => {
@@ -186,10 +193,10 @@ function readDecisions(opts: {
     }
     out.push(row);
   }
-  if (!opts.sinceIso) {
-    return out.slice(-opts.n);
-  }
-  return out;
+  // Always bound the result and return the most recent rows — even with a
+  // since_timestamp filter, a wide window must not stream the whole file.
+  const limit = Math.min(Math.max(1, opts.n), MAX_DECISION_ROWS);
+  return out.slice(-limit);
 }
 
 registerTools([triggerScan, getScanStatus, getPendingActions]);

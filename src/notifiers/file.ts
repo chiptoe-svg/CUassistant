@@ -33,6 +33,15 @@ registerNotifier({
       `\n===== ${stamp} =====\n` +
       (text.endsWith("\n") ? text : text + "\n") +
       `===== end ${stamp} =====\n`;
-    await fs.appendFile(LOG_PATH, entry);
+    await fs.appendFile(LOG_PATH, entry, { mode: 0o600 });
+    // appendFile's `mode` only applies when it creates the file; an existing
+    // log (or one created under a wider umask) keeps its prior mode. Force
+    // private perms so mail-derived task titles in the log can't be read by
+    // other local users. Best-effort — never fail a scan on log hardening.
+    try {
+      await fs.chmod(LOG_PATH, 0o600);
+    } catch {
+      /* best effort */
+    }
   },
 });

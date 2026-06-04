@@ -38,13 +38,65 @@
 // or read any state file. The first state read happens when a client
 // actually invokes a tool.
 
+import { randomUUID } from "crypto";
 import "./mcp-tools/index.js";
 import { startMcpServer } from "./mcp-tools/server.js";
+import { ApprovalGate } from "./approval/gate.js";
+import { makeSender } from "./approval/sender.js";
+import { gwsSend } from "./approval/gws-sender.js";
+import { startTelegramApproval } from "./notifiers/telegram-approval.js";
+import type { ApprovalChannel } from "./approval/types.js";
+import { __setGate } from "./mcp-tools/mail-send.js";
+import {
+  SEND_APPROVAL_TTL_MS,
+  SEND_APPROVAL_MAX_OUTSTANDING,
+  SEND_APPROVAL_RATE_PER_HOUR,
+  SEND_INTERNAL_DOMAINS,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_APPROVER_USER_ID,
+} from "./config.js";
 
 function log(msg: string): void {
   process.stderr.write(`[cuassistant-mcp] ${msg}\n`);
 }
 
+function initApprovalGate(): void {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_APPROVER_USER_ID) {
+    process.stderr.write(
+      "[cuassistant-mcp] send-approval disabled (TELEGRAM_BOT_TOKEN / TELEGRAM_APPROVER_USER_ID unset)\n",
+    );
+    return;
+  }
+  const sender = makeSender({ gmail: gwsSend });
+  const noop: ApprovalChannel = { async post() {} };
+  const gate = new ApprovalGate(
+    {
+      sender,
+      channel: noop,
+      clock: { now: () => Date.now() },
+      idGen: { generate: () => randomUUID() },
+    },
+    {
+      ttlMs: SEND_APPROVAL_TTL_MS,
+      maxOutstanding: SEND_APPROVAL_MAX_OUTSTANDING,
+      rateLimitPerHour: SEND_APPROVAL_RATE_PER_HOUR,
+      internalDomains: SEND_INTERNAL_DOMAINS,
+      authorizedUserId: TELEGRAM_APPROVER_USER_ID,
+    },
+  );
+  const channel = startTelegramApproval(
+    {
+      botToken: TELEGRAM_BOT_TOKEN,
+      authorizedUserId: TELEGRAM_APPROVER_USER_ID,
+      internalDomains: SEND_INTERNAL_DOMAINS,
+    },
+    gate,
+  );
+  gate.setChannel(channel);
+  __setGate(gate);
+}
+
+initApprovalGate();
 startMcpServer().catch((err) => {
   log(`server error: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

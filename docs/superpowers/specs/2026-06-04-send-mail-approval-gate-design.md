@@ -72,7 +72,7 @@ User tap ──▶ Telegram receiver ──▶ gate: match id + user ─▶ ✅ 
 | `src/notifiers/telegram.ts` | Posts the approval message; receiver loop (Bot API long-poll/webhook) for the tap/reply. Fits existing notifier registry. | new |
 | `src/ms365.ts` | Add `sendMail()` → `POST /me/sendMail` (needs `Mail.Send`). | +1 helper |
 | `src/mcp-tools/permissions.ts` | Register operation `mail.send_with_approval`. | +entry |
-| `policy/action-policy.yaml` | `mail.send_with_approval: approval: human_required` (the gate is that mechanism; ties off finding #14). | +entry |
+| `policy/action-policy.yaml` | `mail.send_with_approval: approval: none` — exposes the *submit* tool (the codebase's exposure model treats `none` as "callable"). The human gate is the **runtime Telegram approval**, not this static field; a `requires_runtime_human_approval` note documents intent (ties off finding #14). | +entry |
 
 ### Design-for-isolation
 

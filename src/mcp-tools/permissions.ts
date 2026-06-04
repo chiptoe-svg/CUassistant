@@ -170,6 +170,11 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "host.get_pending_actions",
   },
+  "mail.send_with_approval": {
+    backend: "host-state",
+    status: "active",
+    policyActionId: "mail.send_with_approval",
+  },
 };
 
 export class McpPermissionDeniedError extends Error {

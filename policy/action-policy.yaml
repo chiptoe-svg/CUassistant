@@ -252,6 +252,18 @@ actions:
     constraints:
       - disabled_by_default
 
+  - id: mail.send_with_approval
+    surface: mail
+    risk: high
+    reversibility: irreversible
+    approval: none          # "none" = the agent may SUBMIT a request; the
+                            # human gate is enforced at runtime by the Telegram
+                            # approval, not by this static field.
+    # NOTE: the runtime human-approval + frozen-artifact controls are enforced
+    # in code (ApprovalGate), not as policy constraints.
+    constraints:
+      - own_mailbox_only
+
 audit_requirements:
   before_action:
     - timestamp

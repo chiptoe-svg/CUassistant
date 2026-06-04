@@ -44,6 +44,7 @@ over Telegram, and executes the send **only** on the user's explicit tap.
 | Restart behavior | In-memory store, **fail-closed** — restart cancels all pending; agent re-requests. |
 | External recipients | Flagged (⚠️) in the approval message for any non-`clemson.edu` address. |
 | Telegram bot | Dedicated-vs-shared channel **deferred**; lives entirely behind `notifiers/telegram.ts`. |
+| Send backend | **Account-aware**: MS365 → Graph `sendMail` (`Mail.Send`); Gmail → `gws` (`gmail.send`). v1 can ship on the `gws` sender, **decoupling from the MS365 `Mail.Send`/admin-consent dependency**. |
 
 ## Architecture
 
@@ -79,7 +80,7 @@ User tap ──▶ Telegram receiver ──▶ gate: match id + user ─▶ ✅ 
 in isolation and free of transport assumptions:
 
 - **notifier** — post approval message + deliver taps
-- **sender** — `ms365.sendMail`
+- **sender** — dispatches by the artifact's `account`: MS365 → `ms365.sendMail` (Graph, `Mail.Send`); Gmail → `gws` send (Google `gmail.send`)
 - **clock** — now / TTL evaluation
 - **id generator** — high-entropy `request_id`
 
@@ -88,6 +89,7 @@ in isolation and free of transport assumptions:
 ```
 PendingSend {
   request_id        // high-entropy random token; opaque to the agent; used as the Telegram callback token
+  account           // sending mailbox: "ms365" | "gmail" — selects the sender backend
   to, cc?, subject, body, contentType   // FROZEN artifact — exactly what will send
   content_hash      // hash of the frozen artifact (logged; makes approved==sent auditable)
   proposer          // "agent:<id>" | "scan"  — audit + B→A future
@@ -168,8 +170,12 @@ prominently. Any recipient outside the configured internal-domain allowlist (def
 
 ## Dependencies
 
-- **`Mail.Send`** delegated scope on the GCassistant app — a 6th permission (small IT ask).
-  Reverses "no send by design" → "send, but only behind the gate."
+- **Sending from MS365** needs the **`Mail.Send`** delegated scope on the GCassistant app — a 6th
+  permission (IT ask), reversing "no send by design" → "send, but only behind the gate." **Not
+  required for v1** if sending starts with Gmail.
+- **Sending from Gmail** uses `gws` (`gmail.send` scope) — independent of Microsoft. Requires a
+  working `gws` auth that includes the send scope (the current `gws` token is expired → re-auth
+  needed). This is the **lower-friction path to ship the gate**, decoupled from MS admin-consent.
 - **Telegram bot** — dedicated-vs-shared decision deferred; isolated behind `notifiers/telegram.ts`.
   Its token is a host-side secret under the same handling as other secrets (0600, excluded from
   transfer bundle).
@@ -200,6 +206,7 @@ tap `{token, user_id}`); fake sender (records calls, succeed/throw); controllabl
 **Cross-cutting assertions:**
 
 - Fail-closed: in every non-`sent` path, sender port never invoked.
+- Account dispatch: an `ms365` artifact routes to the Graph sender, a `gmail` artifact to the `gws` sender.
 - Integrity: sent payload deep-equals frozen artifact; `content_hash` matches.
 - Anti-abuse: request beyond rate limit / outstanding-cap refused; no pending created.
 - External flag: approval message marks non-`clemson.edu` recipients.

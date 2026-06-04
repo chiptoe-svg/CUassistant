@@ -109,3 +109,23 @@ export const GRAPH_CLI_REFRESH_TOKEN =
   process.env.GRAPH_CLI_REFRESH_TOKEN || "";
 
 export const GWS_BIN = process.env.GWS_BIN || "";
+
+// --- Send-mail approval gate ---
+export const SEND_APPROVAL_TTL_MS = Number(
+  process.env.SEND_APPROVAL_TTL_MS || 3_600_000,
+);
+export const SEND_APPROVAL_MAX_OUTSTANDING = Number(
+  process.env.SEND_APPROVAL_MAX_OUTSTANDING || 5,
+);
+export const SEND_APPROVAL_RATE_PER_HOUR = Number(
+  process.env.SEND_APPROVAL_RATE_PER_HOUR || 10,
+);
+export const SEND_INTERNAL_DOMAINS = (
+  process.env.SEND_INTERNAL_DOMAINS || "clemson.edu"
+)
+  .split(",")
+  .map((d) => d.trim())
+  .filter(Boolean);
+export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+export const TELEGRAM_APPROVER_USER_ID =
+  process.env.TELEGRAM_APPROVER_USER_ID || "";

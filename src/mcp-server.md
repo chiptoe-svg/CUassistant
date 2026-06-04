@@ -63,6 +63,8 @@ accompanies the Graph CLI permission request to IT.
 | `trigger_scan`                      | `host.trigger_scan`                 | `host.trigger_scan`              | host (runs scan.ts)    | scan flow's existing scopes | no: policy-blocked |
 | `get_scan_status`                   | `host.get_scan_status`              | `host.get_scan_status`           | host (state file read) | none                        | yes                |
 | `get_pending_actions`               | `host.get_pending_actions`          | `host.get_pending_actions`       | host (state file read) | none                        | yes                |
+| `request_send_mail`                 | `mail.send_with_approval`           | `mail.send_with_approval`        | host gate + gws/Graph  | gmail.send / Mail.Send      | yes: runtime human approval |
+| `get_send_status`                   | `mail.send_with_approval`           | `mail.send_with_approval`        | host gate              | —                           | yes |
 
 ## Tool details
 

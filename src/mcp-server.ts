@@ -36,7 +36,10 @@
 // This entry point only loads tool modules (which call registerTools) and
 // connects the stdio transport. It does not trigger a scan, refresh tokens,
 // or read any state file. The first state read happens when a client
-// actually invokes a tool.
+// actually invokes a tool. When the Telegram approval gate is configured
+// (TELEGRAM_BOT_TOKEN and TELEGRAM_APPROVER_USER_ID set), startup also
+// starts a background Telegram long-poll receiver — the only startup side
+// effect, and only when those env vars are set.
 
 import { randomUUID } from "crypto";
 import "./mcp-tools/index.js";

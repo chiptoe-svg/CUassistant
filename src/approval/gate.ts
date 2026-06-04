@@ -118,6 +118,7 @@ export class ApprovalGate {
   }
 
   reject(request_id: string, userId: string, feedback?: string): void {
+    this.sweepExpired();
     if (userId !== this.config.authorizedUserId) return;
     const req = this.pending.get(request_id);
     if (!req || req.status !== "pending") return;

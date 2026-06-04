@@ -51,3 +51,8 @@ export interface GateConfig {
   internalDomains: string[];
   authorizedUserId: string;
 }
+
+/** Receives the PendingSend after each gate state transition for audit logging. */
+export interface AuditSink {
+  record(req: PendingSend): void;
+}

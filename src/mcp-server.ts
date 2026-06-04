@@ -50,6 +50,7 @@ import { gwsSend } from "./approval/gws-sender.js";
 import { startTelegramApproval } from "./notifiers/telegram-approval.js";
 import type { ApprovalChannel } from "./approval/types.js";
 import { __setGate } from "./mcp-tools/mail-send.js";
+import { makeGateAuditSink } from "./approval/audit-sink.js";
 import {
   SEND_APPROVAL_TTL_MS,
   SEND_APPROVAL_MAX_OUTSTANDING,
@@ -78,6 +79,7 @@ function initApprovalGate(): void {
       channel: noop,
       clock: { now: () => Date.now() },
       idGen: { generate: () => randomUUID() },
+      audit: makeGateAuditSink(),
     },
     {
       ttlMs: SEND_APPROVAL_TTL_MS,

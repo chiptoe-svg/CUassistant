@@ -200,3 +200,41 @@ test("rate limit is enforced before the outstanding cap when both would fire", a
   await gate.submit(artifact, "a");
   await assert.rejects(() => gate.submit(artifact, "a"), /rate_limited/);
 });
+
+test("gate emits an audit intent row on submit and a terminal row on send", async () => {
+  const events: Array<{ status: string }> = [];
+  const f = fakes();
+  const gate = new ApprovalGate(
+    { ...f, audit: { record: (r) => events.push({ status: r.status }) } },
+    cfg,
+  );
+  const { request_id } = await gate.submit(artifact, "a");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].status, "pending");
+  await gate.approve(request_id, "user-1");
+  assert.equal(events.length, 2);
+  assert.equal(events[1].status, "sent");
+});
+
+test("gate audits a terminal row on reject and on expiry", async () => {
+  const rejected: Array<{ status: string }> = [];
+  const f1 = fakes();
+  const g1 = new ApprovalGate(
+    { ...f1, audit: { record: (r) => rejected.push({ status: r.status }) } },
+    cfg,
+  );
+  const r1 = await g1.submit(artifact, "a");
+  g1.reject(r1.request_id, "user-1", "no");
+  assert.equal(rejected.at(-1)?.status, "rejected");
+
+  const expired: Array<{ status: string }> = [];
+  const f2 = fakes();
+  const g2 = new ApprovalGate(
+    { ...f2, audit: { record: (r) => expired.push({ status: r.status }) } },
+    cfg,
+  );
+  await g2.submit(artifact, "a");
+  f2.advance(cfg.ttlMs + 1);
+  g2.getStatus("anything"); // triggers sweepExpired
+  assert.equal(expired.at(-1)?.status, "expired");
+});

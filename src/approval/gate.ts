@@ -1,6 +1,7 @@
 import { hashArtifact, externalRecipients } from "./freeze.js";
 import type {
   ApprovalChannel,
+  AuditSink,
   Clock,
   GateConfig,
   IdGen,
@@ -26,6 +27,7 @@ interface Ports {
   channel: ApprovalChannel;
   clock: Clock;
   idGen: IdGen;
+  audit?: AuditSink;
 }
 
 const HOUR_MS = 3_600_000;
@@ -77,6 +79,7 @@ export class ApprovalGate {
     };
     this.pending.set(request_id, req);
     this.submitTimes.push(now);
+    this.ports.audit?.record(req);
 
     const externals = externalRecipients(artifact, this.config.internalDomains);
     try {
@@ -84,6 +87,7 @@ export class ApprovalGate {
     } catch (e) {
       req.status = "failed";
       req.error = `notify_failed: ${String(e)}`;
+      this.ports.audit?.record(req);
       return { request_id, status: "failed" };
     }
     return { request_id, status: "pending" };
@@ -118,6 +122,7 @@ export class ApprovalGate {
       req.status = "failed";
       req.error = String(e);
     }
+    this.ports.audit?.record(req);
   }
 
   reject(request_id: string, userId: string, feedback?: string): void {
@@ -127,6 +132,7 @@ export class ApprovalGate {
     if (!req || req.status !== "pending") return;
     req.status = "rejected";
     if (feedback) req.feedback = feedback;
+    this.ports.audit?.record(req);
   }
 
   private sweepExpired(): void {
@@ -134,6 +140,7 @@ export class ApprovalGate {
     for (const req of this.pending.values()) {
       if (req.status === "pending" && now >= req.expires_at) {
         req.status = "expired";
+        this.ports.audit?.record(req);
       }
     }
   }

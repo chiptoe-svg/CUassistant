@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { requestSendMail, getSendStatus, __setGate } from "../src/mcp-tools/mail-send.ts";
+import {
+  requestSendMail,
+  getSendStatus,
+  __setGate,
+} from "../src/mcp-tools/mail-send.ts";
 
 function fakeGate() {
   return {
@@ -9,7 +13,7 @@ function fakeGate() {
       return { request_id: "req1", status: "pending" as const };
     },
     getStatus(id: string) {
-      return id === "req1" ? ({ status: "pending" as const }) : null;
+      return id === "req1" ? { status: "pending" as const } : null;
     },
   };
 }
@@ -29,7 +33,12 @@ test("request_send_mail validates and returns a request_id", async () => {
 
 test("request_send_mail rejects missing recipients", async () => {
   __setGate(fakeGate() as never);
-  const res = await requestSendMail.handler({ account: "gmail", to: [], subject: "s", body: "b" });
+  const res = await requestSendMail.handler({
+    account: "gmail",
+    to: [],
+    subject: "s",
+    body: "b",
+  });
   assert.equal(res.isError, true);
 });
 

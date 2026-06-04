@@ -82,7 +82,11 @@ async function pollLoop(
       const r = await fetch(api("getUpdates"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offset, timeout: 25, allowed_updates: ["callback_query"] }),
+        body: JSON.stringify({
+          offset,
+          timeout: 25,
+          allowed_updates: ["callback_query"],
+        }),
       });
       const data = (await r.json()) as {
         result?: Array<{

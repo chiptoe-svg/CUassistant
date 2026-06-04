@@ -4,8 +4,18 @@ import test from "node:test";
 import { makeSender } from "../src/approval/sender.js";
 import type { SendArtifact } from "../src/approval/types.js";
 
-const gmail: SendArtifact = { account: "gmail", to: ["a@x.com"], subject: "s", body: "b" };
-const ms365: SendArtifact = { account: "ms365", to: ["a@x.com"], subject: "s", body: "b" };
+const gmail: SendArtifact = {
+  account: "gmail",
+  to: ["a@x.com"],
+  subject: "s",
+  body: "b",
+};
+const ms365: SendArtifact = {
+  account: "ms365",
+  to: ["a@x.com"],
+  subject: "s",
+  body: "b",
+};
 
 test("dispatches gmail to the gws backend", async () => {
   const calls: SendArtifact[] = [];

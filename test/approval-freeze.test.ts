@@ -13,7 +13,10 @@ const base: SendArtifact = {
 
 test("hashArtifact is stable for identical artifacts and changes with content", () => {
   assert.equal(hashArtifact(base), hashArtifact({ ...base }));
-  assert.notEqual(hashArtifact(base), hashArtifact({ ...base, body: "Changed" }));
+  assert.notEqual(
+    hashArtifact(base),
+    hashArtifact({ ...base, body: "Changed" }),
+  );
 });
 
 test("externalRecipients flags only non-internal domains", () => {

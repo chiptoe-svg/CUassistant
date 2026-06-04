@@ -47,7 +47,10 @@ export class ApprovalGate {
     this.ports.channel = channel;
   }
 
-  async submit(artifact: SendArtifact, proposer: string): Promise<SubmitResult> {
+  async submit(
+    artifact: SendArtifact,
+    proposer: string,
+  ): Promise<SubmitResult> {
     this.sweepExpired();
     const now = this.ports.clock.now();
 

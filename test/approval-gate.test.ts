@@ -190,7 +190,11 @@ test("rejecting an already-expired request yields expired, not rejected", async 
 
 test("rate limit is enforced before the outstanding cap when both would fire", async () => {
   const f = fakes();
-  const gate = new ApprovalGate(f, { ...cfg, maxOutstanding: 3, rateLimitPerHour: 3 });
+  const gate = new ApprovalGate(f, {
+    ...cfg,
+    maxOutstanding: 3,
+    rateLimitPerHour: 3,
+  });
   await gate.submit(artifact, "a");
   await gate.submit(artifact, "a");
   await gate.submit(artifact, "a");

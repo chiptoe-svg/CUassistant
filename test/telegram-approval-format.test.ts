@@ -28,7 +28,10 @@ test("approval message includes recipients, subject, body, and flags externals",
 });
 
 test("long bodies are truncated with a marker", () => {
-  const long = { ...req, artifact: { ...req.artifact, body: "x".repeat(5000) } };
+  const long = {
+    ...req,
+    artifact: { ...req.artifact, body: "x".repeat(5000) },
+  };
   const msg = formatApprovalMessage(long, []);
   assert.match(msg, /truncated, 5000 chars total/);
   assert.ok(msg.length < 4096);

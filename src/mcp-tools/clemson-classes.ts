@@ -4,7 +4,11 @@
 // no Microsoft consent are involved; the only backend is the public Banner
 // self-service search at regssb.sis.clemson.edu (see src/clemson-classes.ts).
 
-import { listClemsonTerms, searchClemsonClasses } from "../clemson-classes.js";
+import {
+  getClemsonSectionDetails,
+  listClemsonTerms,
+  searchClemsonClasses,
+} from "../clemson-classes.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -103,4 +107,44 @@ const searchClasses: McpToolDefinition = {
   },
 };
 
-registerTools([listTerms, searchClasses]);
+const sectionDetails: McpToolDefinition = {
+  operation: "clemson.section_details",
+  tool: {
+    name: "get-clemson-section-details",
+    description:
+      "Get catalog detail for one section by term + CRN: course " +
+      "description, prerequisites, corequisites, restrictions, section " +
+      "attributes, and a bookstore link for required materials. Read-only, " +
+      "no login. Get the CRN from search-clemson-classes. (There is no " +
+      "parsed textbook list — Banner only exposes a bookstore URL.)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        term: {
+          type: "string",
+          description: "Term code, e.g. 202608 (Fall 2026).",
+        },
+        crn: {
+          type: "string",
+          description: "Course Reference Number, e.g. 85865.",
+        },
+      },
+      required: ["term", "crn"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("clemson.section_details");
+    } catch (e) {
+      return permissionErr(e);
+    }
+    const term = args.term as string | undefined;
+    const crn = args.crn as string | undefined;
+    if (!term || !crn) return err("term and crn are required");
+    const details = await getClemsonSectionDetails(term, crn);
+    if (details === null) return err("Clemson section details unavailable.");
+    return okJson(details);
+  },
+};
+
+registerTools([listTerms, searchClasses, sectionDetails]);

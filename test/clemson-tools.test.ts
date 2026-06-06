@@ -12,11 +12,17 @@ import {
 test("clemson public class tools are exposed", () => {
   assert.equal(isMcpOperationExposed("clemson.list_terms"), true);
   assert.equal(isMcpOperationExposed("clemson.search_classes"), true);
+  assert.equal(isMcpOperationExposed("clemson.section_details"), true);
 });
 
 test("clemson tools pass the policy gate", () => {
   assert.doesNotThrow(() => assertMcpOperation("clemson.list_terms"));
   assert.doesNotThrow(() =>
     assertMcpOperation("clemson.search_classes", { input: { term: "202608" } }),
+  );
+  assert.doesNotThrow(() =>
+    assertMcpOperation("clemson.section_details", {
+      input: { term: "202608", crn: "85865" },
+    }),
   );
 });

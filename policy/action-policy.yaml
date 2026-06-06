@@ -282,6 +282,14 @@ actions:
     constraints:
       - public_data_only
 
+  - id: clemson.section_details
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
 audit_requirements:
   before_action:
     - timestamp

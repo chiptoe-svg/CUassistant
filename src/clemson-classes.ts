@@ -252,3 +252,96 @@ export async function searchClemsonClasses(
     return null;
   }
 }
+
+// --- Per-section detail (description, prereqs, coreqs, restrictions, books) ---
+
+export interface ClemsonSectionDetails {
+  term: string;
+  crn: string;
+  description: string | null;
+  prerequisites: string | null;
+  corequisites: string | null;
+  restrictions: string | null;
+  attributes: string | null;
+  bookstoreUrl: string | null;
+}
+
+function htmlToText(html: string): string | null {
+  let t = html.replace(/<!--[\s\S]*?-->/g, "");
+  // Banner returns an error shell for endpoints that don't apply.
+  if (/page is not available/i.test(t)) return null;
+  t = t
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t || null;
+}
+
+// Collapse Banner's "no X information available" placeholders to null.
+function meaningful(text: string | null): string | null {
+  if (!text) return null;
+  if (/^(no .*information( is)? available\.?|none\.?)$/i.test(text))
+    return null;
+  return text;
+}
+
+async function postDetail(
+  jar: CookieJar,
+  endpoint: string,
+  term: string,
+  crn: string,
+): Promise<string> {
+  const r = await fetch(`${SSB}/searchResults/${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: jar.header(),
+    },
+    body: `term=${encodeURIComponent(term)}&courseReferenceNumber=${encodeURIComponent(crn)}`,
+  });
+  return r.ok ? await r.text() : "";
+}
+
+function bookstoreUrl(html: string): string | null {
+  // Prefer the populated link over the "{0}" template the page also emits.
+  const hrefs = [...html.matchAll(/href="([^"]+)"/gi)].map((m) => m[1]);
+  const real = hrefs.find((h) => h.startsWith("http") && !h.includes("{"));
+  return real ? real.replace(/&amp;/g, "&") : null;
+}
+
+export async function getClemsonSectionDetails(
+  term: string,
+  crn: string,
+): Promise<ClemsonSectionDetails | null> {
+  try {
+    const jar = await openSession(term);
+    if (!jar) return null;
+    const [desc, preq, coreq, restr, attrs, books] = await Promise.all([
+      postDetail(jar, "getCourseDescription", term, crn),
+      postDetail(jar, "getSectionPrerequisites", term, crn),
+      postDetail(jar, "getCorequisites", term, crn),
+      postDetail(jar, "getRestrictions", term, crn),
+      postDetail(jar, "getSectionAttributes", term, crn),
+      postDetail(jar, "getSectionBookstoreDetails", term, crn),
+    ]);
+    return {
+      term,
+      crn,
+      description: meaningful(htmlToText(desc)),
+      prerequisites: meaningful(htmlToText(preq)),
+      corequisites: meaningful(htmlToText(coreq)),
+      restrictions: meaningful(htmlToText(restr)),
+      attributes: meaningful(htmlToText(attrs)),
+      bookstoreUrl: bookstoreUrl(books),
+    };
+  } catch (err) {
+    log.warn("clemson section details failed", { err: String(err) });
+    return null;
+  }
+}

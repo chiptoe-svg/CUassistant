@@ -198,6 +198,11 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "clemson.instructor_classes",
   },
+  "clemson.room_availability": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.room_availability",
+  },
 };
 
 export class McpPermissionDeniedError extends Error {

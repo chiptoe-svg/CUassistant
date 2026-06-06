@@ -6,6 +6,7 @@
 
 import {
   findClemsonInstructorClasses,
+  getClemsonRoomAvailability,
   getClemsonSectionDetails,
   listClemsonTerms,
   searchClemsonClasses,
@@ -217,4 +218,96 @@ const instructorClasses: McpToolDefinition = {
   },
 };
 
-registerTools([listTerms, searchClasses, sectionDetails, instructorClasses]);
+const roomAvailability: McpToolDefinition = {
+  operation: "clemson.room_availability",
+  tool: {
+    name: "get-clemson-room-availability",
+    description:
+      "Show when a classroom is free vs. occupied on a day pattern, derived " +
+      "from scheduled classes. Give building (e.g. 'Godfrey'), room (e.g. " +
+      "'205'), semester (code or text), and an optional day pattern (default " +
+      "'MW' — a free slot is open on ALL listed days). Returns busy blocks " +
+      "(with the courses) and free blocks within a day window (default " +
+      "08:00-22:00). Classes only — ad-hoc 25Live events are NOT included " +
+      "(25Live's public API doesn't expose most rooms). Pass `subject` (the " +
+      "department that owns the room, e.g. GC for Godfrey) — that's one fast, " +
+      "reliable request. Without it the tool scans the whole term (~20 " +
+      "requests) which is slower and can be rate-limited by Banner.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        building: {
+          type: "string",
+          description: "Building name or fragment, e.g. 'Godfrey'.",
+        },
+        room: { type: "string", description: "Room number, e.g. '205'." },
+        term: {
+          type: "string",
+          description: "Term code (202608) or text ('Fall 2026').",
+        },
+        days: {
+          type: "string",
+          description:
+            "Day pattern using M T W R F S U, e.g. 'MW', 'TR', 'MWF'. " +
+            "Default 'MW'. Free slots are open on every day listed.",
+        },
+        subject: {
+          type: "string",
+          description:
+            "Optional subject (e.g. GC) to scope the scan — faster, but only " +
+            "counts that department's classes in the room.",
+        },
+        dayStart: {
+          type: "string",
+          description: "Window start as HHMM, default 0800.",
+        },
+        dayEnd: {
+          type: "string",
+          description: "Window end as HHMM, default 2200.",
+        },
+        minMinutes: {
+          type: "integer",
+          description: "Ignore free gaps shorter than this (default 50).",
+        },
+      },
+      required: ["building", "room", "term"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("clemson.room_availability");
+    } catch (e) {
+      return permissionErr(e);
+    }
+    const building = args.building as string | undefined;
+    const room = args.room as string | undefined;
+    const term = args.term as string | undefined;
+    if (!building || !room || !term)
+      return err("building, room, and term are required");
+    const result = await getClemsonRoomAvailability({
+      building,
+      room,
+      term,
+      days: args.days as string | undefined,
+      subject: args.subject as string | undefined,
+      dayStart: args.dayStart as string | undefined,
+      dayEnd: args.dayEnd as string | undefined,
+      minMinutes:
+        typeof args.minMinutes === "number" ? args.minMinutes : undefined,
+    });
+    if (result === null) {
+      return err(
+        "Could not resolve the term, or the Clemson lookup was unavailable.",
+      );
+    }
+    return okJson(result);
+  },
+};
+
+registerTools([
+  listTerms,
+  searchClasses,
+  sectionDetails,
+  instructorClasses,
+  roomAvailability,
+]);

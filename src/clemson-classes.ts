@@ -443,29 +443,56 @@ const PAGE_SIZE = 500;
 const MAX_PAGES = 40;
 
 async function fetchSectionsPaged(
-  jar: CookieJar,
   term: string,
   subject: string | undefined,
   openOnly: boolean | undefined,
+  attempts = 4,
 ): Promise<{ sections: ClemsonSection[]; complete: boolean } | null> {
-  const out: ClemsonSection[] = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const res = await runSearch(jar, {
-      term,
-      subject,
-      openOnly,
-      offset: page * PAGE_SIZE,
-      max: PAGE_SIZE,
-    });
-    if (res === null)
-      return out.length ? { sections: out, complete: false } : null;
-    out.push(...res.sections);
-    if (out.length >= res.totalCount || res.sections.length === 0) {
-      return { sections: out, complete: true };
+  // NB: Banner's searchResults is stateful per session — the first query on a
+  // session fixes the result set, and offset paging walks it. Do NOT issue any
+  // other search (e.g. a probe) on the same session first; that resets the set
+  // and breaks paging. So each attempt opens a fresh session and pages the real
+  // query directly. A first page with totalCount=0 means the term didn't bind
+  // (cold session) — retry with a new session rather than report "no results".
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const jar = await openSession(term);
+    if (!jar) {
+      await sleep(400);
+      continue;
     }
-    await sleep(200);
+    const out: ClemsonSection[] = [];
+    let failed = false;
+    let cold = false;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await runSearch(jar, {
+        term,
+        subject,
+        openOnly,
+        offset: page * PAGE_SIZE,
+        max: PAGE_SIZE,
+      });
+      if (res === null) {
+        failed = true;
+        break;
+      }
+      if (page === 0 && res.totalCount === 0 && res.sections.length === 0) {
+        cold = true;
+        break;
+      }
+      out.push(...res.sections);
+      if (out.length >= res.totalCount || res.sections.length === 0) {
+        return { sections: out, complete: true };
+      }
+      await sleep(200);
+    }
+    if (cold || (failed && out.length === 0)) {
+      await sleep(400);
+      continue;
+    }
+    // Partial failure mid-scan: return what we have, marked incomplete.
+    return { sections: out, complete: false };
   }
-  return { sections: out, complete: false };
+  return null;
 }
 
 export async function findClemsonInstructorClasses(params: {
@@ -512,8 +539,9 @@ export async function findClemsonInstructorClasses(params: {
     const matched = pool[0];
 
     // List sections (subject-scoped when provided) and filter by faculty name.
+    // fetchSectionsPaged opens its own retrying session; the faculty filter is
+    // client-side, so it doesn't need the get_instructor-primed lookup jar.
     const fetched = await fetchSectionsPaged(
-      jar,
       resolved.code,
       params.subject,
       params.openOnly,
@@ -534,6 +562,172 @@ export async function findClemsonInstructorClasses(params: {
     return { ...base, matched, sections: limited, note };
   } catch (err) {
     log.warn("clemson instructor classes failed", { err: String(err) });
+    return null;
+  }
+}
+
+// --- Room availability (class occupancy from Banner) ---
+
+const DAY_LETTER_TO_KEY: Record<string, string> = {
+  M: "monday",
+  T: "tuesday",
+  W: "wednesday",
+  R: "thursday",
+  F: "friday",
+  S: "saturday",
+  U: "sunday",
+};
+
+function toMinutes(hhmm: string | null): number | null {
+  if (!hhmm || hhmm.length < 3) return null;
+  const h = parseInt(hhmm.slice(0, 2), 10);
+  const m = parseInt(hhmm.slice(2), 10);
+  return Number.isNaN(h) || Number.isNaN(m) ? null : h * 60 + m;
+}
+
+function fromMinutes(m: number): string {
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+export interface ClemsonBusyBlock {
+  start: string;
+  end: string;
+  courses: string[];
+}
+
+export interface ClemsonFreeBlock {
+  start: string;
+  end: string;
+  minutes: number;
+}
+
+export interface ClemsonRoomAvailability {
+  term: string;
+  termDescription: string;
+  building: string;
+  room: string;
+  /** Day pattern evaluated, e.g. "MW" — free slots are open on ALL of these. */
+  pattern: string;
+  window: { start: string; end: string };
+  busy: ClemsonBusyBlock[];
+  free: ClemsonFreeBlock[];
+  note: string | null;
+}
+
+// Free/busy for a room on a day pattern (e.g. MW), derived from scheduled
+// classes. A slot is "free" only if the room has no class at that time on ANY
+// day in the pattern, so a meeting on any pattern day blocks the slot (busy is
+// the union across those days). Classes only — ad-hoc 25Live events are not
+// included (25Live's public API does not expose most rooms).
+export async function getClemsonRoomAvailability(params: {
+  term: string;
+  building: string;
+  room: string;
+  days?: string;
+  subject?: string;
+  dayStart?: string;
+  dayEnd?: string;
+  minMinutes?: number;
+}): Promise<ClemsonRoomAvailability | null> {
+  try {
+    const resolved = await resolveTerm(params.term);
+    if (!resolved) return null;
+    const fetched = await fetchSectionsPaged(
+      resolved.code,
+      params.subject,
+      undefined,
+    );
+    if (fetched === null) return null;
+
+    const pattern = (params.days || "MW")
+      .toUpperCase()
+      .replace(/[^MTWRFSU]/g, "");
+    const winStart = toMinutes(params.dayStart || "0800") ?? 8 * 60;
+    const winEnd = toMinutes(params.dayEnd || "2200") ?? 22 * 60;
+    const minMinutes = params.minMinutes ?? 50;
+    const bldg = params.building.toLowerCase();
+
+    type Interval = { s: number; e: number; course: string };
+    const intervals: Interval[] = [];
+    for (const s of fetched.sections) {
+      for (const m of s.meetings) {
+        if (!m.building || !m.building.toLowerCase().includes(bldg)) continue;
+        if ((m.room || "") !== params.room) continue;
+        // Only meetings that fall on a day in the pattern matter.
+        const onPattern = pattern
+          .split("")
+          .some((d) => m.days.includes(d) && DAY_LETTER_TO_KEY[d]);
+        if (!onPattern) continue;
+        const bs = toMinutes(m.beginTime);
+        const be = toMinutes(m.endTime);
+        if (bs === null || be === null) continue;
+        intervals.push({
+          s: bs,
+          e: be,
+          course: `${s.subjectCourse}-${s.section}`,
+        });
+      }
+    }
+    intervals.sort((a, b) => a.s - b.s || a.e - b.e);
+
+    const merged: { s: number; e: number; courses: Set<string> }[] = [];
+    for (const iv of intervals) {
+      const last = merged[merged.length - 1];
+      if (last && iv.s <= last.e) {
+        last.e = Math.max(last.e, iv.e);
+        last.courses.add(iv.course);
+      } else {
+        merged.push({ s: iv.s, e: iv.e, courses: new Set([iv.course]) });
+      }
+    }
+    const busy: ClemsonBusyBlock[] = merged.map((b) => ({
+      start: fromMinutes(b.s),
+      end: fromMinutes(b.e),
+      courses: [...b.courses].sort(),
+    }));
+
+    const free: ClemsonFreeBlock[] = [];
+    let cur = winStart;
+    for (const b of merged) {
+      if (b.s > cur) {
+        const end = Math.min(b.s, winEnd);
+        if (end > cur)
+          free.push({
+            start: fromMinutes(cur),
+            end: fromMinutes(end),
+            minutes: end - cur,
+          });
+      }
+      cur = Math.max(cur, b.e);
+      if (cur >= winEnd) break;
+    }
+    if (cur < winEnd) {
+      free.push({
+        start: fromMinutes(cur),
+        end: fromMinutes(winEnd),
+        minutes: winEnd - cur,
+      });
+    }
+
+    const note = params.subject
+      ? `Scoped to subject ${params.subject.toUpperCase()} (classes only); other subjects in this room are not included.`
+      : fetched.complete
+        ? "Full-term scan, all subjects (scheduled classes only; excludes ad-hoc 25Live events)."
+        : "Full-term scan was truncated; results may be incomplete.";
+
+    return {
+      term: resolved.code,
+      termDescription: resolved.description,
+      building: params.building,
+      room: params.room,
+      pattern,
+      window: { start: fromMinutes(winStart), end: fromMinutes(winEnd) },
+      busy,
+      free: free.filter((f) => f.minutes >= minMinutes),
+      note,
+    };
+  } catch (err) {
+    log.warn("clemson room availability failed", { err: String(err) });
     return null;
   }
 }

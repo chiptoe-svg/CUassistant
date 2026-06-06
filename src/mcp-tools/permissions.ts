@@ -23,8 +23,10 @@ export interface McpOperationSpec {
   /**
    * The backend that fulfills this operation. "graph" = the GCassistant Azure
    * AD app via the shared MCP Graph helper (getMs365AccessToken).
+   * "external-http" = a public, no-auth third-party HTTP API (e.g. Clemson's
+   * Banner Browse Classes).
    */
-  backend: "graph" | "host-scan" | "host-state";
+  backend: "graph" | "host-scan" | "host-state" | "external-http";
   /** The policy/action-policy.yaml action that gates this operation. */
   policyActionId: string;
   /**
@@ -174,6 +176,18 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "mail.send_with_approval",
   },
+
+  // --- Clemson public class schedule (Banner Browse Classes — no auth) ---
+  "clemson.list_terms": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.list_terms",
+  },
+  "clemson.search_classes": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.search_classes",
+  },
 };
 
 export class McpPermissionDeniedError extends Error {
@@ -258,6 +272,7 @@ function validateConstraint(
     case "local_state_only":
     case "no_delete":
     case "no_permanent_delete":
+    case "public_data_only":
       return null;
     case "own_primary_calendar_only":
     case "no_shared_or_delegated_calendar":

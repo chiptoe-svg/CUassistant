@@ -8,3 +8,4 @@ import "./todo-tasks.js";
 import "./mail-write.js";
 import "./calendar-write.js";
 import "./host-orchestration.js";
+import "./clemson-classes.js";

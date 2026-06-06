@@ -264,6 +264,24 @@ actions:
     constraints:
       - own_mailbox_only
 
+  # Public, no-auth third-party reads (Clemson Banner Browse Classes). Not
+  # Microsoft Graph — no delegated token or consent involved. Read-only.
+  - id: clemson.list_terms
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
+  - id: clemson.search_classes
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
 audit_requirements:
   before_action:
     - timestamp

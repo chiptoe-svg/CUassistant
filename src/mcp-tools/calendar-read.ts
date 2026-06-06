@@ -1,16 +1,18 @@
-// Calendar read tools — backed by the Codex CLI Outlook connector.
+// Calendar read tools — backed by the GCassistant Graph app
+// (Calendars.ReadWrite).
 //
-// Tool names mirror CUagent's @softeria/ms-365-mcp-server surface. The backend
-// is the Codex Outlook connector wrapper in src/mcp-tools/codex-calendar.ts.
+// Tool names mirror CUagent's @softeria/ms-365-mcp-server surface. Calls go
+// through the shared MCP Graph helper (authedFetch on getMs365AccessToken),
+// gated by assertMcpOperation.
 
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 import {
-  getCalendarEventWithCodex,
-  getCalendarViewWithCodex,
-  listCalendarEventsWithCodex,
-} from "./codex-calendar.js";
+  getCalendarEvent as getCalendarEventGraph,
+  getCalendarView as getCalendarViewGraph,
+  listCalendarEvents as listCalendarEventsGraph,
+} from "./graph-helpers.js";
 
 const listCalendarEvents: McpToolDefinition = {
   operation: "calendar.list_events",
@@ -18,7 +20,7 @@ const listCalendarEvents: McpToolDefinition = {
     name: "list-calendar-events",
     description:
       "List the user's calendar events ordered by start time. Read-only. " +
-      "Backed by Codex CLI's Outlook connector. For a date-range view that " +
+      "Backed by the GCassistant Graph app. For a date-range view that " +
       "expands recurrences, use get-calendar-view.",
     inputSchema: {
       type: "object" as const,
@@ -44,11 +46,9 @@ const listCalendarEvents: McpToolDefinition = {
     }
     const fromIso = (args.fromIso as string | null | undefined) ?? null;
     const toIso = (args.toIso as string | null | undefined) ?? null;
-    const events = await listCalendarEventsWithCodex({ fromIso, toIso });
+    const events = await listCalendarEventsGraph({ fromIso, toIso });
     if (events === null) {
-      return err(
-        "Codex Outlook connector returned no result for calendar list.",
-      );
+      return err("Graph calendar list failed (token or provider unavailable).");
     }
     return okJson({ events });
   },
@@ -59,8 +59,8 @@ const getCalendarEvent: McpToolDefinition = {
   tool: {
     name: "get-calendar-event",
     description:
-      "Fetch a single calendar event by id. Read-only. Backed by Codex " +
-      "CLI's Outlook connector.",
+      "Fetch a single calendar event by id. Read-only. Backed by the " +
+      "GCassistant Graph app.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -77,9 +77,9 @@ const getCalendarEvent: McpToolDefinition = {
     }
     const id = args.id as string | undefined;
     if (!id) return err("id is required");
-    const event = await getCalendarEventWithCodex(id);
+    const event = await getCalendarEventGraph(id);
     if (event === null) {
-      return err(`Codex Outlook connector returned no event for id "${id}".`);
+      return err(`Graph returned no event for id "${id}".`);
     }
     return okJson({ event });
   },
@@ -91,8 +91,8 @@ const getCalendarView: McpToolDefinition = {
     name: "get-calendar-view",
     description:
       "Return events in a calendar window with recurrences expanded into " +
-      "their occurrences. Read-only. Backed by Codex CLI's Outlook " +
-      "connector. Use this for 'what's on my calendar today/this week' " +
+      "their occurrences. Read-only. Backed by the GCassistant Graph app. " +
+      "Use this for 'what's on my calendar today/this week' " +
       "queries; use list-calendar-events for the raw event objects.",
     inputSchema: {
       type: "object" as const,
@@ -118,11 +118,9 @@ const getCalendarView: McpToolDefinition = {
     const startIso = args.startIso as string | undefined;
     const endIso = args.endIso as string | undefined;
     if (!startIso || !endIso) return err("startIso and endIso are required");
-    const events = await getCalendarViewWithCodex({ startIso, endIso });
+    const events = await getCalendarViewGraph({ startIso, endIso });
     if (events === null) {
-      return err(
-        "Codex Outlook connector returned no result for calendar view.",
-      );
+      return err("Graph calendar view failed (token or provider unavailable).");
     }
     return okJson({ events });
   },

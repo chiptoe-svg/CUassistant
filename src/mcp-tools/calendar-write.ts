@@ -1,23 +1,36 @@
-// Calendar write tools — STUBs pending IT approval.
+// Calendar write tools — backed by the GCassistant Graph app
+// (Calendars.ReadWrite).
 //
-// Calendars.ReadWrite is needed on the Graph CLI client to activate these.
-// To activate: confirm Calendars.ReadWrite is consented for the Graph CLI
-// app, update the scope set in the token-refresh helper, flip the relevant
-// status flags in src/mcp-tools/permissions.ts, and replace the stub with
-// the active backend call (sketched in each handler comment).
+// create/update events are exposed: they map to policy actions
+// calendar.create_personal_event / calendar.update_personal_event
+// (approval=none) and are constrained to the user's own primary calendar with
+// no attendees/invites.
+//
+// delete and RSVP (accept/decline/tentativelyAccept) are wired to a real
+// backend but remain policy-gated: they map to calendar.delete_event /
+// calendar.respond_to_invite, which are approval=human_required in
+// action-policy.yaml. assertMcpOperation refuses them and the server does not
+// register them (isMcpOperationExposed=false) until policy is widened.
 
 import { startMcpAudit, finishMcpAudit } from "./audit.js";
+import {
+  createCalendarEvent,
+  deleteCalendarEvent,
+  rsvpCalendarEvent,
+  updateCalendarEvent,
+} from "./graph-helpers.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
-import { err, permissionErr, type McpToolDefinition } from "./types.js";
+import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
-const createCalendarEvent: McpToolDefinition = {
+const createCalendarEventTool: McpToolDefinition = {
   operation: "calendar.create_event",
   tool: {
     name: "create-calendar-event",
     description:
-      "Create a calendar event on the user's primary calendar. STUB " +
-      "pending IT approval of Calendars.ReadWrite on the Graph CLI client.",
+      "Create an event on the user's primary calendar. Personal events only " +
+      "— attendees/invites and shared/delegated calendars are rejected by " +
+      "policy.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -29,7 +42,9 @@ const createCalendarEvent: McpToolDefinition = {
         attendees: {
           type: "array",
           items: { type: "string" },
-          description: "Attendee email addresses.",
+          description:
+            "Attendee email addresses. Rejected by policy — personal events " +
+            "only. Present so the policy gate can refuse invites explicitly.",
         },
       },
       required: ["subject", "startIso", "endIso"],
@@ -54,40 +69,35 @@ const createCalendarEvent: McpToolDefinition = {
       },
     });
     try {
-      // Active call (commented until Calendars.ReadWrite consent lands):
-      //   mg form: mg me events create --body @event.json
-      //   HTTP form:
-      //     await authedFetch("/me/events", {
-      //       method: "POST",
-      //       body: JSON.stringify({
-      //         subject,
-      //         start: { dateTime: startIso, timeZone: TIMEZONE },
-      //         end: { dateTime: endIso, timeZone: TIMEZONE },
-      //         location: location ? { displayName: location } : undefined,
-      //         body: bodyContent ? { contentType: "text", content: bodyContent } : undefined,
-      //         attendees: attendees?.map(a => ({ emailAddress: { address: a }, type: "required" })),
-      //       }),
-      //     });
       assertMcpOperation("calendar.create_event", { input: args });
-      finishMcpAudit(audit, { result: "error", detail: "unreachable" });
-      return err("unreachable");
     } catch (e) {
-      finishMcpAudit(audit, {
-        result: "stub-blocked",
-        detail: "calendar.create_event pending Calendars.ReadWrite consent",
-      });
+      finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
+    const event = await createCalendarEvent({
+      subject,
+      startIso,
+      endIso,
+      location: args.location as string | undefined,
+      bodyContent: args.bodyContent as string | undefined,
+    });
+    if (!event) {
+      finishMcpAudit(audit, { result: "error", detail: "graph_create_failed" });
+      return err("Graph failed to create the event.");
+    }
+    finishMcpAudit(audit, { result: "success", object_id: event.id });
+    return okJson({ event });
   },
 };
 
-const updateCalendarEvent: McpToolDefinition = {
+const updateCalendarEventTool: McpToolDefinition = {
   operation: "calendar.update_event",
   tool: {
     name: "update-calendar-event",
     description:
-      "Patch a calendar event (subject, start, end, location, body). STUB " +
-      "pending IT approval of Calendars.ReadWrite on the Graph CLI client.",
+      "Patch an event on the user's primary calendar (subject, start, end, " +
+      "location, body). Personal events only — shared/delegated calendars " +
+      "are rejected by policy.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -119,29 +129,34 @@ const updateCalendarEvent: McpToolDefinition = {
       },
     });
     try {
-      // Active call:
-      //   mg form: mg me events update --event-id <id> --body @patch.json
-      //   HTTP form: await authedFetch(`/me/events/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
       assertMcpOperation("calendar.update_event", { input: args });
-      finishMcpAudit(audit, { result: "error", detail: "unreachable" });
-      return err("unreachable");
     } catch (e) {
-      finishMcpAudit(audit, {
-        result: "stub-blocked",
-        detail: "calendar.update_event pending Calendars.ReadWrite consent",
-      });
+      finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
+    const event = await updateCalendarEvent(id, {
+      subject: args.subject as string | undefined,
+      startIso: args.startIso as string | undefined,
+      endIso: args.endIso as string | undefined,
+      location: args.location as string | undefined,
+      bodyContent: args.bodyContent as string | undefined,
+    });
+    if (!event) {
+      finishMcpAudit(audit, { result: "error", detail: "graph_update_failed" });
+      return err("Graph failed to update the event.");
+    }
+    finishMcpAudit(audit, { result: "success", object_id: event.id });
+    return okJson({ event });
   },
 };
 
-const deleteCalendarEvent: McpToolDefinition = {
+const deleteCalendarEventTool: McpToolDefinition = {
   operation: "calendar.delete_event",
   tool: {
     name: "delete-calendar-event",
     description:
-      "Delete a calendar event. STUB pending IT approval of " +
-      "Calendars.ReadWrite on the Graph CLI client.",
+      "Delete a calendar event. Policy-gated (approval=human_required); not " +
+      "exposed until policy is widened.",
     inputSchema: {
       type: "object" as const,
       properties: { id: { type: "string" } },
@@ -157,19 +172,23 @@ const deleteCalendarEvent: McpToolDefinition = {
       argsSummary: { id_present: true },
     });
     try {
-      // Active call:
-      //   mg form: mg me events delete --event-id <id>
-      //   HTTP form: await authedFetch(`/me/events/${id}`, { method: "DELETE" });
       assertMcpOperation("calendar.delete_event", { input: args });
-      finishMcpAudit(audit, { result: "error", detail: "unreachable" });
-      return err("unreachable");
     } catch (e) {
-      finishMcpAudit(audit, {
-        result: "stub-blocked",
-        detail: "calendar.delete_event pending Calendars.ReadWrite consent",
-      });
+      finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
+    const result = await deleteCalendarEvent(id);
+    if (!result.ok) {
+      finishMcpAudit(audit, {
+        result: "error",
+        detail: `graph_delete_failed status=${result.status ?? "null"}`,
+      });
+      return err(
+        `Graph failed to delete the event (status ${result.status ?? "null"}).`,
+      );
+    }
+    finishMcpAudit(audit, { result: "success", object_id: id });
+    return okJson({ deleted: true, id });
   },
 };
 
@@ -186,8 +205,8 @@ function rsvpTool(
     tool: {
       name: toolName,
       description:
-        `RSVP "${graphAction}" on a calendar event. STUB pending IT ` +
-        "approval of Calendars.ReadWrite on the Graph CLI client.",
+        `RSVP "${graphAction}" on a calendar event. Policy-gated ` +
+        "(approval=human_required); not exposed until policy is widened.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -217,31 +236,32 @@ function rsvpTool(
         },
       });
       try {
-        // Active call:
-        //   mg form: mg me events ${graphAction} --event-id <id> --body @rsvp.json
-        //   HTTP form:
-        //     await authedFetch(`/me/events/${id}/${graphAction}`, {
-        //       method: "POST",
-        //       body: JSON.stringify({ comment, sendResponse }),
-        //     });
         assertMcpOperation(operation, { input: args });
-        finishMcpAudit(audit, { result: "error", detail: "unreachable" });
-        return err("unreachable");
       } catch (e) {
-        finishMcpAudit(audit, {
-          result: "stub-blocked",
-          detail: `${operation} pending Calendars.ReadWrite consent`,
-        });
+        finishMcpAudit(audit, { result: "error", detail: String(e) });
         return permissionErr(e);
       }
+      const result = await rsvpCalendarEvent(id, graphAction, {
+        comment: args.comment as string | undefined,
+        sendResponse: args.sendResponse as boolean | undefined,
+      });
+      if (!result.ok) {
+        finishMcpAudit(audit, {
+          result: "error",
+          detail: `graph_rsvp_failed status=${result.status ?? "null"}`,
+        });
+        return err(`Graph failed to RSVP (status ${result.status ?? "null"}).`);
+      }
+      finishMcpAudit(audit, { result: "success", object_id: id });
+      return okJson({ rsvp: graphAction, id });
     },
   };
 }
 
 registerTools([
-  createCalendarEvent,
-  updateCalendarEvent,
-  deleteCalendarEvent,
+  createCalendarEventTool,
+  updateCalendarEventTool,
+  deleteCalendarEventTool,
   rsvpTool("accept-calendar-event", "calendar.accept_event", "accept"),
   rsvpTool("decline-calendar-event", "calendar.decline_event", "decline"),
   rsvpTool(

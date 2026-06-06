@@ -40,7 +40,8 @@ export async function getMs365AccessToken(): Promise<string | null> {
           refresh_token: MS365_REFRESH_TOKEN,
           scope:
             "https://graph.microsoft.com/Mail.ReadWrite " +
-            "https://graph.microsoft.com/Tasks.ReadWrite",
+            "https://graph.microsoft.com/Tasks.ReadWrite " +
+            "https://graph.microsoft.com/Calendars.ReadWrite",
         }).toString(),
       },
     );

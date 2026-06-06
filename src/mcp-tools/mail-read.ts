@@ -1,14 +1,14 @@
-// Mail read tools — backed by the Codex CLI Outlook connector.
+// Mail read tools — backed by the GCassistant Graph app (Mail.ReadWrite).
 //
 // Tool names mirror CUagent's @softeria/ms-365-mcp-server surface so a
 // NanoClaw v2 agent that has previously used CUagent's MS365 provider sees
-// familiar shapes here. The backend is different (Codex Outlook connector
-// instead of MSAL+Graph) but the input shape is preserved.
+// familiar shapes here. Calls go through the shared MCP Graph helper
+// (authedFetch on getMs365AccessToken), gated by assertMcpOperation.
 
 import {
-  listOutlookWithCodex,
-  fetchOutlookBodyWithCodex,
-} from "../codex-outlook.js";
+  listMailMessages as listMailMessagesGraph,
+  getMailMessageBody,
+} from "./graph-helpers.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -18,10 +18,10 @@ const listMailMessages: McpToolDefinition = {
   tool: {
     name: "list-mail-messages",
     description:
-      "List Outlook Inbox messages, newest first. Read-only. Backed by " +
-      "Codex CLI's Outlook connector — does not touch the local Graph API " +
-      "or MSAL cache. Returns minimal metadata (id, from, subject, " +
-      "conversationId, receivedIso). To read the body, use get-mail-message.",
+      "List Outlook Inbox messages, newest first. Read-only. Backed by the " +
+      "GCassistant Graph app (Mail.ReadWrite). Returns minimal metadata (id, " +
+      "from, subject, conversationId, receivedIso, isRead). To read the " +
+      "body, use get-mail-message.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -47,11 +47,9 @@ const listMailMessages: McpToolDefinition = {
     }
     const sinceIso = (args.sinceIso as string | null | undefined) ?? null;
     const untilIso = (args.untilIso as string | null | undefined) ?? null;
-    const messages = await listOutlookWithCodex(sinceIso, untilIso);
+    const messages = await listMailMessagesGraph({ sinceIso, untilIso });
     if (messages === null) {
-      return err(
-        "Codex Outlook connector returned no result (provider may be unavailable).",
-      );
+      return err("Graph mail list failed (token or provider unavailable).");
     }
     return okJson({ messages });
   },
@@ -63,9 +61,8 @@ const getMailMessage: McpToolDefinition = {
     name: "get-mail-message",
     description:
       "Fetch the body of one Outlook message by id. Read-only. Backed by " +
-      "Codex CLI's Outlook connector. Returns the normalized readable body " +
-      "text used for classification, with quoted replies and footer " +
-      "boilerplate stripped.",
+      "the GCassistant Graph app. Returns the message subject and body " +
+      "content (HTML or text as stored).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -85,8 +82,11 @@ const getMailMessage: McpToolDefinition = {
     }
     const id = args.id as string | undefined;
     if (!id) return err("id is required");
-    const body = await fetchOutlookBodyWithCodex(id);
-    return okJson({ id, body });
+    const message = await getMailMessageBody(id);
+    if (message === null) {
+      return err(`Graph returned no message for id "${id}".`);
+    }
+    return okJson(message);
   },
 };
 

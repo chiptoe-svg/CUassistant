@@ -1,6 +1,5 @@
 import crypto from "crypto";
 
-import { OUTLOOK_MAIL_PROVIDER, TASK_PROVIDER } from "../src/config.js";
 import { setActiveHandler } from "../src/permissions.js";
 import {
   getTaskWriter,
@@ -22,13 +21,11 @@ async function main() {
       const since = process.env.PROVIDER_SMOKE_SINCE || todayStartIso();
       const messages = await provider.reader.listNew(since);
       if (!messages) {
-        console.log(
-          `mail provider=${OUTLOOK_MAIL_PROVIDER} status=fail since=${since}`,
-        );
+        console.log(`mail provider=graph status=fail since=${since}`);
         process.exit(1);
       }
       console.log(
-        `mail provider=${OUTLOOK_MAIL_PROVIDER} status=ok since=${since} count=${messages.length}`,
+        `mail provider=graph status=ok since=${since} count=${messages.length}`,
       );
       const first = messages[0];
       if (first) {
@@ -48,7 +45,7 @@ async function main() {
       const writer = getTaskWriter();
       const listId = await writer.getDefaultListId();
       console.log(
-        `tasks provider=${TASK_PROVIDER} status=${listId ? "ok" : "fail"} list=${listId ? listId.slice(0, 12) : "none"}`,
+        `tasks provider=graph status=${listId ? "ok" : "fail"} list=${listId ? listId.slice(0, 12) : "none"}`,
       );
       if (!listId) process.exit(1);
     }

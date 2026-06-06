@@ -6,14 +6,17 @@
 // @softeria/ms-365-mcp-server upstream package via MSAL + Graph API direct
 // calls and a custom Azure AD app). Tools, names, and shapes are kept
 // identical where possible for NanoClaw v2 client compatibility. The backend
-// is different — Codex CLI's Outlook connector for mail/calendar reads, and
-// the Graph CLI first-party client (Tasks.ReadWrite refresh token already in
-// CUassistant's .env) for task r/w. Mail and calendar writes are present as
-// stubs and activate when IT grants the corresponding Graph permissions.
+// is the GCassistant Azure AD app (Mail.ReadWrite + Tasks.ReadWrite +
+// Calendars.ReadWrite) reached through the shared MCP Graph helper
+// (getMs365AccessToken). Mail/calendar reads, To Do read/write, and the
+// approval=none mail/calendar writes (move, mark-read, draft, create/update
+// event) are active; destructive or affects-others actions (mail/event delete,
+// RSVP, task delete) stay policy-blocked (approval=human_required) until policy
+// is widened.
 //
 // CREDENTIALS
 // ===========
-// The Graph CLI refresh token (GRAPH_CLI_REFRESH_TOKEN in .env) is host-only.
+// The GCassistant refresh token (MS365_REFRESH_TOKEN in .env) is host-only.
 // It is read from the host process environment and never crosses any
 // boundary. NanoClaw v2 containers connect to this MCP server via stdio
 // transport; they request operations through tools, they never hold or

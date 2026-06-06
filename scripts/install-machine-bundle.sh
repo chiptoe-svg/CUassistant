@@ -148,7 +148,7 @@ Launchd plist written to: ${LAUNCHD_TARGET}
 
 Next checks:
   npm run scan:dry
-  MODE=agent OUTLOOK_CODEX_MAX_RESULTS=2 npm run provider-smoke
+  MODE=agent npm run provider-smoke
 
 If you use Codex Outlook or gws on this machine, you may still need to sign in
 to those external tools separately because their auth state is not stored in

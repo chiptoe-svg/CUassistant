@@ -18,7 +18,7 @@ import {
   listTodoLists,
   listTodoTasks,
   updateTodoTask,
-} from "./graph-cli-helpers.js";
+} from "./graph-helpers.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";

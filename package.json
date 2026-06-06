@@ -12,7 +12,6 @@
     "scan:dry": "DRY_RUN=1 tsx src/index.ts",
     "mcp": "tsx src/mcp-server.ts",
     "ms365-login": "tsx scripts/ms365-login.ts",
-    "graph-cli-tasks-login": "tsx scripts/graph-cli-tasks-login.ts",
     "provider-smoke": "tsx scripts/provider-smoke.ts",
     "tasks:cleanup-noise": "tsx scripts/cleanup-task-noise.ts",
     "cost-report": "tsx scripts/cost-report.ts",

@@ -1,7 +1,4 @@
-import {
-  getGraphCliAccessToken,
-  getGraphCliDefaultTodoListId,
-} from "../src/graph-cli-tasks.js";
+import { getDefaultTodoListId, getMs365AccessToken } from "../src/ms365.js";
 import { setActiveHandler } from "../src/permissions.js";
 
 type TodoTask = {
@@ -16,10 +13,10 @@ type TodoTask = {
 async function main() {
   setActiveHandler("triage");
   try {
-    const token = await getGraphCliAccessToken();
-    const listId = await getGraphCliDefaultTodoListId();
+    const token = await getMs365AccessToken();
+    const listId = await getDefaultTodoListId();
     if (!token || !listId) {
-      throw new Error("Graph CLI task provider is not configured");
+      throw new Error("MS365 task provider is not configured");
     }
 
     const tasks = await listTasks(token, listId);

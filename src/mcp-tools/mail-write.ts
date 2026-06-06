@@ -1,40 +1,36 @@
-// Mail write tools — STUBs pending IT approval.
+// Mail write tools — backed by the GCassistant Graph app (Mail.ReadWrite).
 //
-// Mail.ReadWrite is needed on the Graph CLI client to activate these.
-// CUassistant's existing GCassistant Azure app holds Mail.ReadWrite for the
-// scan flow's Inbox listing and body fetch, but mail *writes* (move, mark
-// read, draft) are routed through the Graph CLI client to keep the consent
-// envelope narrow and reviewable per-client. The Graph CLI client today is
-// consented for Tasks.ReadWrite only at Clemson; adding Mail.ReadWrite is
-// the IT step that activates these tools.
-//
-// Each tool below returns a structured stub-pending-approval error today.
-// To activate a tool when consent lands:
-//   1. Confirm Mail.ReadWrite is in the Graph CLI's consented scopes.
-//   2. Update the scope set requested in graph-cli-tasks.ts (or a new
-//      mail-write helper that reuses the same refresh token).
-//   3. Remove the `status: "stub-pending-approval"` flag in
-//      src/mcp-tools/permissions.ts for the matching operation key.
-//   4. Replace the stub call below with the active backend invocation.
-//      The active call is sketched as a comment inside each handler so the
-//      activation is a localized edit rather than a rewrite.
-//
-// The mg-CLI form of each call is given in a comment for reviewers who
-// prefer the shell view; the wired-up form will use authedFetch from
-// src/mcp-tools/graph-cli-helpers.ts to stay consistent with the read path.
+// These were stubs while the consent was outstanding; they are now wired to
+// the shared MCP Graph helper (authedFetch on getMs365AccessToken). The policy
+// boundary still applies on every call:
+//   - move:   own_mailbox_only + destination_folder_allow_list (requires
+//             MCP_ALLOWED_MAIL_DESTINATIONS) + no junk/deleted/recoverable.
+//   - update: metadata_only / no_body_rewrite / no_send / no_delete — body
+//             fields are rejected; this is mark-read/flag/importance/category
+//             only.
+//   - draft:  draft_only / no_send — creates a Drafts item; there is no send
+//             tool here (send goes through the approval gate, separately).
+// assertMcpOperation(operation, { input: args }) enforces those constraints
+// before any Graph call runs.
 
 import { startMcpAudit, finishMcpAudit } from "./audit.js";
+import {
+  createDraftEmail,
+  moveMailMessage,
+  updateMailMessage,
+} from "./graph-helpers.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
-import { err, permissionErr, type McpToolDefinition } from "./types.js";
+import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
-const moveMailMessage: McpToolDefinition = {
+const moveMailMessageTool: McpToolDefinition = {
   operation: "mail.move_message",
   tool: {
     name: "move-mail-message",
     description:
-      "Move an Outlook message into a target folder. STUB pending IT " +
-      "approval of Mail.ReadWrite on the Graph CLI client.",
+      "Move an Outlook message into a target folder. The destination must be " +
+      "in MCP_ALLOWED_MAIL_DESTINATIONS; junk/deleted/recoverable folders are " +
+      "rejected by policy.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -57,40 +53,29 @@ const moveMailMessage: McpToolDefinition = {
       argsSummary: { id_present: true, destinationId },
     });
     try {
-      // Active call (commented until Mail.ReadWrite consent lands):
-      //   mg client form:
-      //     mg me messages move \
-      //       --message-id <id> \
-      //       --destination-id <destinationId>
-      //   HTTP form (matches todo helpers):
-      //     await authedFetch(`/me/messages/${id}/move`, {
-      //       method: "POST",
-      //       body: JSON.stringify({ destinationId }),
-      //     });
       assertMcpOperation("mail.move_message", { input: args });
-      finishMcpAudit(audit, {
-        result: "error",
-        detail: "unreachable: stub gate should have refused",
-      });
-      return err("unreachable");
     } catch (e) {
-      finishMcpAudit(audit, {
-        result: "stub-blocked",
-        detail: "mail.move_message pending Mail.ReadWrite consent",
-      });
+      finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
+    const message = await moveMailMessage(id, destinationId);
+    if (!message) {
+      finishMcpAudit(audit, { result: "error", detail: "graph_move_failed" });
+      return err("Graph failed to move the message.");
+    }
+    finishMcpAudit(audit, { result: "success", object_id: message.id });
+    return okJson({ message });
   },
 };
 
-const updateMailMessage: McpToolDefinition = {
+const updateMailMessageTool: McpToolDefinition = {
   operation: "mail.update_message",
   tool: {
     name: "update-mail-message",
     description:
-      "Patch an Outlook message (mark read, set flag, adjust importance, " +
-      "add categories). STUB pending IT approval of Mail.ReadWrite on the " +
-      "Graph CLI client.",
+      "Patch an Outlook message's metadata (mark read, set flag, adjust " +
+      "importance, add categories). Metadata only — body changes and " +
+      "send/delete are rejected by policy.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -127,38 +112,33 @@ const updateMailMessage: McpToolDefinition = {
       },
     });
     try {
-      // Active call (commented until Mail.ReadWrite consent lands):
-      //   mg form: mg me messages update --message-id <id> --body @patch.json
-      //   HTTP form:
-      //     await authedFetch(`/me/messages/${id}`, {
-      //       method: "PATCH",
-      //       body: JSON.stringify(patch),
-      //     });
       assertMcpOperation("mail.update_message", { input: args });
-      finishMcpAudit(audit, {
-        result: "error",
-        detail: "unreachable: stub gate should have refused",
-      });
-      return err("unreachable");
     } catch (e) {
-      finishMcpAudit(audit, {
-        result: "stub-blocked",
-        detail: "mail.update_message pending Mail.ReadWrite consent",
-      });
+      finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
+    const message = await updateMailMessage(id, {
+      isRead: args.isRead as boolean | undefined,
+      importance: args.importance as "low" | "normal" | "high" | undefined,
+      flag: args.flag as Record<string, unknown> | undefined,
+      categories: args.categories as string[] | undefined,
+    });
+    if (!message) {
+      finishMcpAudit(audit, { result: "error", detail: "graph_update_failed" });
+      return err("Graph failed to update the message.");
+    }
+    finishMcpAudit(audit, { result: "success", object_id: message.id });
+    return okJson({ message });
   },
 };
 
-const createDraftEmail: McpToolDefinition = {
+const createDraftEmailTool: McpToolDefinition = {
   operation: "mail.create_draft",
   tool: {
     name: "create-draft-email",
     description:
-      "Create a new draft email in the user's Drafts folder. STUB pending " +
-      "IT approval of Mail.ReadWrite on the Graph CLI client. Note: the " +
-      "active form will create a draft only — there is no send tool in " +
-      "this MCP server, by design.",
+      "Create a new draft email in the user's Drafts folder. Draft only — " +
+      "this does not send. Sending goes through the separate approval gate.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -200,32 +180,30 @@ const createDraftEmail: McpToolDefinition = {
       },
     });
     try {
-      // Active call (commented until Mail.ReadWrite consent lands):
-      //   mg form: mg me messages create --body @draft.json
-      //   HTTP form:
-      //     await authedFetch("/me/messages", {
-      //       method: "POST",
-      //       body: JSON.stringify({
-      //         subject,
-      //         body: { contentType: bodyContentType, content: bodyContent },
-      //         toRecipients: toRecipients.map(addr => ({ emailAddress: { address: addr } })),
-      //         ...
-      //       }),
-      //     });
       assertMcpOperation("mail.create_draft", { input: args });
-      finishMcpAudit(audit, {
-        result: "error",
-        detail: "unreachable: stub gate should have refused",
-      });
-      return err("unreachable");
     } catch (e) {
-      finishMcpAudit(audit, {
-        result: "stub-blocked",
-        detail: "mail.create_draft pending Mail.ReadWrite consent",
-      });
+      finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
+    const draft = await createDraftEmail({
+      subject,
+      bodyContent: args.bodyContent as string | undefined,
+      bodyContentType: args.bodyContentType as "text" | "html" | undefined,
+      toRecipients: args.toRecipients as string[] | undefined,
+      ccRecipients: args.ccRecipients as string[] | undefined,
+      bccRecipients: args.bccRecipients as string[] | undefined,
+    });
+    if (!draft) {
+      finishMcpAudit(audit, { result: "error", detail: "graph_draft_failed" });
+      return err("Graph failed to create the draft.");
+    }
+    finishMcpAudit(audit, { result: "success", object_id: draft.id });
+    return okJson({ draft });
   },
 };
 
-registerTools([moveMailMessage, updateMailMessage, createDraftEmail]);
+registerTools([
+  moveMailMessageTool,
+  updateMailMessageTool,
+  createDraftEmailTool,
+]);

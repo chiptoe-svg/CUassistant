@@ -1,12 +1,3 @@
-import {
-  fetchOutlookBodyWithCodex,
-  listOutlookWithCodex,
-} from "./codex-outlook.js";
-import {
-  createGraphCliTask,
-  findGraphCliTaskByMarker,
-  getGraphCliDefaultTodoListId,
-} from "./graph-cli-tasks.js";
 import { fetchGmailBody, listGmail } from "./gmail.js";
 import {
   createMs365Task,
@@ -16,7 +7,6 @@ import {
   listOutlook,
 } from "./ms365.js";
 import { MailReader, TaskWriter } from "./providers.js";
-import { OUTLOOK_MAIL_PROVIDER, TASK_PROVIDER } from "./config.js";
 import { EmailAccount, ProgressAccount } from "./types.js";
 
 interface MailProvider {
@@ -38,21 +28,10 @@ const outlookGraphReader: MailReader = {
   fetchBody: fetchOutlookBody,
 };
 
-const outlookCodexReader: MailReader = {
-  listNew: listOutlookWithCodex,
-  fetchBody: fetchOutlookBodyWithCodex,
-};
-
 const ms365TaskWriter: TaskWriter = {
   getDefaultListId: getDefaultTodoListId,
   findTaskByMarker: findMs365TaskByMarker,
   createTask: createMs365Task,
-};
-
-const graphCliTaskWriter: TaskWriter = {
-  getDefaultListId: getGraphCliDefaultTodoListId,
-  findTaskByMarker: findGraphCliTaskByMarker,
-  createTask: createGraphCliTask,
 };
 
 export function mailProviderForAccount(
@@ -62,17 +41,11 @@ export function mailProviderForAccount(
     return { progressAccount: "gmail", reader: gmailReader };
   }
   if (account.type === "ms365") {
-    return {
-      progressAccount: "outlook",
-      reader:
-        OUTLOOK_MAIL_PROVIDER === "codex"
-          ? outlookCodexReader
-          : outlookGraphReader,
-    };
+    return { progressAccount: "outlook", reader: outlookGraphReader };
   }
   return null;
 }
 
 export function getTaskWriter(): TaskWriter {
-  return TASK_PROVIDER === "graph-cli" ? graphCliTaskWriter : ms365TaskWriter;
+  return ms365TaskWriter;
 }

@@ -20,14 +20,19 @@ import type { PolicyAction } from "../policy.js";
 export type McpOperationStatus = "active" | "stub-pending-approval";
 
 export interface McpOperationSpec {
-  /** The backend that fulfills this operation. */
-  backend: "codex-outlook" | "graph-cli" | "host-scan" | "host-state";
+  /**
+   * The backend that fulfills this operation. "graph" = the GCassistant Azure
+   * AD app via the shared MCP Graph helper (getMs365AccessToken).
+   */
+  backend: "graph" | "host-scan" | "host-state";
   /** The policy/action-policy.yaml action that gates this operation. */
   policyActionId: string;
   /**
-   * "active" = wired to a real backend.
-   * "stub-pending-approval" = guarded; throws PermissionDeniedError until
-   *   the named permission lands in the Graph CLI consent.
+   * "active" = wired to a real backend (exposure still depends on the mapped
+   *   policy action being approval=none).
+   * "stub-pending-approval" = guarded; throws McpStubPendingError. No
+   *   operation is a stub today, but the status is retained for future work
+   *   that lands a tool ahead of its consent.
    */
   status: McpOperationStatus;
   /** The Graph permission scope that gates activation, when applicable. */
@@ -35,123 +40,117 @@ export interface McpOperationSpec {
 }
 
 export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
-  // --- Mail reads (Codex CLI Outlook connector — already approved) ---
+  // --- Mail reads (GCassistant Graph app — Mail.ReadWrite) ---
   "mail.list_messages": {
-    backend: "codex-outlook",
+    backend: "graph",
     status: "active",
     policyActionId: "mail.list_inbox",
   },
   "mail.get_message": {
-    backend: "codex-outlook",
+    backend: "graph",
     status: "active",
     policyActionId: "mail.fetch_body",
   },
 
-  // --- Calendar reads (Codex CLI Outlook connector — already approved) ---
+  // --- Calendar reads (GCassistant Graph app — Calendars.ReadWrite) ---
   "calendar.list_events": {
-    backend: "codex-outlook",
+    backend: "graph",
     status: "active",
     policyActionId: "calendar.list_events",
   },
   "calendar.get_event": {
-    backend: "codex-outlook",
+    backend: "graph",
     status: "active",
     policyActionId: "calendar.get_event",
   },
   "calendar.get_view": {
-    backend: "codex-outlook",
+    backend: "graph",
     status: "active",
     policyActionId: "calendar.get_view",
   },
 
-  // --- Task reads/writes (Graph CLI — already approved, already working) ---
+  // --- Task reads/writes (GCassistant Graph app — Tasks.ReadWrite) ---
   "todo.list_lists": {
-    backend: "graph-cli",
+    backend: "graph",
     status: "active",
     policyActionId: "todo.list_lists",
   },
   "todo.list_tasks": {
-    backend: "graph-cli",
+    backend: "graph",
     status: "active",
     policyActionId: "todo.list_tasks",
   },
   "todo.get_task": {
-    backend: "graph-cli",
+    backend: "graph",
     status: "active",
     policyActionId: "todo.get_task",
   },
   "todo.create_task": {
-    backend: "graph-cli",
+    backend: "graph",
     status: "active",
     policyActionId: "todo.create_task",
   },
   "todo.update_task": {
-    backend: "graph-cli",
+    backend: "graph",
     status: "active",
     policyActionId: "todo.update_task",
   },
+  // delete_task is wired but stays policy-blocked (approval=human_required).
   "todo.delete_task": {
-    backend: "graph-cli",
+    backend: "graph",
     status: "active",
     policyActionId: "todo.delete_task",
   },
 
-  // --- Mail writes (Graph CLI — STUB until Mail.ReadWrite consent lands) ---
+  // --- Mail writes (GCassistant Graph app — Mail.ReadWrite, consented) ---
   "mail.move_message": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "mail.move_message",
-    pendingScope: "Mail.ReadWrite",
   },
   "mail.update_message": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "mail.update_message",
-    pendingScope: "Mail.ReadWrite",
   },
   "mail.create_draft": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "mail.create_draft",
-    pendingScope: "Mail.ReadWrite",
   },
 
-  // --- Calendar writes (Graph CLI — STUB until Calendars.ReadWrite lands) ---
+  // --- Calendar writes (GCassistant Graph app — Calendars.ReadWrite) ---
+  // create/update are exposed (approval=none). delete + RSVP are wired but
+  // stay policy-blocked (approval=human_required) until policy is widened.
   "calendar.create_event": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "calendar.create_personal_event",
-    pendingScope: "Calendars.ReadWrite",
   },
   "calendar.update_event": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "calendar.update_personal_event",
-    pendingScope: "Calendars.ReadWrite",
   },
   "calendar.delete_event": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "calendar.delete_event",
-    pendingScope: "Calendars.ReadWrite",
   },
   "calendar.accept_event": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "calendar.respond_to_invite",
-    pendingScope: "Calendars.ReadWrite",
   },
   "calendar.decline_event": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "calendar.respond_to_invite",
-    pendingScope: "Calendars.ReadWrite",
   },
   "calendar.tentatively_accept_event": {
-    backend: "graph-cli",
-    status: "stub-pending-approval",
+    backend: "graph",
+    status: "active",
     policyActionId: "calendar.respond_to_invite",
-    pendingScope: "Calendars.ReadWrite",
   },
 
   // --- Host orchestration (CUassistant-only, no Graph call) ---

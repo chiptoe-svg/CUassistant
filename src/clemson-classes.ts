@@ -442,12 +442,25 @@ function sleep(ms: number): Promise<void> {
 const PAGE_SIZE = 500;
 const MAX_PAGES = 40;
 
+// Cache the completed full-term section list per term. The full scan is ~20
+// requests and Banner rate-limits bursts, so room/instructor lookups that omit
+// a subject reuse this instead of re-scanning. Only the canonical full-term
+// list (no subject, no openOnly) is cached; subject-scoped queries are cheap.
+type PagedResult = { sections: ClemsonSection[]; complete: boolean };
+const FULL_TERM_CACHE_TTL_MS = 10 * 60_000;
+const fullTermCache = new Map<string, { atMs: number; data: PagedResult }>();
+
 async function fetchSectionsPaged(
   term: string,
   subject: string | undefined,
   openOnly: boolean | undefined,
   attempts = 4,
-): Promise<{ sections: ClemsonSection[]; complete: boolean } | null> {
+): Promise<PagedResult | null> {
+  const cacheable = !subject && !openOnly;
+  if (cacheable) {
+    const hit = fullTermCache.get(term);
+    if (hit && Date.now() - hit.atMs < FULL_TERM_CACHE_TTL_MS) return hit.data;
+  }
   // NB: Banner's searchResults is stateful per session — the first query on a
   // session fixes the result set, and offset paging walks it. Do NOT issue any
   // other search (e.g. a probe) on the same session first; that resets the set
@@ -481,7 +494,9 @@ async function fetchSectionsPaged(
       }
       out.push(...res.sections);
       if (out.length >= res.totalCount || res.sections.length === 0) {
-        return { sections: out, complete: true };
+        const data: PagedResult = { sections: out, complete: true };
+        if (cacheable) fullTermCache.set(term, { atMs: Date.now(), data });
+        return data;
       }
       await sleep(200);
     }

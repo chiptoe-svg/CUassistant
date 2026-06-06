@@ -13,6 +13,7 @@ test("clemson public class tools are exposed", () => {
   assert.equal(isMcpOperationExposed("clemson.list_terms"), true);
   assert.equal(isMcpOperationExposed("clemson.search_classes"), true);
   assert.equal(isMcpOperationExposed("clemson.section_details"), true);
+  assert.equal(isMcpOperationExposed("clemson.instructor_classes"), true);
 });
 
 test("clemson tools pass the policy gate", () => {

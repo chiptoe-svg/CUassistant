@@ -5,6 +5,7 @@
 // self-service search at regssb.sis.clemson.edu (see src/clemson-classes.ts).
 
 import {
+  findClemsonInstructorClasses,
   getClemsonSectionDetails,
   listClemsonTerms,
   searchClemsonClasses,
@@ -147,4 +148,73 @@ const sectionDetails: McpToolDefinition = {
   },
 };
 
-registerTools([listTerms, searchClasses, sectionDetails]);
+const instructorClasses: McpToolDefinition = {
+  operation: "clemson.instructor_classes",
+  tool: {
+    name: "find-clemson-instructor-classes",
+    description:
+      "Find every section a Clemson instructor is teaching in a given " +
+      "semester, with meeting times, rooms, and seats. Read-only, no login. " +
+      "Give a faculty name (e.g. 'Kern Cox') and a semester as either a term " +
+      "code (202608) or text ('Fall 2026'). If the name is ambiguous (e.g. " +
+      "just 'Cox') it returns `candidates` to choose from and no sections; " +
+      "when it resolves to one person, `matched` is set and `sections` is " +
+      "populated. STRONGLY prefer passing the instructor's `subject` (e.g. " +
+      "GC, CPSC) — the tool then searches just that department and is fast " +
+      "and reliable. Without a subject it scans the entire term (~10k " +
+      "sections, slower).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        instructor: {
+          type: "string",
+          description: "Faculty name, e.g. 'Kern Cox' or 'Cox'.",
+        },
+        term: {
+          type: "string",
+          description: "Term code (202608) or text ('Fall 2026').",
+        },
+        subject: {
+          type: "string",
+          description:
+            "Subject/department to scope the search, e.g. GC or CPSC. " +
+            "Recommended — much faster and more reliable than a full scan.",
+        },
+        openOnly: {
+          type: "boolean",
+          description: "Only return sections with seats available.",
+        },
+        max: {
+          type: "integer",
+          description: "Max sections to return (default 50).",
+        },
+      },
+      required: ["instructor", "term"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("clemson.instructor_classes");
+    } catch (e) {
+      return permissionErr(e);
+    }
+    const instructor = args.instructor as string | undefined;
+    const term = args.term as string | undefined;
+    if (!instructor || !term) return err("instructor and term are required");
+    const result = await findClemsonInstructorClasses({
+      instructor,
+      term,
+      subject: args.subject as string | undefined,
+      openOnly: Boolean(args.openOnly),
+      max: typeof args.max === "number" ? args.max : undefined,
+    });
+    if (result === null) {
+      return err(
+        "Could not resolve the term, or the Clemson lookup was unavailable.",
+      );
+    }
+    return okJson(result);
+  },
+};
+
+registerTools([listTerms, searchClasses, sectionDetails, instructorClasses]);

@@ -218,35 +218,47 @@ function mapSection(r: Record<string, unknown>): ClemsonSection {
   };
 }
 
+// Run the searchResults query on an already-opened session.
+async function runSearch(
+  jar: CookieJar,
+  params: ClemsonSearchParams,
+): Promise<ClemsonSearchResult | null> {
+  const q = new URLSearchParams({
+    txt_term: params.term,
+    pageOffset: String(params.offset ?? 0),
+    pageMaxSize: String(Math.min(Math.max(params.max ?? 50, 1), 500)),
+    sortColumn: "subjectDescription",
+    sortDirection: "asc",
+  });
+  if (params.subject) q.set("txt_subject", params.subject.toUpperCase());
+  if (params.courseNumber) q.set("txt_courseNumber", params.courseNumber);
+  if (params.openOnly) q.set("chk_open_only", "true");
+  const r = await fetch(`${SSB}/searchResults/searchResults?${q}`, {
+    headers: { Cookie: jar.header() },
+  });
+  if (!r.ok) return null;
+  // Banner sometimes returns an HTML error shell instead of JSON; treat that
+  // as a failed fetch rather than throwing.
+  const text = await r.text();
+  let data: { totalCount?: number; data?: unknown };
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  return {
+    totalCount: data.totalCount ?? 0,
+    sections: arr(data.data).map(mapSection),
+  };
+}
+
 export async function searchClemsonClasses(
   params: ClemsonSearchParams,
 ): Promise<ClemsonSearchResult | null> {
   try {
     const jar = await openSession(params.term);
     if (!jar) return null;
-    const q = new URLSearchParams({
-      txt_term: params.term,
-      pageOffset: String(params.offset ?? 0),
-      pageMaxSize: String(Math.min(Math.max(params.max ?? 50, 1), 500)),
-      sortColumn: "subjectDescription",
-      sortDirection: "asc",
-    });
-    if (params.subject) q.set("txt_subject", params.subject.toUpperCase());
-    if (params.courseNumber) q.set("txt_courseNumber", params.courseNumber);
-    if (params.openOnly) q.set("chk_open_only", "true");
-    const r = await fetch(`${SSB}/searchResults/searchResults?${q}`, {
-      headers: { Cookie: jar.header() },
-    });
-    if (!r.ok) return null;
-    const data = (await r.json()) as {
-      success?: boolean;
-      totalCount?: number;
-      data?: unknown;
-    };
-    return {
-      totalCount: data.totalCount ?? 0,
-      sections: arr(data.data).map(mapSection),
-    };
+    return await runSearch(jar, params);
   } catch (err) {
     log.warn("clemson class search failed", { err: String(err) });
     return null;
@@ -342,6 +354,186 @@ export async function getClemsonSectionDetails(
     };
   } catch (err) {
     log.warn("clemson section details failed", { err: String(err) });
+    return null;
+  }
+}
+
+// --- Instructor lookup + "what is <name> teaching" ---
+
+export interface ClemsonInstructorMatch {
+  id: string;
+  name: string;
+}
+
+export interface ClemsonInstructorClasses {
+  term: string;
+  termDescription: string;
+  query: string;
+  /** The single instructor the query resolved to, when unambiguous. */
+  matched: ClemsonInstructorMatch | null;
+  /** Candidate instructors when the name is ambiguous or unmatched. */
+  candidates: ClemsonInstructorMatch[];
+  sections: ClemsonSection[];
+  /** Human-readable note about scope (subject-scoped vs full-term scan). */
+  note: string | null;
+}
+
+// Accept a term code (202608) or human text ("Fall 2026"); resolve to a code.
+async function resolveTerm(
+  term: string,
+): Promise<{ code: string; description: string } | null> {
+  if (/^\d{6}$/.test(term)) {
+    const all = await listClemsonTerms(50);
+    const hit = all?.find((t) => t.code === term);
+    return { code: term, description: hit?.description ?? term };
+  }
+  const all = await listClemsonTerms(50);
+  const q = term.trim().toLowerCase();
+  const hit = all?.find((t) => t.description.toLowerCase().includes(q));
+  return hit ? { code: hit.code, description: hit.description } : null;
+}
+
+// get_instructor on an already-opened session (returns a top-level array).
+async function fetchInstructors(
+  jar: CookieJar,
+  term: string,
+  query: string,
+  max: number,
+): Promise<ClemsonInstructorMatch[]> {
+  const r = await fetch(
+    `${SSB}/classSearch/get_instructor?searchTerm=${encodeURIComponent(query)}&term=${encodeURIComponent(term)}&offset=1&max=${max}`,
+    { headers: { Cookie: jar.header() } },
+  );
+  if (!r.ok) return [];
+  const body = (await r.json()) as unknown;
+  const rows = Array.isArray(body)
+    ? body
+    : ((body as { data?: unknown }).data ?? []);
+  return (Array.isArray(rows) ? rows : []).map((i) => {
+    const o = rec(i);
+    return { id: String(o.code ?? ""), name: String(o.description ?? "") };
+  });
+}
+
+export async function listClemsonInstructors(
+  term: string,
+  query: string,
+  max = 25,
+): Promise<ClemsonInstructorMatch[] | null> {
+  try {
+    const jar = await openSession(term);
+    if (!jar) return null;
+    return await fetchInstructors(jar, term, query, max);
+  } catch (err) {
+    log.warn("clemson instructor lookup failed", { err: String(err) });
+    return null;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Page through searchResults on one session, accumulating every section.
+// Banner's txt_instructor filter is unreliable (HTTP 500s), so the instructor
+// flow instead lists sections (optionally subject-scoped) and filters by
+// faculty name in code. With a subject this is one page; without one it walks
+// the whole term (~10k sections) in 500-row pages.
+const PAGE_SIZE = 500;
+const MAX_PAGES = 40;
+
+async function fetchSectionsPaged(
+  jar: CookieJar,
+  term: string,
+  subject: string | undefined,
+  openOnly: boolean | undefined,
+): Promise<{ sections: ClemsonSection[]; complete: boolean } | null> {
+  const out: ClemsonSection[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await runSearch(jar, {
+      term,
+      subject,
+      openOnly,
+      offset: page * PAGE_SIZE,
+      max: PAGE_SIZE,
+    });
+    if (res === null)
+      return out.length ? { sections: out, complete: false } : null;
+    out.push(...res.sections);
+    if (out.length >= res.totalCount || res.sections.length === 0) {
+      return { sections: out, complete: true };
+    }
+    await sleep(200);
+  }
+  return { sections: out, complete: false };
+}
+
+export async function findClemsonInstructorClasses(params: {
+  term: string;
+  instructor: string;
+  subject?: string;
+  openOnly?: boolean;
+  max?: number;
+}): Promise<ClemsonInstructorClasses | null> {
+  try {
+    const resolved = await resolveTerm(params.term);
+    if (!resolved) return null;
+    const tokens = params.instructor
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    // Banner's instructor lookup keys on a single fragment — search by surname
+    // (the most selective token) then narrow client-side by every token.
+    const surname = tokens.length
+      ? tokens[tokens.length - 1]
+      : params.instructor;
+    const base: ClemsonInstructorClasses = {
+      term: resolved.code,
+      termDescription: resolved.description,
+      query: params.instructor,
+      matched: null,
+      candidates: [],
+      sections: [],
+      note: null,
+    };
+
+    const jar = await openSession(resolved.code);
+    if (!jar) return null;
+    const all = await fetchInstructors(jar, resolved.code, surname, 50);
+    const narrowed = all.filter((c) =>
+      tokens.every((t) => c.name.toLowerCase().includes(t)),
+    );
+    const pool = narrowed.length ? narrowed : all;
+    if (pool.length !== 1) {
+      // Ambiguous or no match — hand back candidates for disambiguation.
+      return { ...base, candidates: pool };
+    }
+    const matched = pool[0];
+
+    // List sections (subject-scoped when provided) and filter by faculty name.
+    const fetched = await fetchSectionsPaged(
+      jar,
+      resolved.code,
+      params.subject,
+      params.openOnly,
+    );
+    if (fetched === null) return null;
+    const sections = fetched.sections.filter((s) =>
+      s.instructors.some((f) =>
+        tokens.every((t) => f.name.toLowerCase().includes(t)),
+      ),
+    );
+    const limited =
+      typeof params.max === "number" ? sections.slice(0, params.max) : sections;
+    const note = params.subject
+      ? `Scoped to subject ${params.subject.toUpperCase()}.`
+      : fetched.complete
+        ? "Scanned the full term (no subject given)."
+        : "Full-term scan was truncated; pass a subject to narrow it.";
+    return { ...base, matched, sections: limited, note };
+  } catch (err) {
+    log.warn("clemson instructor classes failed", { err: String(err) });
     return null;
   }
 }

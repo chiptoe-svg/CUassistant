@@ -189,6 +189,12 @@ const instructorClasses: McpToolDefinition = {
           type: "integer",
           description: "Max sections to return (default 50).",
         },
+        refresh: {
+          type: "boolean",
+          description:
+            "Force a fresh full-term scan instead of using the daily " +
+            "snapshot (slower; use when you need up-to-the-minute data).",
+        },
       },
       required: ["instructor", "term"],
     },
@@ -208,6 +214,7 @@ const instructorClasses: McpToolDefinition = {
       subject: args.subject as string | undefined,
       openOnly: Boolean(args.openOnly),
       max: typeof args.max === "number" ? args.max : undefined,
+      refresh: Boolean(args.refresh),
     });
     if (result === null) {
       return err(
@@ -269,6 +276,12 @@ const roomAvailability: McpToolDefinition = {
           type: "integer",
           description: "Ignore free gaps shorter than this (default 50).",
         },
+        refresh: {
+          type: "boolean",
+          description:
+            "Force a fresh full-term scan instead of using the daily " +
+            "snapshot (slower; use when you need up-to-the-minute data).",
+        },
       },
       required: ["building", "room", "term"],
     },
@@ -294,6 +307,7 @@ const roomAvailability: McpToolDefinition = {
       dayEnd: args.dayEnd as string | undefined,
       minMinutes:
         typeof args.minMinutes === "number" ? args.minMinutes : undefined,
+      refresh: Boolean(args.refresh),
     });
     if (result === null) {
       return err(

@@ -13,6 +13,10 @@
 // A fresh session is opened per search so searches never need an inter-query
 // reset.
 
+import fs from "fs";
+import path from "path";
+
+import { STATE_DIR } from "./config.js";
 import { log } from "./log.js";
 
 const SSB = "https://regssb.sis.clemson.edu/StudentRegistrationSsb/ssb";
@@ -374,8 +378,11 @@ export interface ClemsonInstructorClasses {
   /** Candidate instructors when the name is ambiguous or unmatched. */
   candidates: ClemsonInstructorMatch[];
   sections: ClemsonSection[];
-  /** Human-readable note about scope (subject-scoped vs full-term scan). */
+  /** Human-readable note about where the data came from. */
   note: string | null;
+  /** ISO date of the snapshot used; null when fetched live. */
+  snapshotDate: string | null;
+  scope: "snapshot" | "live-full" | "live-subject" | null;
 }
 
 // Accept a term code (202608) or human text ("Fall 2026"); resolve to a code.
@@ -442,13 +449,7 @@ function sleep(ms: number): Promise<void> {
 const PAGE_SIZE = 500;
 const MAX_PAGES = 40;
 
-// Cache the completed full-term section list per term. The full scan is ~20
-// requests and Banner rate-limits bursts, so room/instructor lookups that omit
-// a subject reuse this instead of re-scanning. Only the canonical full-term
-// list (no subject, no openOnly) is cached; subject-scoped queries are cheap.
 type PagedResult = { sections: ClemsonSection[]; complete: boolean };
-const FULL_TERM_CACHE_TTL_MS = 10 * 60_000;
-const fullTermCache = new Map<string, { atMs: number; data: PagedResult }>();
 
 async function fetchSectionsPaged(
   term: string,
@@ -456,11 +457,6 @@ async function fetchSectionsPaged(
   openOnly: boolean | undefined,
   attempts = 4,
 ): Promise<PagedResult | null> {
-  const cacheable = !subject && !openOnly;
-  if (cacheable) {
-    const hit = fullTermCache.get(term);
-    if (hit && Date.now() - hit.atMs < FULL_TERM_CACHE_TTL_MS) return hit.data;
-  }
   // NB: Banner's searchResults is stateful per session — the first query on a
   // session fixes the result set, and offset paging walks it. Do NOT issue any
   // other search (e.g. a probe) on the same session first; that resets the set
@@ -494,9 +490,7 @@ async function fetchSectionsPaged(
       }
       out.push(...res.sections);
       if (out.length >= res.totalCount || res.sections.length === 0) {
-        const data: PagedResult = { sections: out, complete: true };
-        if (cacheable) fullTermCache.set(term, { atMs: Date.now(), data });
-        return data;
+        return { sections: out, complete: true };
       }
       await sleep(200);
     }
@@ -510,12 +504,213 @@ async function fetchSectionsPaged(
   return null;
 }
 
+// --- Per-term snapshots (disk) ---
+//
+// A full-term scan is ~20 requests and Banner rate-limits bursts, so the live
+// (registering) terms are scanned once a day by a separate job and written to
+// state/clemson/<term>.json. Queries read the snapshot (cheap, always reflects
+// the latest file) and stamp results with its date. Snapshots are per term —
+// Banner binds one term per session, so each term is its own scan/file. Past
+// "(View Only)" terms never change, so once written they need no refresh.
+
+export interface ClemsonTermSnapshot {
+  term: string;
+  termDescription: string;
+  fetchedAt: string; // ISO 8601
+  sectionCount: number;
+  sections: ClemsonSection[];
+}
+
+function snapshotDir(): string {
+  return path.join(STATE_DIR, "clemson");
+}
+function snapshotPath(term: string): string {
+  return path.join(snapshotDir(), `${term}.json`);
+}
+
+export function loadClemsonSnapshot(term: string): ClemsonTermSnapshot | null {
+  try {
+    const p = snapshotPath(term);
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, "utf-8")) as ClemsonTermSnapshot;
+  } catch (err) {
+    log.warn("clemson snapshot read failed", { term, err: String(err) });
+    return null;
+  }
+}
+
+function saveClemsonSnapshot(snap: ClemsonTermSnapshot): void {
+  try {
+    fs.mkdirSync(snapshotDir(), { recursive: true });
+    fs.writeFileSync(snapshotPath(snap.term), JSON.stringify(snap));
+  } catch (err) {
+    log.warn("clemson snapshot write failed", {
+      term: snap.term,
+      err: String(err),
+    });
+  }
+}
+
+// Scan a term's full section list and persist it. Returns null if the scan did
+// not complete (so a throttled/partial scan never overwrites a good snapshot).
+export async function refreshClemsonSnapshot(
+  term: string,
+): Promise<ClemsonTermSnapshot | null> {
+  const resolved = await resolveTerm(term);
+  if (!resolved) return null;
+  const fetched = await fetchSectionsPaged(resolved.code, undefined, undefined);
+  if (fetched === null || !fetched.complete) return null;
+  const snap: ClemsonTermSnapshot = {
+    term: resolved.code,
+    termDescription: resolved.description,
+    fetchedAt: new Date().toISOString(),
+    sectionCount: fetched.sections.length,
+    sections: fetched.sections,
+  };
+  saveClemsonSnapshot(snap);
+  return snap;
+}
+
+// A term is "live" (needs daily refresh) unless Banner labels it View Only.
+// New terms (e.g. Spring 2027) appear in getTerms automatically without the
+// label, so the daily job picks them up with no manual configuration.
+function isLiveTerm(t: ClemsonTerm): boolean {
+  return !/\(view only\)/i.test(t.description);
+}
+
+export interface ClemsonRefreshResult {
+  term: string;
+  description: string;
+  sections: number | null; // null = scan failed (snapshot left untouched)
+}
+
+// Daily job: discover the live terms via getTerms and refresh each snapshot.
+export async function refreshLiveClemsonSnapshots(): Promise<
+  ClemsonRefreshResult[]
+> {
+  const terms = await listClemsonTerms(20);
+  if (!terms) return [];
+  const out: ClemsonRefreshResult[] = [];
+  for (const t of terms.filter(isLiveTerm)) {
+    const snap = await refreshClemsonSnapshot(t.code);
+    out.push({
+      term: t.code,
+      description: t.description,
+      sections: snap?.sectionCount ?? null,
+    });
+    await sleep(1000); // be gentle between term scans
+  }
+  return out;
+}
+
+export interface TermSections {
+  termCode: string;
+  termDescription: string;
+  sections: ClemsonSection[];
+  /** ISO date of the snapshot the sections came from; null when fetched live. */
+  snapshotDate: string | null;
+  scope: "snapshot" | "live-full" | "live-subject";
+}
+
+// Section source for a query: prefer the saved snapshot; on refresh or a cold
+// (missing) snapshot, scan live. When no snapshot exists and a subject is
+// given, do the cheap subject-scoped scan instead of forcing a full scan, so a
+// missing snapshot degrades gracefully rather than hammering Banner.
+async function getTermSections(
+  term: string,
+  opts: { subject?: string; refresh?: boolean } = {},
+): Promise<TermSections | null> {
+  const resolved = await resolveTerm(term);
+  if (!resolved) return null;
+  const base = {
+    termCode: resolved.code,
+    termDescription: resolved.description,
+  };
+
+  if (opts.refresh) {
+    const snap = await refreshClemsonSnapshot(resolved.code);
+    if (snap) {
+      return {
+        ...base,
+        sections: snap.sections,
+        snapshotDate: snap.fetchedAt,
+        scope: "snapshot",
+      };
+    }
+    // refresh failed — fall through to any existing snapshot / live scan.
+  }
+
+  const existing = loadClemsonSnapshot(resolved.code);
+  if (existing) {
+    return {
+      ...base,
+      sections: existing.sections,
+      snapshotDate: existing.fetchedAt,
+      scope: "snapshot",
+    };
+  }
+
+  // Cold: no snapshot on disk.
+  if (opts.subject) {
+    const scoped = await fetchSectionsPaged(
+      resolved.code,
+      opts.subject,
+      undefined,
+    );
+    if (scoped === null) return null;
+    return {
+      ...base,
+      sections: scoped.sections,
+      snapshotDate: null,
+      scope: "live-subject",
+    };
+  }
+  const full = await fetchSectionsPaged(resolved.code, undefined, undefined);
+  if (full === null) return null;
+  if (full.complete) {
+    const snap: ClemsonTermSnapshot = {
+      term: resolved.code,
+      termDescription: resolved.description,
+      fetchedAt: new Date().toISOString(),
+      sectionCount: full.sections.length,
+      sections: full.sections,
+    };
+    saveClemsonSnapshot(snap);
+    return {
+      ...base,
+      sections: full.sections,
+      snapshotDate: snap.fetchedAt,
+      scope: "snapshot",
+    };
+  }
+  return {
+    ...base,
+    sections: full.sections,
+    snapshotDate: null,
+    scope: "live-full",
+  };
+}
+
+function describeScope(ts: TermSections, subject?: string): string {
+  if (ts.scope === "snapshot") {
+    return `From the daily snapshot taken ${ts.snapshotDate}.`;
+  }
+  if (ts.scope === "live-subject") {
+    return (
+      `Live scan scoped to subject ${(subject || "").toUpperCase()} ` +
+      "(no snapshot yet — run a refresh to cache the full term)."
+    );
+  }
+  return "Live full-term scan (no snapshot yet — now cached).";
+}
+
 export async function findClemsonInstructorClasses(params: {
   term: string;
   instructor: string;
   subject?: string;
   openOnly?: boolean;
   max?: number;
+  refresh?: boolean;
 }): Promise<ClemsonInstructorClasses | null> {
   try {
     const resolved = await resolveTerm(params.term);
@@ -538,8 +733,11 @@ export async function findClemsonInstructorClasses(params: {
       candidates: [],
       sections: [],
       note: null,
+      snapshotDate: null,
+      scope: null,
     };
 
+    // Resolve the name -> candidate(s) via a live get_instructor lookup.
     const jar = await openSession(resolved.code);
     if (!jar) return null;
     const all = await fetchInstructors(jar, resolved.code, surname, 50);
@@ -553,28 +751,30 @@ export async function findClemsonInstructorClasses(params: {
     }
     const matched = pool[0];
 
-    // List sections (subject-scoped when provided) and filter by faculty name.
-    // fetchSectionsPaged opens its own retrying session; the faculty filter is
-    // client-side, so it doesn't need the get_instructor-primed lookup jar.
-    const fetched = await fetchSectionsPaged(
-      resolved.code,
-      params.subject,
-      params.openOnly,
-    );
-    if (fetched === null) return null;
-    const sections = fetched.sections.filter((s) =>
+    // Sections come from the daily snapshot (or a live fallback) and are
+    // filtered by faculty name in code.
+    const ts = await getTermSections(resolved.code, {
+      subject: params.subject,
+      refresh: params.refresh,
+    });
+    if (ts === null) return null;
+    let sections = ts.sections.filter((s) =>
       s.instructors.some((f) =>
         tokens.every((t) => f.name.toLowerCase().includes(t)),
       ),
     );
+    if (params.openOnly)
+      sections = sections.filter((s) => s.seatsAvailable > 0);
     const limited =
       typeof params.max === "number" ? sections.slice(0, params.max) : sections;
-    const note = params.subject
-      ? `Scoped to subject ${params.subject.toUpperCase()}.`
-      : fetched.complete
-        ? "Scanned the full term (no subject given)."
-        : "Full-term scan was truncated; pass a subject to narrow it.";
-    return { ...base, matched, sections: limited, note };
+    return {
+      ...base,
+      matched,
+      sections: limited,
+      note: describeScope(ts, params.subject),
+      snapshotDate: ts.snapshotDate,
+      scope: ts.scope,
+    };
   } catch (err) {
     log.warn("clemson instructor classes failed", { err: String(err) });
     return null;
@@ -627,6 +827,9 @@ export interface ClemsonRoomAvailability {
   busy: ClemsonBusyBlock[];
   free: ClemsonFreeBlock[];
   note: string | null;
+  /** ISO date of the snapshot used; null when fetched live. */
+  snapshotDate: string | null;
+  scope: "snapshot" | "live-full" | "live-subject" | null;
 }
 
 // Free/busy for a room on a day pattern (e.g. MW), derived from scheduled
@@ -643,16 +846,14 @@ export async function getClemsonRoomAvailability(params: {
   dayStart?: string;
   dayEnd?: string;
   minMinutes?: number;
+  refresh?: boolean;
 }): Promise<ClemsonRoomAvailability | null> {
   try {
-    const resolved = await resolveTerm(params.term);
-    if (!resolved) return null;
-    const fetched = await fetchSectionsPaged(
-      resolved.code,
-      params.subject,
-      undefined,
-    );
-    if (fetched === null) return null;
+    const ts = await getTermSections(params.term, {
+      subject: params.subject,
+      refresh: params.refresh,
+    });
+    if (ts === null) return null;
 
     const pattern = (params.days || "MW")
       .toUpperCase()
@@ -664,7 +865,7 @@ export async function getClemsonRoomAvailability(params: {
 
     type Interval = { s: number; e: number; course: string };
     const intervals: Interval[] = [];
-    for (const s of fetched.sections) {
+    for (const s of ts.sections) {
       for (const m of s.meetings) {
         if (!m.building || !m.building.toLowerCase().includes(bldg)) continue;
         if ((m.room || "") !== params.room) continue;
@@ -724,15 +925,17 @@ export async function getClemsonRoomAvailability(params: {
       });
     }
 
-    const note = params.subject
-      ? `Scoped to subject ${params.subject.toUpperCase()} (classes only); other subjects in this room are not included.`
-      : fetched.complete
-        ? "Full-term scan, all subjects (scheduled classes only; excludes ad-hoc 25Live events)."
-        : "Full-term scan was truncated; results may be incomplete.";
+    const coverage =
+      ts.scope === "live-subject"
+        ? ` Only subject ${(params.subject || "").toUpperCase()} was searched (no snapshot yet), so classes from other departments in this room are not included.`
+        : "";
+    const note =
+      `${describeScope(ts, params.subject)} Scheduled classes only ` +
+      `(excludes ad-hoc 25Live events).${coverage}`;
 
     return {
-      term: resolved.code,
-      termDescription: resolved.description,
+      term: ts.termCode,
+      termDescription: ts.termDescription,
       building: params.building,
       room: params.room,
       pattern,
@@ -740,6 +943,8 @@ export async function getClemsonRoomAvailability(params: {
       busy,
       free: free.filter((f) => f.minutes >= minMinutes),
       note,
+      snapshotDate: ts.snapshotDate,
+      scope: ts.scope,
     };
   } catch (err) {
     log.warn("clemson room availability failed", { err: String(err) });

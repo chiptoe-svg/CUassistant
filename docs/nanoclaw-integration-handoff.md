@@ -110,7 +110,7 @@ Register the `Bearer ${CUASSISTANT_MCP_TOKEN}` reference from day one (see Auth)
 
 `create-calendar-event`, `create-draft-email`, `create-todo-task`, `get-calendar-event`, `get-calendar-view`, `get-mail-message`, `get-send-status`, `get-todo-task`, `get_pending_actions`, `get_scan_status`, `list-calendar-events`, `list-mail-messages`, `list-todo-task-lists`, `list-todo-tasks`, `move-mail-message`, `send-gmail`, `send-outlook-mail`, `update-calendar-event`, `update-mail-message`, `update-todo-task`.
 
-(Policy-gated/destructive tools — delete/accept/decline/trigger_scan — were correctly _not_ registered. Send tools registered but `send-approval disabled` in this test env since `TELEGRAM_BOT_TOKEN`/`TELEGRAM_APPROVER_USER_ID` were unset — wire those before relying on the Telegram gate.)
+(Policy-gated/destructive tools — delete/accept/decline/trigger*scan — were correctly \_not* registered. Send tools registered but `send-approval disabled` in this test env since `TELEGRAM_BOT_TOKEN`/`TELEGRAM_APPROVER_USER_ID` were unset — wire those before relying on the Telegram gate.)
 
 ## Quick reference
 

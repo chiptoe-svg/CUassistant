@@ -25,14 +25,20 @@ whether they hold credentials — not by vendor domain.
     containerized NanoClaw agent uses, reaching the host via
     `host.docker.internal`. A launchd service
     (`launchd/com.cuassistant.mcp-http.plist`) runs it as a host daemon.
-- **Inbound auth (bearer).** The HTTP transport requires
-  `Authorization: Bearer ${MCP_AUTH_TOKEN}` **when `MCP_AUTH_TOKEN` is set**.
-  When it is unset the server is **loopback-open** (no bearer required) — but
-  it **fails closed**: the server refuses to start unauthenticated on a
-  non-loopback bind (`assertHttpAuthConfig`). The interim integration mode is
-  loopback + no token; the target mode is a vault-injected bearer, which is a
-  pure config change with no tool or transport changes. The stdio transport
-  needs no token (no port).
+- **Inbound auth (per-agent token registry).** Each authorized agent has its
+  **own** bearer token, minted with `npm run mcp:pair -- --id <agent>`; only the
+  SHA-256 hash is stored (`state/mcp-consumers.json`). A request is admitted only
+  if its `Authorization: Bearer …` hashes to a registered consumer, and the
+  matched consumer id is the audit identity. The HTTP transport **fails closed**
+  — it refuses to start with no authorized consumers (no silent loopback-open);
+  there is no shared global secret, so an un-provisioned workload on the same
+  host gets nothing. Grant by provisioning, revoke with
+  `npm run mcp:consumers -- --revoke <agent>`; the registry reloads per request,
+  so grant/revoke take effect without a restart. A single `MCP_AUTH_TOKEN`, if
+  set, is also accepted (as consumer `env-token`) for simple setups. The stdio
+  transport needs no token (no port). See `docs/security/secret-rotation.md`.
+  (mTLS is available as an optional per-agent upgrade but is not the baseline —
+  bearer tokens carry no cert-expiry outage risk.)
 - **Backends.** Microsoft Graph via the GCassistant Azure AD app, reached
   through `src/mcp-tools/graph-helpers.ts` (`authedFetch` on
   `getMs365AccessToken`). Consented delegated scopes: `Mail.ReadWrite`,
@@ -219,7 +225,7 @@ Active; policy constraints enforced on every call.
 - No mailbox rules CRUD; no shared mailbox or shared calendar access.
 - No Teams chat, OneDrive, SharePoint, Drive, or Planner tools.
 - No SSO. Caller identity on stdio is inherited from the spawning process; on
-  HTTP it is the bearer (or loopback trust in interim mode). Per-caller
-  authentication is a separate review step.
+  HTTP it is the per-agent registry token (the matched consumer id). Federated
+  identity beyond the token registry is a separate review step.
 - No rate limiting beyond the send gate's throttles. Per-tool throttles are a
   separate review step.

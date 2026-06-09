@@ -34,6 +34,14 @@ actions:
     constraints:
       - own_mailbox_only
 
+  - id: mail.list_folders
+    surface: mail
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_mailbox_only
+
   - id: mail.update_message
     surface: mail
     risk: low
@@ -51,13 +59,13 @@ actions:
     risk: low
     reversibility: reversible
     approval: none
+    # destination_subtree_allow_list: the destination path must sit under an
+    # allowed prefix in MCP_ALLOWED_MAIL_DESTINATIONS (segment-aware) AND must
+    # not be a system/destructive folder (trash/junk/deleted/recoverable). Fails
+    # closed when no prefixes are configured.
     constraints:
       - own_mailbox_only
-      - destination_folder_allow_list
-      - no_delete_folder
-      - no_junk_folder
-      - no_recoverable_items
-      - no_permanent_delete
+      - destination_subtree_allow_list
 
   - id: mail.create_draft
     surface: mail

@@ -22,6 +22,11 @@
 
 import { TIMEZONE } from "../config.js";
 import { log } from "../log.js";
+import {
+  buildFolderPaths,
+  normalizeMailPath,
+  type RawFolder,
+} from "../mail-paths.js";
 import { getMs365AccessToken } from "../ms365.js";
 import { formatTaskBody, taskMarkerNeedles } from "../task-body.js";
 import { assertMcpOperation } from "./permissions.js";
@@ -292,6 +297,76 @@ export async function getMailMessageBody(
     subject: m.subject ?? "",
     body: m.body?.content ?? m.bodyPreview ?? "",
   };
+}
+
+// --- Mail folders (for subtree-allow-listed moves) ---
+
+async function fetchFolderLevel(
+  parentId: string | null,
+): Promise<Array<RawFolder & { childCount: number }> | null> {
+  const base =
+    parentId === null
+      ? "/me/mailFolders"
+      : `/me/mailFolders/${parentId}/childFolders`;
+  const r = await authedFetch(
+    `${base}?$top=200&$select=id,displayName,parentFolderId,childFolderCount`,
+  );
+  if (!r || !r.ok) return null;
+  const body = (await r.json()) as {
+    value?: Array<{
+      id?: string;
+      displayName?: string;
+      parentFolderId?: string;
+      childFolderCount?: number;
+    }>;
+  };
+  return (body.value ?? []).map((f) => ({
+    id: String(f.id ?? ""),
+    displayName: f.displayName ?? "",
+    parentFolderId: f.parentFolderId,
+    childCount: f.childFolderCount ?? 0,
+  }));
+}
+
+/** All mail folders as {id, path}, walking the full hierarchy breadth-first. */
+export async function listMs365MailFolders(): Promise<Array<{
+  id: string;
+  path: string;
+}> | null> {
+  const all: RawFolder[] = [];
+  const queue: Array<string | null> = [null];
+  let guard = 0;
+  while (queue.length && guard < 1000) {
+    guard++;
+    const parent = queue.shift() ?? null;
+    const level = await fetchFolderLevel(parent);
+    if (level === null) {
+      if (parent === null) return null; // top-level failure is fatal
+      continue; // a child-level failure just prunes that branch
+    }
+    for (const f of level) {
+      all.push({
+        id: f.id,
+        displayName: f.displayName,
+        parentFolderId: f.parentFolderId,
+      });
+      if (f.childCount > 0) queue.push(f.id);
+    }
+  }
+  return buildFolderPaths(all);
+}
+
+/** Resolve a folder path (e.g. "sorted/News") to its Graph folder id. */
+export async function resolveMs365FolderByPath(
+  path: string,
+): Promise<string | null> {
+  const folders = await listMs365MailFolders();
+  if (!folders) return null;
+  const target = normalizeMailPath(path).toLowerCase();
+  return (
+    folders.find((f) => normalizeMailPath(f.path).toLowerCase() === target)
+      ?.id ?? null
+  );
 }
 
 export async function moveMailMessage(

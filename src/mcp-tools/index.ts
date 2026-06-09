@@ -6,6 +6,7 @@
 import "./mail-read.js";
 import "./calendar-read.js";
 import "./todo-tasks.js";
+import "./mail-folders.js";
 import "./mail-write.js";
 import "./calendar-write.js";
 import "./host-orchestration.js";

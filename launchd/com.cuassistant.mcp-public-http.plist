@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CUassistant PUBLIC MCP server (HTTP) service for launchd.
+
+  Runs the PUBLIC (no credentials) HTTP MCP server on 127.0.0.1:8766,
+  exposing only the Clemson class-schedule tools (public Banner data).
+  No MCP_AUTH_TOKEN applies — this server is loopback-open by design;
+  all data served is public. Do NOT add a bearer to this server.
+
+  A containerized NanoClaw agent reaches it via host.docker.internal:8766
+  with no Authorization header. The credentialed server (port 8765) is a
+  separate process; see com.cuassistant.mcp-http.plist for that service.
+
+  Both HTTP servers are loopback-only. Ports are tracked in
+  ~/.dev-ports.yaml (cuassistant: mcp_credentialed 8765, mcp_public 8766).
+
+  Setup (one time):
+    1. Edit this file: replace REPO_PATH with the absolute path to your
+       local repo, NPM_PATH with the absolute path to your npm binary
+       (run `which npm`), and HOME_PATH with $HOME.
+    2. cp launchd/com.cuassistant.mcp-public-http.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.cuassistant.mcp-public-http.plist
+    4. (optional) launchctl start com.cuassistant.mcp-public-http  # bring up now
+    5. tail -f ~/Library/Logs/cuassistant.mcp-public.out.log
+
+  The service starts automatically at login and is kept alive by launchd.
+  MCP_PUBLIC_HTTP_PORT defaults to 8766 if not set in the environment.
+
+  To unload:
+    launchctl unload ~/Library/LaunchAgents/com.cuassistant.mcp-public-http.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuassistant.mcp-public-http</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>NPM_PATH</string>
+    <string>run</string>
+    <string>mcp:public:http</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPO_PATH</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>HOME_PATH</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp-public.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp-public.err.log</string>
+</dict>
+</plist>

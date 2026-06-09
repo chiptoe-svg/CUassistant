@@ -1,181 +1,211 @@
-# CUassistant MCP server — IT review manifest
+# CUassistant MCP servers — IT review manifest
 
-This is the human-readable companion to `src/mcp-server.ts`. It enumerates
-the MCP operation surface, what backend each operation uses, what permission it
-requires, and whether the tool is exposed to the agent.
+This is the human-readable companion to the MCP entry points
+(`src/mcp-server.ts`, `src/mcp-public.ts`). It enumerates the MCP operation
+surface across **two servers**, what backend each operation uses, what
+permission it requires, and whether the tool is exposed to the agent.
 
-## Architecture summary
+## Two servers, split by security class
 
-- **Transport.** stdio (`@modelcontextprotocol/sdk` `StdioServerTransport`).
-  The server is a local host MCP server, not a containerized service. Stdio is
-  the only listener — no HTTP, no socket.
-- **Backend.** A single Microsoft Graph backend: the GCassistant Azure AD app,
-  reached through the shared helper `src/mcp-tools/graph-helpers.ts`
-  (`authedFetch` on `getMs365AccessToken`). Consented delegated scopes:
-  `Mail.ReadWrite`, `Tasks.ReadWrite`, `Calendars.ReadWrite`. Gmail send (via
-  the local `gws` CLI) is the only non-Graph backend and only for the approval
-  gate.
-- **Credentials.** Host-only. The GCassistant refresh token in
-  `${CUASSISTANT_REPO}/.env` (`MS365_REFRESH_TOKEN`) is read by the host
-  process and never crosses any boundary. If a containerized agent runtime
-  launches this MCP server, it connects through stdio and requests operations
-  through tools — it never receives credentials directly.
-- **Allow-list.** `src/mcp-tools/permissions.ts` is the operation registry for
-  this server, and `policy/action-policy.yaml` is the policy registry. A tool
-  is exposed only when its operation is active and maps to an `approval: none`
-  policy action. Tool registration fails closed if the tool has no operation
-  mapping. Every tool still calls `assertMcpOperation()` before any backend
-  call, and write tools pass their normalized inputs through policy constraint
-  validators.
-- **Authorized use.** `policy/action-policy.yaml` is the authorized-use list.
-  OAuth scopes describe what the delegated token may technically permit; the
-  authorized-use list describes what CUassistant is allowed to expose or
-  execute. Destructive or affects-others actions (mail/event delete, RSVP, task
-  delete, trigger-scan) are `approval: human_required` and are therefore wired
-  but not registered.
-- **Audit.** Every write tool wraps its backend call in an intent + terminal
-  pair written to `state/decisions.jsonl` via the same `appendDecision()` the
-  scan flow uses. Reviewers see one source of truth for "what changed and
-  why."
+CUassistant exposes its capabilities through two MCP servers, separated by
+whether they hold credentials — not by vendor domain.
 
-## Operation table
+### `cuassistant-credentialed` (host process)
 
-| Tool                                | Operation key                       | Policy action                    | Backend           | Permission required        | Exposed                     |
-| ----------------------------------- | ----------------------------------- | -------------------------------- | ----------------- | -------------------------- | --------------------------- |
-| `list-mail-messages`                | `mail.list_messages`                | `mail.list_inbox`                | GCassistant Graph | Mail.ReadWrite             | yes                         |
-| `get-mail-message`                  | `mail.get_message`                  | `mail.fetch_body`                | GCassistant Graph | Mail.ReadWrite             | yes                         |
-| `list-calendar-events`              | `calendar.list_events`              | `calendar.list_events`           | GCassistant Graph | Calendars.ReadWrite        | yes                         |
-| `get-calendar-event`                | `calendar.get_event`                | `calendar.get_event`             | GCassistant Graph | Calendars.ReadWrite        | yes                         |
-| `get-calendar-view`                 | `calendar.get_view`                 | `calendar.get_view`              | GCassistant Graph | Calendars.ReadWrite        | yes                         |
-| `list-todo-task-lists`              | `todo.list_lists`                   | `todo.list_lists`                | GCassistant Graph | Tasks.ReadWrite            | yes                         |
-| `list-todo-tasks`                   | `todo.list_tasks`                   | `todo.list_tasks`                | GCassistant Graph | Tasks.ReadWrite            | yes                         |
-| `get-todo-task`                     | `todo.get_task`                     | `todo.get_task`                  | GCassistant Graph | Tasks.ReadWrite            | yes                         |
-| `create-todo-task`                  | `todo.create_task`                  | `todo.create_task`               | GCassistant Graph | Tasks.ReadWrite            | yes                         |
-| `update-todo-task`                  | `todo.update_task`                  | `todo.update_task`               | GCassistant Graph | Tasks.ReadWrite            | yes                         |
-| `delete-todo-task`                  | `todo.delete_task`                  | `todo.delete_task`               | GCassistant Graph | Tasks.ReadWrite            | no: policy-blocked          |
-| `move-mail-message`                 | `mail.move_message`                 | `mail.move_message`              | GCassistant Graph | Mail.ReadWrite             | yes (needs dest allow-list) |
-| `update-mail-message`               | `mail.update_message`               | `mail.update_message`            | GCassistant Graph | Mail.ReadWrite             | yes                         |
-| `create-draft-email`                | `mail.create_draft`                 | `mail.create_draft`              | GCassistant Graph | Mail.ReadWrite             | yes                         |
-| `create-calendar-event`             | `calendar.create_event`             | `calendar.create_personal_event` | GCassistant Graph | Calendars.ReadWrite        | yes                         |
-| `update-calendar-event`             | `calendar.update_event`             | `calendar.update_personal_event` | GCassistant Graph | Calendars.ReadWrite        | yes                         |
-| `delete-calendar-event`             | `calendar.delete_event`             | `calendar.delete_event`          | GCassistant Graph | Calendars.ReadWrite        | no: policy-blocked          |
-| `accept-calendar-event`             | `calendar.accept_event`             | `calendar.respond_to_invite`     | GCassistant Graph | Calendars.ReadWrite        | no: policy-blocked          |
-| `decline-calendar-event`            | `calendar.decline_event`            | `calendar.respond_to_invite`     | GCassistant Graph | Calendars.ReadWrite        | no: policy-blocked          |
-| `tentatively-accept-calendar-event` | `calendar.tentatively_accept_event` | `calendar.respond_to_invite`     | GCassistant Graph | Calendars.ReadWrite        | no: policy-blocked          |
-| `trigger_scan`                      | `host.trigger_scan`                 | `host.trigger_scan`              | host (scan.ts)    | scan flow's scopes         | no: policy-blocked          |
-| `get_scan_status`                   | `host.get_scan_status`              | `host.get_scan_status`           | host (state read) | none                       | yes                         |
-| `get_pending_actions`               | `host.get_pending_actions`          | `host.get_pending_actions`       | host (state read) | none                       | yes                         |
-| `request_send_mail`                 | `mail.send_with_approval`           | `mail.send_with_approval`        | host gate + gws   | gmail.send                 | yes: gate config required   |
-| `get_send_status`                   | `mail.send_with_approval`           | `mail.send_with_approval`        | host gate         | —                          | yes                         |
+- **What.** All credentialed accounts and host orchestration: MS365
+  mail/calendar/tasks today, Clemson Gmail (`gws`) and future credentialed
+  vendors next, plus the host scan orchestration and the send-approval gate.
+  This is a **vendor-neutral credentialed registry** — new credentialed
+  vendors register here (vendor-namespaced, e.g. `send-outlook-mail` /
+  `send-gmail`); they do not get their own server.
+- **Transports.** Dual.
+  - **stdio** — `npm run mcp` (`tsx src/mcp-server.ts`). For local/dev/tests.
+  - **Streamable HTTP** — `npm run mcp:http` (`MCP_TRANSPORT=http`). Binds
+    `${MCP_HTTP_HOST:-127.0.0.1}:${MCP_HTTP_PORT:-8765}`. This is the path a
+    containerized NanoClaw agent uses, reaching the host via
+    `host.docker.internal`. A launchd service
+    (`launchd/com.cuassistant.mcp-http.plist`) runs it as a host daemon.
+- **Inbound auth (bearer).** The HTTP transport requires
+  `Authorization: Bearer ${MCP_AUTH_TOKEN}` **when `MCP_AUTH_TOKEN` is set**.
+  When it is unset the server is **loopback-open** (no bearer required) — but
+  it **fails closed**: the server refuses to start unauthenticated on a
+  non-loopback bind (`assertHttpAuthConfig`). The interim integration mode is
+  loopback + no token; the target mode is a vault-injected bearer, which is a
+  pure config change with no tool or transport changes. The stdio transport
+  needs no token (no port).
+- **Backends.** Microsoft Graph via the GCassistant Azure AD app, reached
+  through `src/mcp-tools/graph-helpers.ts` (`authedFetch` on
+  `getMs365AccessToken`). Consented delegated scopes: `Mail.ReadWrite`,
+  `Tasks.ReadWrite`, `Calendars.ReadWrite`, and `Mail.Send` (for Outlook
+  sending through the gate). The send gate's Gmail path uses the local `gws`
+  CLI.
+- **Credentials.** Host-only. `MS365_REFRESH_TOKEN` is read from a pluggable
+  secret resolver — `.env` for standalone use, OneCLI vault injection under
+  NanoClaw — by the host process and never crosses any boundary. A
+  containerized agent connects over HTTP and requests operations through
+  tools; it never receives credentials directly. Do not mount the host's
+  `.env` or token directories into any container.
+
+### `cuassistant-public` (no credentials)
+
+- **What.** The Clemson class-schedule tools backed by Clemson's public
+  Banner Browse Classes API. No credentials, public data only.
+- **Transport.** stdio — `npm run mcp:public` (`tsx src/mcp-public.ts`).
+  Because it holds no secret, it is safe to run as a stdio subprocess **inside**
+  a NanoClaw container and reach Clemson's public API directly.
+
+## Allow-list and authorized use
+
+- `src/mcp-tools/permissions.ts` is the operation registry; both servers
+  assert against it. `policy/action-policy.yaml` is the policy registry. A
+  tool is exposed only when its operation is active **and** maps to an
+  `approval: none` policy action; registration fails closed otherwise. Every
+  tool calls `assertMcpOperation()` before any backend call, and write tools
+  pass normalized inputs through policy constraint validators.
+- OAuth scopes describe what the delegated token may technically permit; the
+  authorized-use list (`action-policy.yaml`) describes what CUassistant is
+  allowed to expose. Destructive or affects-others actions (mail/event delete,
+  RSVP, task delete, trigger-scan) are `approval: human_required` and are
+  therefore **wired but not exposed**.
+- **Audit.** Every write/send tool wraps its backend call in an intent +
+  terminal pair written to `state/decisions.jsonl` via `appendDecision()` —
+  one source of truth for what changed and why.
+
+## Operation table — `cuassistant-credentialed`
+
+| Tool                    | Operation key              | Policy action                    | Backend           | Scope               | Exposed                     |
+| ----------------------- | -------------------------- | -------------------------------- | ----------------- | ------------------- | --------------------------- |
+| `list-mail-messages`    | `mail.list_messages`       | `mail.list_inbox`                | GCassistant Graph | Mail.ReadWrite      | yes                         |
+| `get-mail-message`      | `mail.get_message`         | `mail.fetch_body`                | GCassistant Graph | Mail.ReadWrite      | yes                         |
+| `move-mail-message`     | `mail.move_message`        | `mail.move_message`              | GCassistant Graph | Mail.ReadWrite      | yes (needs dest allow-list) |
+| `update-mail-message`   | `mail.update_message`      | `mail.update_message`            | GCassistant Graph | Mail.ReadWrite      | yes                         |
+| `create-draft-email`    | `mail.create_draft`        | `mail.create_draft`              | GCassistant Graph | Mail.ReadWrite      | yes                         |
+| `list-calendar-events`  | `calendar.list_events`     | `calendar.list_events`           | GCassistant Graph | Calendars.ReadWrite | yes                         |
+| `get-calendar-event`    | `calendar.get_event`       | `calendar.get_event`             | GCassistant Graph | Calendars.ReadWrite | yes                         |
+| `get-calendar-view`     | `calendar.get_view`        | `calendar.get_view`              | GCassistant Graph | Calendars.ReadWrite | yes                         |
+| `create-calendar-event` | `calendar.create_event`    | `calendar.create_personal_event` | GCassistant Graph | Calendars.ReadWrite | yes                         |
+| `update-calendar-event` | `calendar.update_event`    | `calendar.update_personal_event` | GCassistant Graph | Calendars.ReadWrite | yes                         |
+| `list-todo-task-lists`  | `todo.list_lists`          | `todo.list_lists`                | GCassistant Graph | Tasks.ReadWrite     | yes                         |
+| `list-todo-tasks`       | `todo.list_tasks`          | `todo.list_tasks`                | GCassistant Graph | Tasks.ReadWrite     | yes                         |
+| `get-todo-task`         | `todo.get_task`            | `todo.get_task`                  | GCassistant Graph | Tasks.ReadWrite     | yes                         |
+| `create-todo-task`      | `todo.create_task`         | `todo.create_task`               | GCassistant Graph | Tasks.ReadWrite     | yes                         |
+| `update-todo-task`      | `todo.update_task`         | `todo.update_task`               | GCassistant Graph | Tasks.ReadWrite     | yes                         |
+| `get_scan_status`       | `host.get_scan_status`     | `host.get_scan_status`           | host (state read) | none                | yes                         |
+| `get_pending_actions`   | `host.get_pending_actions` | `host.get_pending_actions`       | host (state read) | none                | yes                         |
+| `send-outlook-mail`     | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + Graph | Mail.Send           | yes: via approval gate      |
+| `send-gmail`            | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + `gws` | gmail.send          | yes: via approval gate      |
+| `get-send-status`       | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate         | —                   | yes                         |
+
+### Wired but NOT exposed (policy `human_required`)
+
+These tools are fully wired to a backend but stay unregistered because their
+mapped policy action is `approval: human_required`. They are gated, not absent.
+
+| Tool                                | Policy action                | Why                   |
+| ----------------------------------- | ---------------------------- | --------------------- |
+| `delete-todo-task`                  | `todo.delete_task`           | destructive           |
+| `delete-calendar-event`             | `calendar.delete_event`      | destructive           |
+| `accept-calendar-event`             | `calendar.respond_to_invite` | affects others (RSVP) |
+| `decline-calendar-event`            | `calendar.respond_to_invite` | affects others (RSVP) |
+| `tentatively-accept-calendar-event` | `calendar.respond_to_invite` | affects others (RSVP) |
+| `trigger_scan`                      | `host.trigger_scan`          | host side effect      |
+
+## Operation table — `cuassistant-public`
+
+| Tool                              | Operation key                | Policy action                | Backend | Exposed |
+| --------------------------------- | ---------------------------- | ---------------------------- | ------- | ------- |
+| `list-clemson-terms`              | `clemson.list_terms`         | `clemson.list_terms`         | Banner  | yes     |
+| `search-clemson-classes`          | `clemson.search_classes`     | `clemson.search_classes`     | Banner  | yes     |
+| `get-clemson-section-details`     | `clemson.section_details`    | `clemson.section_details`    | Banner  | yes     |
+| `find-clemson-instructor-classes` | `clemson.instructor_classes` | `clemson.instructor_classes` | Banner  | yes     |
+| `get-clemson-room-availability`   | `clemson.room_availability`  | `clemson.room_availability`  | Banner  | yes     |
 
 ## Tool details
 
 ### Mail reads — GCassistant Graph (Mail.ReadWrite)
 
 - `list-mail-messages` — list Outlook Inbox messages, newest first. Optional
-  `sinceIso` and `untilIso` filters. Returns minimal metadata only; bodies
-  are fetched separately via `get-mail-message`.
+  `sinceIso` / `untilIso` filters. Metadata only; bodies fetched separately.
 - `get-mail-message` — fetch one message's subject and body by id.
-
-### Calendar reads — GCassistant Graph (Calendars.ReadWrite)
-
-- `list-calendar-events` — list events ordered by start time.
-- `get-calendar-event` — fetch one event by id.
-- `get-calendar-view` — events in a window with recurrences expanded into
-  occurrences (Graph `calendarView` semantics).
-
-### Task reads/writes — GCassistant Graph (Tasks.ReadWrite)
-
-- `list-todo-task-lists` — discover task lists. Used to find the default
-  `Tasks` list.
-- `list-todo-tasks`, `get-todo-task` — read tasks.
-- `create-todo-task` — create a task. Optional `auditMarker` builds the body
-  via CUassistant's existing `formatTaskBody()` so MCP-created tasks share
-  the same dedupe convention as scan-created tasks.
-- `update-todo-task` — patch title, status, importance, due date, body.
-- `delete-todo-task` — wired but not exposed; `todo.delete_task` is
-  `approval: human_required`.
 
 ### Mail writes — GCassistant Graph (Mail.ReadWrite)
 
-Active. Policy constraints are enforced on every call:
+Active; policy constraints enforced on every call.
 
-- `move-mail-message` — move a message into a target folder. `POST
-  /me/messages/{id}/move`. Requires the `MCP_ALLOWED_MAIL_DESTINATIONS`
-  env allow-list (fails closed without it); junk/deleted/recoverable folders
-  are rejected.
-- `update-mail-message` — patch metadata only (mark read, flag, importance,
-  categories). `PATCH /me/messages/{id}`. Body rewrites and send/delete are
-  rejected by policy.
-- `create-draft-email` — create a draft in the Drafts folder. `POST
-  /me/messages`. Draft only; **no send tool exists here** — sending goes
-  through the separate approval gate.
+- `move-mail-message` — `POST /me/messages/{id}/move`. Requires the
+  `MCP_ALLOWED_MAIL_DESTINATIONS` env allow-list (fails closed without it);
+  junk/deleted/recoverable folders are rejected.
+- `update-mail-message` — `PATCH /me/messages/{id}`, metadata only (mark read,
+  flag, importance, categories). Body rewrites and send/delete rejected.
+- `create-draft-email` — `POST /me/messages`. Draft only; sending goes through
+  the separate approval gate.
 
-### Calendar writes — GCassistant Graph (Calendars.ReadWrite)
+### Calendar reads / writes — GCassistant Graph (Calendars.ReadWrite)
 
-- `create-calendar-event`, `update-calendar-event` — active. Personal events
-  on the user's primary calendar only; attendees/invites and shared/delegated
+- `list-calendar-events`, `get-calendar-event` — read events.
+- `get-calendar-view` — events in a window with recurrences expanded.
+- `create-calendar-event`, `update-calendar-event` — active; personal events on
+  the user's primary calendar only. Attendees/invites and shared/delegated
   calendars are rejected by policy.
-- `delete-calendar-event` and RSVP (`accept-`, `decline-`,
-  `tentatively-accept-calendar-event`) — wired but not exposed; they map to
-  `approval: human_required` policy actions.
+- `delete-calendar-event` and the three RSVP tools — wired but not exposed
+  (`approval: human_required`).
+
+### Task reads / writes — GCassistant Graph (Tasks.ReadWrite)
+
+- `list-todo-task-lists`, `list-todo-tasks`, `get-todo-task` — reads.
+- `create-todo-task` — optional `auditMarker` builds the body via
+  `formatTaskBody()` so MCP-created tasks share the scan dedupe convention.
+- `update-todo-task` — patch title, status, importance, due date, body.
+- `delete-todo-task` — wired but not exposed (`approval: human_required`).
 
 ### Host orchestration
 
-CUassistant-specific tools (not in CUagent's MCP surface) for NanoClaw
-agents to drive the scan loop on demand.
+- `get_scan_status` — read recent rows from `state/decisions.jsonl`.
+- `get_pending_actions` — decisions that asked for a task but produced none.
+- `trigger_scan` — wired but not exposed (`host.trigger_scan` is
+  `approval: human_required`). Runs `runScan()` in the host process behind the
+  scan lock, honoring an optional `dry_run` flag.
 
-- `trigger_scan` — invoke `runScan()` directly in the host process. Wired but
-  not exposed (`host.trigger_scan` is `approval: human_required`). Acquires the
-  scan lock and refuses if another run is in progress. Honors the optional
-  `dry_run` flag. (If scan logic ever moves into a NanoClaw v2 container,
-  `trigger_scan` should instead enqueue a request to a SQLite queue per
-  NanoClaw v2's `inbound.db` / `outbound.db` IPC model.)
-- `get_scan_status` — read the most recent rows from `state/decisions.jsonl`.
-- `get_pending_actions` — return decisions that asked for a task but didn't
-  produce one (items awaiting follow-up).
+### Send mail — Telegram approval gate (host gate + Graph / `gws`)
 
-### Send mail — approval gate (host gate + gws)
+- `send-outlook-mail` (Graph `sendMail`, `Mail.Send`) and `send-gmail` (`gws`,
+  `gmail.send`) submit a **frozen** artifact to the host-side `ApprovalGate`
+  and return a `request_id`. Nothing is sent until the user approves
+  out-of-band via Telegram. Both are off any auto-allowlist.
+- `get-send-status` polls the outcome (pending | sent | rejected+feedback |
+  expired | failed).
+- The gate only initializes when `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_APPROVER_USER_ID` are set; until then the send tools return
+  "approval gate not initialized."
 
-`request_send_mail` submits a frozen artifact to the host-side `ApprovalGate`
-and returns a `request_id`; nothing is sent until the user approves
-out-of-band. `get_send_status` polls the outcome. The gate only initializes
-when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_APPROVER_USER_ID` are set; until then
-`request_send_mail` returns "approval gate not initialized." The wired sender
-backend is Gmail via the `gws` CLI (`gmail.send`); the MS365 Graph `sendMail`
-(`Mail.Send`) backend is not yet wired into `makeSender`, so `account: "ms365"`
-is refused even though the consent now exists.
+### Clemson public class schedule — `cuassistant-public` (Banner, no auth)
+
+- `list-clemson-terms`, `search-clemson-classes`,
+  `get-clemson-section-details`, `find-clemson-instructor-classes`,
+  `get-clemson-room-availability` — read Clemson's public Banner Browse
+  Classes data. No credentials.
 
 ## Widening a policy-blocked operation
 
 `delete-todo-task`, `delete-calendar-event`, the three RSVP tools, and
-`trigger_scan` are fully wired to a backend but stay unregistered because their
-mapped policy action is `approval: human_required`. To expose one:
+`trigger_scan` are fully wired but unregistered because their policy action is
+`approval: human_required`. To expose one:
 
 1. Change the action's `approval` to `none` in `policy/action-policy.yaml`
-   (only if the action is genuinely safe to run unattended), or route it
-   through a human-approval gate equivalent to the send gate.
+   (only if genuinely safe unattended), or route it through a human-approval
+   gate equivalent to the send gate.
 2. Confirm the action's policy constraints are enforced by validators in
    `src/mcp-tools/permissions.ts`.
 3. Re-run `npm test` and `npm run typecheck`, and update the table above.
 
-## Dependency note
+## What these servers do not do
 
-`npm audit --omit=dev` currently reports moderate findings in the MCP SDK's
-Express dependency chain. This server uses stdio only, not an HTTP listener, so
-the practical exposure is narrower than a network service. The finding is
-tracked openly and should be remediated when the upstream SDK ships a fixed
-dependency path.
-
-## What this server does not do
-
-- No send-mail tool outside the approval gate. Drafts only on the mail-write
-  surface.
-- No mailbox rules CRUD (Mail.ReadWrite would technically allow it; the
-  policy boundary refuses).
-- No shared mailbox or shared calendar access.
+- No send-mail outside the Telegram approval gate. Drafts only on the
+  mail-write surface.
+- No mailbox rules CRUD; no shared mailbox or shared calendar access.
 - No Teams chat, OneDrive, SharePoint, Drive, or Planner tools.
-- No daemon mode. Stdio only — the agent runtime owns process lifetime.
-- No SSO. Caller identity is inherited from the spawning process. Adding
-  per-caller authentication is a separate review step.
-- No rate limiting. Adding per-tool throttles is a separate review step.
+- No SSO. Caller identity on stdio is inherited from the spawning process; on
+  HTTP it is the bearer (or loopback trust in interim mode). Per-caller
+  authentication is a separate review step.
+- No rate limiting beyond the send gate's throttles. Per-tool throttles are a
+  separate review step.

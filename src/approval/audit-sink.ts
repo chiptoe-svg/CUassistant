@@ -3,10 +3,23 @@
 // other MCP write tools use. Recipients/subject/content_hash are logged (audit
 // of an irreversible external send needs the destination); the body is NOT.
 import { appendDecision } from "../state.js";
-import type { AuditSink, PendingSend } from "./types.js";
+import type { AuditSink, PendingSend, SecurityEvent } from "./types.js";
 
 export function makeGateAuditSink(): AuditSink {
   return {
+    recordSecurity(event: SecurityEvent): void {
+      // An approval/reject tap from someone other than the authorized approver.
+      // Logged so probes against the bot leave a trail (the gate itself ignores
+      // the tap and never sends).
+      appendDecision({
+        pass: "mcp-tool",
+        decision: event.kind,
+        mcp_tool: `gate-${event.action}`,
+        mcp_operation: "mail.send_with_approval",
+        mcp_correlation_id: event.request_id,
+        mcp_args_summary: { unauthorized_user_id: event.user_id },
+      });
+    },
     record(req: PendingSend): void {
       const argsSummary = {
         account: req.artifact.account,

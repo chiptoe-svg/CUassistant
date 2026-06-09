@@ -52,7 +52,17 @@ export interface GateConfig {
   authorizedUserId: string;
 }
 
+/** A security-relevant gate event that is not a normal state transition. */
+export interface SecurityEvent {
+  kind: "unauthorized_approval_attempt";
+  request_id: string;
+  user_id: string;
+  action: "approve" | "reject";
+}
+
 /** Receives the PendingSend after each gate state transition for audit logging. */
 export interface AuditSink {
   record(req: PendingSend): void;
+  /** Records a security event (e.g. an approval tap from an unauthorized user). */
+  recordSecurity?(event: SecurityEvent): void;
 }

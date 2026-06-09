@@ -216,6 +216,32 @@ test("gate emits an audit intent row on submit and a terminal row on send", asyn
   assert.equal(events[1].status, "sent");
 });
 
+test("unauthorized approve/reject taps are audited as security events", async () => {
+  const security: Array<{ action: string; user_id: string }> = [];
+  const f = fakes();
+  const gate = new ApprovalGate(
+    {
+      ...f,
+      audit: {
+        record: () => {},
+        recordSecurity: (e) =>
+          security.push({ action: e.action, user_id: e.user_id }),
+      },
+    },
+    cfg,
+  );
+  const { request_id } = await gate.submit(artifact, "a");
+  await gate.approve(request_id, "intruder");
+  gate.reject(request_id, "intruder", "no");
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(security, [
+    { action: "approve", user_id: "intruder" },
+    { action: "reject", user_id: "intruder" },
+  ]);
+  // The legitimate request is untouched by the rejected taps.
+  assert.equal(gate.getStatus(request_id)?.status, "pending");
+});
+
 test("gate audits a terminal row on reject and on expiry", async () => {
   const rejected: Array<{ status: string }> = [];
   const f1 = fakes();

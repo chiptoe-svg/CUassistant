@@ -111,7 +111,15 @@ export class ApprovalGate {
 
   async approve(request_id: string, userId: string): Promise<void> {
     this.sweepExpired();
-    if (userId !== this.config.authorizedUserId) return;
+    if (userId !== this.config.authorizedUserId) {
+      this.ports.audit?.recordSecurity?.({
+        kind: "unauthorized_approval_attempt",
+        request_id,
+        user_id: userId,
+        action: "approve",
+      });
+      return;
+    }
     const req = this.pending.get(request_id);
     if (!req || req.status !== "pending") return;
     try {
@@ -127,7 +135,15 @@ export class ApprovalGate {
 
   reject(request_id: string, userId: string, feedback?: string): void {
     this.sweepExpired();
-    if (userId !== this.config.authorizedUserId) return;
+    if (userId !== this.config.authorizedUserId) {
+      this.ports.audit?.recordSecurity?.({
+        kind: "unauthorized_approval_attempt",
+        request_id,
+        user_id: userId,
+        action: "reject",
+      });
+      return;
+    }
     const req = this.pending.get(request_id);
     if (!req || req.status !== "pending") return;
     req.status = "rejected";

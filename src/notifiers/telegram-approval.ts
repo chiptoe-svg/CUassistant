@@ -71,6 +71,22 @@ export function startTelegramApproval(
   return channel;
 }
 
+/** Human label for the message edit + tap toast, given the post-tap status. */
+export function approvalOutcomeLabel(status: string | undefined): string {
+  switch (status) {
+    case "sent":
+      return "✅ Approved — sent";
+    case "failed":
+      return "⚠️ Approved — send failed";
+    case "rejected":
+      return "❌ Rejected";
+    case "expired":
+      return "⏰ Expired — no longer actionable";
+    default:
+      return "No change (not authorized or already resolved)";
+  }
+}
+
 async function pollLoop(
   api: (m: string) => string,
   cfg: TelegramConfig,
@@ -95,6 +111,11 @@ async function pollLoop(
             id: string;
             from: { id: number };
             data?: string;
+            message?: {
+              message_id: number;
+              chat: { id: number };
+              text?: string;
+            };
           };
         }>;
       };
@@ -106,11 +127,31 @@ async function pollLoop(
         const [verb, requestId] = cq.data.split(":");
         if (verb === "ok") await gate.approve(requestId, userId);
         else if (verb === "no") gate.reject(requestId, userId);
+
+        // Reflect the outcome so the tap has visible effect. A no-op tap
+        // (unauthorized, or already resolved) leaves status "pending" and we
+        // keep the buttons; a real decision edits the message and drops them.
+        const status = gate.getStatus(requestId)?.status;
+        const resolved = Boolean(status) && status !== "pending";
+        const label = approvalOutcomeLabel(status);
         await fetch(api("answerCallbackQuery"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ callback_query_id: cq.id }),
+          body: JSON.stringify({ callback_query_id: cq.id, text: label }),
         });
+        if (resolved && cq.message) {
+          // editMessageText without reply_markup removes the inline keyboard,
+          // so the decision can't be tapped again.
+          await fetch(api("editMessageText"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: cq.message.chat.id,
+              message_id: cq.message.message_id,
+              text: `${cq.message.text ?? ""}\n\n${label}`,
+            }),
+          });
+        }
       }
     } catch (e) {
       process.stderr.write(`[telegram-approval] poll error: ${String(e)}\n`);

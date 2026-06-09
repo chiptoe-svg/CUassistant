@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatApprovalMessage } from "../src/notifiers/telegram-approval.ts";
+import {
+  approvalOutcomeLabel,
+  formatApprovalMessage,
+} from "../src/notifiers/telegram-approval.ts";
 import type { PendingSend } from "../src/approval/types.ts";
 
 const req: PendingSend = {
@@ -25,6 +28,16 @@ test("approval message includes recipients, subject, body, and flags externals",
   assert.match(msg, /Meeting/);
   assert.match(msg, /Body text/);
   assert.match(msg, /⚠️.*b@gmail\.com/s);
+});
+
+test("approvalOutcomeLabel maps each terminal status to a distinct label", () => {
+  assert.match(approvalOutcomeLabel("rejected"), /Rejected/);
+  assert.match(approvalOutcomeLabel("sent"), /Approved.*sent/);
+  assert.match(approvalOutcomeLabel("failed"), /send failed/);
+  assert.match(approvalOutcomeLabel("expired"), /Expired/);
+  // A no-op tap (still pending / unknown) must NOT read as a decision.
+  assert.match(approvalOutcomeLabel("pending"), /No change/);
+  assert.match(approvalOutcomeLabel(undefined), /No change/);
 });
 
 test("long bodies are truncated with a marker", () => {

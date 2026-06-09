@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make CUassistant mountable by a containerized NanoClaw agent without the MS365 token entering the container — by splitting the MCP surface into a credentialed `cuassistant-m365` server and a public `cuassistant-clemson` server, and giving the credentialed one a Streamable HTTP transport with bearer auth (kept dual with stdio).
+**Goal:** Make CUassistant mountable by a containerized NanoClaw agent without the MS365 token entering the container — by splitting the MCP surface into a credentialed `cuassistant-credentialed` server and a public `cuassistant-public` server, and giving the credentialed one a Streamable HTTP transport with bearer auth (kept dual with stdio).
 
-**Architecture:** Two MCP entry points in one repo, each a separate host process with its own tool registry (the registry is module-global, which is safe per-process). The credentialed entry selects transport by env (`stdio` default, `http` when `MCP_TRANSPORT=http`), binds `127.0.0.1`, and enforces `Authorization: Bearer ${MCP_AUTH_TOKEN}` only when that env var is set (loopback-open otherwise — the interim auth mode). The public Clemson entry stays stdio-only, no creds.
+**Architecture:** Two MCP entry points in one repo, each a separate host process with its own tool registry (the registry is module-global, which is safe per-process). The credentialed entry selects transport by env (`stdio` default, `http` when `MCP_TRANSPORT=http`), binds `127.0.0.1`, and enforces `Authorization: Bearer ${MCP_AUTH_TOKEN}` only when that env var is set (loopback-open otherwise — the interim auth mode). The public entry stays stdio-only, no creds.
 
 **Tech Stack:** TypeScript (ESM, NodeNext), `@modelcontextprotocol/sdk` (StdioServerTransport + StreamableHTTPServerTransport, both already installed), `tsx`, node `--test`, prettier.
 
@@ -17,17 +17,17 @@
 ## File structure
 
 - `src/mcp-tools/server.ts` — MODIFY: `startMcpServer(opts)` takes a server name + transport; add the HTTP transport + bearer-auth path. Registry stays module-global.
-- `src/mcp-tools/index.ts` — MODIFY: drop the `clemson-classes` import (this becomes the **m365** barrel).
-- `src/mcp-tools/index-clemson.ts` — CREATE: imports only `clemson-classes`.
-- `src/mcp-server.ts` — MODIFY: the **m365** entry — use the m365 barrel, transport-by-env, name `cuassistant-m365`.
-- `src/mcp-clemson.ts` — CREATE: the **clemson** entry — stdio, name `cuassistant-clemson`, no approval gate.
+- `src/mcp-tools/index.ts` — MODIFY: drop the `clemson-classes` import (this becomes the **credentialed** barrel).
+- `src/mcp-tools/index-public.ts` — CREATE: imports only `clemson-classes`.
+- `src/mcp-server.ts` — MODIFY: the **credentialed** entry — use the credentialed barrel, transport-by-env, name `cuassistant-credentialed`.
+- `src/mcp-public.ts` — CREATE: the **public** entry — stdio, name `cuassistant-public`, no approval gate.
 - `src/config.ts` — MODIFY: add `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_AUTH_TOKEN`.
 - `src/approval/ms365-sender.ts` — CREATE: MS365 Graph `sendMail` backend.
 - `src/approval/sender.ts` — MODIFY: pass the ms365 backend into `makeSender`.
 - `src/mcp-server.ts` — MODIFY: wire the ms365 sender into the gate.
 - `src/mcp-tools/mail-send.ts` — MODIFY: split `request_send_mail` → `send-outlook-mail` + `send-gmail`.
-- `launchd/com.cuassistant.mcp-http.plist` — CREATE: run the host HTTP m365 server.
-- `package.json` — MODIFY: scripts `mcp` (m365 stdio), `mcp:http` (m365 http), `mcp:clemson`.
+- `launchd/com.cuassistant.mcp-http.plist` — CREATE: run the host HTTP credentialed server.
+- `package.json` — MODIFY: scripts `mcp` (credentialed stdio), `mcp:http` (credentialed http), `mcp:public`.
 - `src/mcp-server.md`, `skills/add-cuassistant/SKILL.md` — MODIFY: docs/skill refresh.
 - `test/mcp-http-auth.test.ts`, `test/ms365-sender.test.ts` — CREATE.
 
@@ -39,18 +39,18 @@
 
 **Files:**
 - Modify: `src/mcp-tools/index.ts`
-- Create: `src/mcp-tools/index-clemson.ts`
+- Create: `src/mcp-tools/index-public.ts`
 
-- [ ] **Step 1: Remove the Clemson import from the m365 barrel**
+- [ ] **Step 1: Remove the Clemson import from the credentialed barrel**
 
-In `src/mcp-tools/index.ts`, delete the line `import "./clemson-classes.js";` (leave the MS365 + orchestration imports). Add a comment at top: `// m365 (credentialed) barrel — Clemson tools live in index-clemson.ts`.
+In `src/mcp-tools/index.ts`, delete the line `import "./clemson-classes.js";` (leave the MS365 + orchestration imports). Add a comment at top: `// credentialed barrel — Clemson tools live in index-public.ts`.
 
-- [ ] **Step 2: Create the Clemson barrel**
+- [ ] **Step 2: Create the public barrel**
 
 ```ts
-// src/mcp-tools/index-clemson.ts
+// src/mcp-tools/index-public.ts
 // Public Clemson class-schedule barrel — no credentials. Imported by the
-// cuassistant-clemson entry point (src/mcp-clemson.ts).
+// cuassistant-public entry point (src/mcp-public.ts).
 import "./clemson-classes.js";
 ```
 
@@ -62,8 +62,8 @@ Expected: exit 0.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/mcp-tools/index.ts src/mcp-tools/index-clemson.ts
-git commit -m "refactor(mcp): split tool barrels into m365 + clemson"
+git add src/mcp-tools/index.ts src/mcp-tools/index-public.ts
+git commit -m "refactor(mcp): split tool barrels into credentialed + public"
 ```
 
 ---
@@ -78,7 +78,7 @@ git commit -m "refactor(mcp): split tool barrels into m365 + clemson"
 Add near the other exports in `src/config.ts`:
 
 ```ts
-// --- MCP server transport (credentialed m365 server) ---
+// --- MCP server transport (credentialed server) ---
 // MCP_TRANSPORT: "stdio" (default, local/dev) or "http" (containerized agent).
 export const MCP_TRANSPORT = (
   process.env.MCP_TRANSPORT === "http" ? "http" : "stdio"
@@ -263,25 +263,25 @@ If the two entry points haven't been updated yet, this is expected; proceed to T
 
 ---
 
-### Task 4: Create the Clemson entry point
+### Task 4: Create the public entry point
 
 **Files:**
-- Create: `src/mcp-clemson.ts`
+- Create: `src/mcp-public.ts`
 
 - [ ] **Step 1: Write the entry**
 
 ```ts
-// src/mcp-clemson.ts
+// src/mcp-public.ts
 // Public Clemson class-schedule MCP server (no credentials). stdio only — it
 // can run as a subprocess inside a NanoClaw container since it holds no secrets
 // and only reaches Clemson's public Banner API.
-import "./mcp-tools/index-clemson.js";
+import "./mcp-tools/index-public.js";
 import { startMcpServer } from "./mcp-tools/server.js";
 
-startMcpServer({ name: "cuassistant-clemson", transport: "stdio" }).catch(
+startMcpServer({ name: "cuassistant-public", transport: "stdio" }).catch(
   (err) => {
     process.stderr.write(
-      `[cuassistant-clemson] ${err instanceof Error ? err.message : String(err)}\n`,
+      `[cuassistant-public] ${err instanceof Error ? err.message : String(err)}\n`,
     );
     process.exit(1);
   },
@@ -292,7 +292,7 @@ startMcpServer({ name: "cuassistant-clemson", transport: "stdio" }).catch(
 
 ---
 
-### Task 5: Update the m365 entry to select transport by env
+### Task 5: Update the credentialed entry to select transport by env
 
 **Files:**
 - Modify: `src/mcp-server.ts`
@@ -300,14 +300,14 @@ startMcpServer({ name: "cuassistant-clemson", transport: "stdio" }).catch(
 - [ ] **Step 1: Update imports + the `startMcpServer()` call**
 
 In `src/mcp-server.ts`:
-- Change the barrel import to the m365 barrel: it currently is `import "./mcp-tools/index.js";` — keep it (index.ts is now the m365 barrel).
+- Change the barrel import to the credentialed barrel: it currently is `import "./mcp-tools/index.js";` — keep it (index.ts is now the credentialed barrel).
 - Add config imports: `import { MCP_TRANSPORT, MCP_HTTP_HOST, MCP_HTTP_PORT, MCP_AUTH_TOKEN } from "./config.js";`
 - Replace the final `startMcpServer().catch(...)` with:
 
 ```ts
 initApprovalGate();
 startMcpServer({
-  name: "cuassistant-m365",
+  name: "cuassistant-credentialed",
   transport: MCP_TRANSPORT,
   httpHost: MCP_HTTP_HOST,
   httpPort: MCP_HTTP_PORT,
@@ -330,7 +330,7 @@ Run: `npm test` (expect all pass) and `npx prettier --write "src/**/*.ts" "test/
 - [ ] **Step 4: Commit Phase-1 server code**
 
 ```bash
-git add src/mcp-tools/server.ts src/mcp-server.ts src/mcp-clemson.ts test/mcp-http-auth.test.ts
+git add src/mcp-tools/server.ts src/mcp-server.ts src/mcp-public.ts test/mcp-http-auth.test.ts
 git commit -m "feat(mcp): dual stdio/http transport + bearer auth; split m365/clemson entries"
 ```
 
@@ -348,7 +348,7 @@ In `package.json` `scripts`, set:
 ```json
 "mcp": "tsx src/mcp-server.ts",
 "mcp:http": "MCP_TRANSPORT=http tsx src/mcp-server.ts",
-"mcp:clemson": "tsx src/mcp-clemson.ts",
+"mcp:public": "tsx src/mcp-public.ts",
 ```
 
 - [ ] **Step 2: Live smoke — HTTP transport answers and enforces auth**
@@ -382,7 +382,7 @@ Expected: `no-auth: 401`, `good-auth: 200`.
 
 ```bash
 git add package.json
-git commit -m "chore(mcp): npm scripts for m365 stdio/http + clemson"
+git commit -m "chore(mcp): npm scripts: credentialed stdio/http + public"
 ```
 
 ---
@@ -629,11 +629,11 @@ git commit -m "chore(mcp): launchd plist for host http server"
 - Modify: `src/mcp-server.md`
 - Modify: `skills/add-cuassistant/SKILL.md`
 
-- [ ] **Step 1: Update `src/mcp-server.md`** — document the two servers (`cuassistant-m365` credentialed HTTP/stdio; `cuassistant-clemson` public stdio), the bearer-auth model (env/vault, loopback-open interim), and the current tool inventory (GCassistant Graph backend, active mail/calendar writes, the 5 Clemson tools, `send-outlook-mail`/`send-gmail`, snapshots). Remove all Codex/graph-cli references.
+- [ ] **Step 1: Update `src/mcp-server.md`** — document the two servers (`cuassistant-credentialed` credentialed HTTP/stdio; `cuassistant-public` public stdio), the bearer-auth model (env/vault, loopback-open interim), and the current tool inventory (GCassistant Graph backend, active mail/calendar writes, the 5 Clemson tools, `send-outlook-mail`/`send-gmail`, snapshots). Remove all Codex/graph-cli references.
 
 - [ ] **Step 2: Rewrite `skills/add-cuassistant/SKILL.md`** to register, in NanoClaw **user/local** config (never `.mcp.json`):
-  - `cuassistant-m365` as a `{ url: "http://host.docker.internal:8765", headers: { Authorization: "Bearer ${CUASSISTANT_MCP_TOKEN}" } }` server (vault-referenced; see spec Auth model).
-  - `cuassistant-clemson` as a stdio server (`tsx src/mcp-clemson.ts`).
+  - `cuassistant-credentialed` as a `{ url: "http://host.docker.internal:8765", headers: { Authorization: "Bearer ${CUASSISTANT_MCP_TOKEN}" } }` server (vault-referenced; see spec Auth model).
+  - `cuassistant-public` as a stdio server (`tsx src/mcp-public.ts`).
   - Keep all write/send tools off the NanoClaw allowlist (always prompt).
   - Drop the stale prerequisites (Codex Outlook, graph-cli login); add: host MCP server running (`npm run mcp:http` or the launchd job), `MS365_REFRESH_TOKEN` present, optional `MCP_AUTH_TOKEN`.
 
@@ -652,6 +652,6 @@ git commit -m "docs(mcp): refresh manifest + add-cuassistant skill for split/htt
 - [ ] `npm run typecheck` → exit 0
 - [ ] `npm test` → all pass (existing 40 + `mcp-http-auth` + `ms365-sender`)
 - [ ] `npm run format:check` → clean
-- [ ] HTTP smoke (Task 6) → 401 without bearer, 200 with; m365 tools only
-- [ ] stdio still works: `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | npm run --silent mcp` lists m365 tools
-- [ ] `npm run mcp:clemson` lists only the 5 Clemson tools
+- [ ] HTTP smoke (Task 6) → 401 without bearer, 200 with; credentialed tools only
+- [ ] stdio still works: `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | npm run --silent mcp` lists credentialed tools
+- [ ] `npm run mcp:public` lists only the 5 Clemson tools

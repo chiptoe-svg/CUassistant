@@ -25,10 +25,12 @@ reach a third-party server by URL.
 2. **Transport:** dual. **stdio** for local/dev/tests; **Streamable HTTP** for
    the containerized agent.
 3. **Split by security class, not vendor-domain:**
-   - **Credentialed server** (`cuassistant-m365`): MS365 mail + calendar +
-     tasks + host orchestration + send-gate. One token, one `action-policy.yaml`,
-     one audit log. Host HTTP + bearer secret.
-   - **Public server** (`cuassistant-clemson`): the Clemson class-schedule
+   - **Credentialed server** (`cuassistant-credentialed`): **all** credentialed
+     accounts — MS365 mail/calendar/tasks today, Clemson Gmail (`gws`) and future
+     credentialed services next — plus host orchestration + the send-gate, with
+     **vendor-namespaced** tools (`outlook-*` / `gmail-*`). One
+     `action-policy.yaml`, one audit log, one host-HTTP + bearer boundary.
+   - **Public server** (`cuassistant-public`): the Clemson class-schedule
      tools. No credentials, public data → may run stdio in-container; no secret.
 4. **Writes/sends always prompt** and stay off NanoClaw's allowlist; reads may
    be allowlisted later.
@@ -43,12 +45,12 @@ reach a third-party server by URL.
 ```
 ┌─ NanoClaw container ───────────────┐        ┌─ Host (macOS / Docker Desktop) ──────────┐
 │ Claude agent + chat channels       │        │                                          │
-│ pi-mcp-bridge                       │        │ cuassistant-m365 (credentialed)          │
-│   • cuassistant-m365 (url, bearer) ─┼─HTTP──▶│   Streamable HTTP @ 127.0.0.1:8765       │
+│ pi-mcp-bridge                       │        │ cuassistant-credentialed          │
+│   • cuassistant-credentialed (url, bearer) ─┼─HTTP──▶│   Streamable HTTP @ 127.0.0.1:8765       │
 │       host.docker.internal:8765     │+secret │   bearer auth · policy · audit · gate    │
-│   • cuassistant-clemson (stdio)     │        │   MS365 token (vault/.env, host only) ───┼─▶ Graph / Clemson
+│   • cuassistant-public (stdio)     │        │   MS365 token (vault/.env, host only) ───┼─▶ Graph / Clemson
 │                                     │        │                                          │
-│   clemson tools run in-container ───┼─(local)│ cuassistant-clemson (public, no creds)   │
+│   clemson tools run in-container ───┼─(local)│ cuassistant-public (public)   │
 │       (no secret, public data)      │ stdio  │   stdio subprocess (or simple HTTP)      │
 └─────────────────────────────────────┘        └────────────────────────────────────────┘
 ```
@@ -65,13 +67,16 @@ reach a third-party server by URL.
 
 1. **Split the MCP registration into two servers.** Today `src/mcp-tools/` is
    one server. Refactor into two entry points sharing the tool modules:
-   - `cuassistant-m365`: mail-read/write, calendar-read/write, todo-tasks,
-     host-orchestration, mail-send.
-   - `cuassistant-clemson`: clemson-classes (already a distinct
+   - `cuassistant-credentialed`: MS365 mail-read/write, calendar-read/write,
+     todo-tasks, host-orchestration, send-gate — and Clemson Gmail (`gws`) plus
+     future credentialed vendors as they're added, all vendor-namespaced. The
+     server is a vendor-neutral tool registry; new vendors register here, they
+     don't get their own server.
+   - `cuassistant-public`: clemson-classes (already a distinct
      `external-http` / `public_data_only` backend, so the seam is natural).
 2. **Add a Streamable HTTP transport** (`StreamableHTTPServerTransport`) to the
-   credentialed server, alongside stdio. New script `mcp:m365:http`; bind
-   `127.0.0.1:${MCP_HTTP_PORT||8765}`. stdio entry (`mcp:m365`) retained for
+   credentialed server, alongside stdio. New script `mcp:http`; bind
+   `127.0.0.1:${MCP_HTTP_PORT||8765}`. stdio entry (`mcp`) retained for
    local/dev/tests.
 3. **Inbound auth:** require `Authorization: Bearer ${MCP_AUTH_TOKEN}` on the
    HTTP transport; reject missing/wrong. stdio path needs no token (no port).
@@ -89,8 +94,8 @@ reach a third-party server by URL.
    **rewrite `skills/add-cuassistant/SKILL.md`** to the current reality:
    - GCassistant Graph backend (not Codex/graph-cli), active mail/calendar
      writes, the 5 Clemson tools, send-via-approval-gate, snapshots/refresh.
-   - Register `cuassistant-m365` as an HTTP server (url + vault-injected bearer)
-     in NanoClaw **user/local** config; register `cuassistant-clemson` as stdio.
+   - Register `cuassistant-credentialed` as an HTTP server (url + vault-injected bearer)
+     in NanoClaw **user/local** config; register `cuassistant-public` as stdio.
    - Keep write/send tools off the NanoClaw allowlist.
 
 ## nanoclaw-personal repo changes (the contract)
@@ -177,8 +182,8 @@ injection" — no tool or transport changes.
 
 ## Rollout
 
-1. Stand up `cuassistant-clemson` (public, read-only) first; confirm.
-2. Stand up `cuassistant-m365` read-only (reads only); confirm auth + reach.
+1. Stand up `cuassistant-public` (public, read-only) first; confirm.
+2. Stand up `cuassistant-credentialed` read-only (reads only); confirm auth + reach.
 3. Enable writes (already policy-gated); confirm sends prompt via the gate.
 4. After stabilization, run `/fewer-permission-prompts` to allowlist the
    read-only `mcp__*` calls — leave every write/send prompting.

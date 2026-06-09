@@ -123,9 +123,12 @@ You have CUassistant MCP tools across two servers:
 
 Credentialed (`cuassistant-credentialed__*`) — the user's MS365 assistant:
 
-- _Mail (read)_: `list-mail-messages`, `get-mail-message`.
-- _Mail (write)_: `move-mail-message`, `update-mail-message`,
-  `create-draft-email` (draft only).
+- _Mail (read)_: `list-mail-messages`, `get-mail-message`, `list-mail-folders`
+  (folder/label destinations; `account` = `ms365` or `g.clemson`).
+- _Mail (write)_: `move-mail-message` (`{account, id, destination}` where
+  `destination` is a folder/label path under the allowed subtree, e.g.
+  `sorted/Newsletters`; works for both `ms365` and `g.clemson`),
+  `update-mail-message`, `create-draft-email` (draft only).
 - _Calendar (read)_: `list-calendar-events`, `get-calendar-event`,
   `get-calendar-view`.
 - _Calendar (write)_: `create-calendar-event`, `update-calendar-event`
@@ -156,11 +159,24 @@ policy boundary and not exposed.
 
 ### 4. Allowlist policy
 
-Keep **all write and send tools OFF NanoClaw's allowlist** — they must always
-prompt. After the install stabilizes, run `/fewer-permission-prompts` to
-allowlist the **read-only** calls only (`list-*`, `get-*`, `search-*`,
-`find-*`, `get_scan_status`, `get_pending_actions`). Leave every write/send
-prompting.
+Allowlisting only removes NanoClaw's in-band prompt — CUassistant's own policy
+constraints (own-mailbox, subtree-only moves, metadata-only updates, draft-only,
+primary-calendar-only) and the send-gate still apply. Recommended posture for
+this operator (autonomous reversible actions; sends gated out-of-band):
+
+- **Allowlist** all reads (`list-*`, `get-*`, `search-*`, `find-*`,
+  `get_scan_status`, `get_pending_actions`) **and** the reversible writes
+  (`move-mail-message`, `update-mail-message`, `create-draft-email`,
+  `create-calendar-event`, `update-calendar-event`, the `*todo*` writes).
+- **Sends** (`send-outlook-mail`, `send-gmail`): allowlisting is optional —
+  CUassistant's out-of-band Telegram gate is their authoritative human check, so
+  allowlisting them yields a **single** approval (the gate) instead of two. If
+  you prefer belt-and-suspenders, leave them off the allowlist for a second
+  in-band prompt. Either way the gate still fires.
+- Destructive ops (task/event delete, RSVP, trigger_scan) are unexposed at the
+  policy boundary — nothing to allowlist.
+
+Run `/fewer-permission-prompts` to apply.
 
 ### 5. Apply
 

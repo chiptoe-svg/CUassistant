@@ -93,28 +93,29 @@ whether they hold credentials — not by vendor domain.
 
 ## Operation table — `cuassistant-credentialed`
 
-| Tool                    | Operation key              | Policy action                    | Backend           | Scope               | Exposed                     |
-| ----------------------- | -------------------------- | -------------------------------- | ----------------- | ------------------- | --------------------------- |
-| `list-mail-messages`    | `mail.list_messages`       | `mail.list_inbox`                | GCassistant Graph | Mail.ReadWrite      | yes                         |
-| `get-mail-message`      | `mail.get_message`         | `mail.fetch_body`                | GCassistant Graph | Mail.ReadWrite      | yes                         |
-| `move-mail-message`     | `mail.move_message`        | `mail.move_message`              | GCassistant Graph | Mail.ReadWrite      | yes (needs dest allow-list) |
-| `update-mail-message`   | `mail.update_message`      | `mail.update_message`            | GCassistant Graph | Mail.ReadWrite      | yes                         |
-| `create-draft-email`    | `mail.create_draft`        | `mail.create_draft`              | GCassistant Graph | Mail.ReadWrite      | yes                         |
-| `list-calendar-events`  | `calendar.list_events`     | `calendar.list_events`           | GCassistant Graph | Calendars.ReadWrite | yes                         |
-| `get-calendar-event`    | `calendar.get_event`       | `calendar.get_event`             | GCassistant Graph | Calendars.ReadWrite | yes                         |
-| `get-calendar-view`     | `calendar.get_view`        | `calendar.get_view`              | GCassistant Graph | Calendars.ReadWrite | yes                         |
-| `create-calendar-event` | `calendar.create_event`    | `calendar.create_personal_event` | GCassistant Graph | Calendars.ReadWrite | yes                         |
-| `update-calendar-event` | `calendar.update_event`    | `calendar.update_personal_event` | GCassistant Graph | Calendars.ReadWrite | yes                         |
-| `list-todo-task-lists`  | `todo.list_lists`          | `todo.list_lists`                | GCassistant Graph | Tasks.ReadWrite     | yes                         |
-| `list-todo-tasks`       | `todo.list_tasks`          | `todo.list_tasks`                | GCassistant Graph | Tasks.ReadWrite     | yes                         |
-| `get-todo-task`         | `todo.get_task`            | `todo.get_task`                  | GCassistant Graph | Tasks.ReadWrite     | yes                         |
-| `create-todo-task`      | `todo.create_task`         | `todo.create_task`               | GCassistant Graph | Tasks.ReadWrite     | yes                         |
-| `update-todo-task`      | `todo.update_task`         | `todo.update_task`               | GCassistant Graph | Tasks.ReadWrite     | yes                         |
-| `get_scan_status`       | `host.get_scan_status`     | `host.get_scan_status`           | host (state read) | none                | yes                         |
-| `get_pending_actions`   | `host.get_pending_actions` | `host.get_pending_actions`       | host (state read) | none                | yes                         |
-| `send-outlook-mail`     | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + Graph | Mail.Send           | yes: via approval gate      |
-| `send-gmail`            | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + `gws` | gmail.send          | yes: via approval gate      |
-| `get-send-status`       | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate         | —                   | yes                         |
+| Tool                    | Operation key              | Policy action                    | Backend           | Scope               | Exposed                  |
+| ----------------------- | -------------------------- | -------------------------------- | ----------------- | ------------------- | ------------------------ |
+| `list-mail-messages`    | `mail.list_messages`       | `mail.list_inbox`                | GCassistant Graph | Mail.ReadWrite      | yes                      |
+| `get-mail-message`      | `mail.get_message`         | `mail.fetch_body`                | GCassistant Graph | Mail.ReadWrite      | yes                      |
+| `list-mail-folders`     | `mail.list_folders`        | `mail.list_folders`              | Graph / gws       | Mail.ReadWrite/gws  | yes                      |
+| `move-mail-message`     | `mail.move_message`        | `mail.move_message`              | Graph / gws       | Mail.ReadWrite/gws  | yes (needs dest subtree) |
+| `update-mail-message`   | `mail.update_message`      | `mail.update_message`            | GCassistant Graph | Mail.ReadWrite      | yes                      |
+| `create-draft-email`    | `mail.create_draft`        | `mail.create_draft`              | GCassistant Graph | Mail.ReadWrite      | yes                      |
+| `list-calendar-events`  | `calendar.list_events`     | `calendar.list_events`           | GCassistant Graph | Calendars.ReadWrite | yes                      |
+| `get-calendar-event`    | `calendar.get_event`       | `calendar.get_event`             | GCassistant Graph | Calendars.ReadWrite | yes                      |
+| `get-calendar-view`     | `calendar.get_view`        | `calendar.get_view`              | GCassistant Graph | Calendars.ReadWrite | yes                      |
+| `create-calendar-event` | `calendar.create_event`    | `calendar.create_personal_event` | GCassistant Graph | Calendars.ReadWrite | yes                      |
+| `update-calendar-event` | `calendar.update_event`    | `calendar.update_personal_event` | GCassistant Graph | Calendars.ReadWrite | yes                      |
+| `list-todo-task-lists`  | `todo.list_lists`          | `todo.list_lists`                | GCassistant Graph | Tasks.ReadWrite     | yes                      |
+| `list-todo-tasks`       | `todo.list_tasks`          | `todo.list_tasks`                | GCassistant Graph | Tasks.ReadWrite     | yes                      |
+| `get-todo-task`         | `todo.get_task`            | `todo.get_task`                  | GCassistant Graph | Tasks.ReadWrite     | yes                      |
+| `create-todo-task`      | `todo.create_task`         | `todo.create_task`               | GCassistant Graph | Tasks.ReadWrite     | yes                      |
+| `update-todo-task`      | `todo.update_task`         | `todo.update_task`               | GCassistant Graph | Tasks.ReadWrite     | yes                      |
+| `get_scan_status`       | `host.get_scan_status`     | `host.get_scan_status`           | host (state read) | none                | yes                      |
+| `get_pending_actions`   | `host.get_pending_actions` | `host.get_pending_actions`       | host (state read) | none                | yes                      |
+| `send-outlook-mail`     | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + Graph | Mail.Send           | yes: via approval gate   |
+| `send-gmail`            | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + `gws` | gmail.send          | yes: via approval gate   |
+| `get-send-status`       | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate         | —                   | yes                      |
 
 ### Wired but NOT exposed (policy `human_required`)
 
@@ -152,9 +153,15 @@ mapped policy action is `approval: human_required`. They are gated, not absent.
 
 Active; policy constraints enforced on every call.
 
-- `move-mail-message` — `POST /me/messages/{id}/move`. Requires the
-  `MCP_ALLOWED_MAIL_DESTINATIONS` env allow-list (fails closed without it);
-  junk/deleted/recoverable folders are rejected.
+- `list-mail-folders` — read-only destination discovery. `account: "ms365"`
+  (Outlook folders via Graph) or `"g.clemson"` (Gmail user labels via gws).
+  Returns `{path, id, allowed}`; `allowed` reflects the subtree allow-list.
+- `move-mail-message` — `{account, id, destination}` where `destination` is a
+  folder/label **path** (e.g. `sorted/Newsletters`). `ms365` →
+  `POST /me/messages/{id}/move`; `g.clemson` → gws `messages modify` (add label +
+  remove `INBOX`). The path must be under `MCP_ALLOWED_MAIL_DESTINATIONS`
+  (segment-aware prefixes; fails closed without it) and resolve to a real
+  folder/label; junk/deleted/recoverable are rejected.
 - `update-mail-message` — `PATCH /me/messages/{id}`, metadata only (mark read,
   flag, importance, categories). Body rewrites and send/delete rejected.
 - `create-draft-email` — `POST /me/messages`. Draft only; sending goes through

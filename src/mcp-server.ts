@@ -61,6 +61,10 @@ import {
   SEND_INTERNAL_DOMAINS,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_APPROVER_USER_ID,
+  MCP_TRANSPORT,
+  MCP_HTTP_HOST,
+  MCP_HTTP_PORT,
+  MCP_AUTH_TOKEN,
 } from "./config.js";
 
 function log(msg: string): void {
@@ -105,7 +109,13 @@ function initApprovalGate(): void {
 }
 
 initApprovalGate();
-startMcpServer().catch((err) => {
+startMcpServer({
+  name: "cuassistant-credentialed",
+  transport: MCP_TRANSPORT,
+  httpHost: MCP_HTTP_HOST,
+  httpPort: MCP_HTTP_PORT,
+  authToken: MCP_AUTH_TOKEN,
+}).catch((err) => {
   log(`server error: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

@@ -6,10 +6,12 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import http from "http";
 
 import type { McpToolDefinition } from "./types.js";
 import { isMcpOperationExposed } from "./permissions.js";
@@ -47,32 +49,86 @@ export function registerTools(tools: McpToolDefinition[]): void {
   }
 }
 
-export async function startMcpServer(): Promise<void> {
+/** Bearer check. Open when expected is empty (loopback interim mode). */
+export function checkBearer(
+  authHeader: string | undefined,
+  expected: string,
+): boolean {
+  if (!expected) return true;
+  return authHeader === `Bearer ${expected}`;
+}
+
+export interface StartOptions {
+  name: string;
+  transport?: "stdio" | "http";
+  httpHost?: string;
+  httpPort?: number;
+  authToken?: string;
+}
+
+function buildServer(name: string): Server {
   const server = new Server(
-    { name: "cuassistant", version: "0.1.0" },
+    { name, version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
-
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: allTools.map((t) => t.tool),
   }));
-
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    const tool = toolMap.get(name);
+    const { name: toolName, arguments: args } = request.params;
+    const tool = toolMap.get(toolName);
     if (!tool) {
       return {
-        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        content: [{ type: "text", text: `Unknown tool: ${toolName}` }],
         isError: true,
       };
     }
     return tool.handler(args ?? {});
   });
+  return server;
+}
 
+export async function startMcpServer(opts: StartOptions): Promise<void> {
+  if ((opts.transport ?? "stdio") === "http") {
+    const host = opts.httpHost ?? "127.0.0.1";
+    const port = opts.httpPort ?? 8765;
+    const expected = opts.authToken ?? "";
+    const server = buildServer(opts.name);
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    await server.connect(transport);
+    const httpServer = http.createServer((req, res) => {
+      if (!checkBearer(req.headers.authorization, expected)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(c as Buffer));
+      req.on("end", () => {
+        let body: unknown = undefined;
+        if (chunks.length) {
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+          } catch {
+            /* no body */
+          }
+        }
+        void transport.handleRequest(req, res, body);
+      });
+    });
+    httpServer.listen(port, host, () => {
+      log(
+        `${opts.name} http on ${host}:${port} (auth ${expected ? "required" : "OPEN-loopback"}) tools: ${allTools.map((t) => t.tool.name).join(", ")}`,
+      );
+    });
+    return;
+  }
+  const server = buildServer(opts.name);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(
-    `started with ${allTools.length} tools: ` +
-      allTools.map((t) => t.tool.name).join(", "),
+    `${opts.name} stdio started with ${allTools.length} tools: ${allTools.map((t) => t.tool.name).join(", ")}`,
   );
 }

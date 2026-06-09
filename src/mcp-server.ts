@@ -50,6 +50,7 @@ import { startMcpServer } from "./mcp-tools/server.js";
 import { ApprovalGate } from "./approval/gate.js";
 import { makeSender } from "./approval/sender.js";
 import { gwsSend } from "./approval/gws-sender.js";
+import { ms365Send } from "./approval/ms365-sender.js";
 import { startTelegramApproval } from "./notifiers/telegram-approval.js";
 import type { ApprovalChannel } from "./approval/types.js";
 import { __setGate } from "./mcp-tools/mail-send.js";
@@ -78,7 +79,7 @@ function initApprovalGate(): void {
     );
     return;
   }
-  const sender = makeSender({ gmail: gwsSend });
+  const sender = makeSender({ gmail: gwsSend, ms365: ms365Send });
   const noop: ApprovalChannel = { async post() {} };
   const gate = new ApprovalGate(
     {

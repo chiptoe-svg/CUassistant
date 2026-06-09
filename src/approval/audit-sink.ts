@@ -16,11 +16,15 @@ export function makeGateAuditSink(): AuditSink {
         content_hash: req.content_hash,
         proposer: req.proposer,
       };
+      // Reflect the actual send tool the agent invoked (the gate is account-
+      // aware); the legacy single `request_send_mail` tool was split per vendor.
+      const mcpTool =
+        req.artifact.account === "ms365" ? "send-outlook-mail" : "send-gmail";
       if (req.status === "pending") {
         appendDecision({
           pass: "mcp-tool-intent",
           decision: "send-requested",
-          mcp_tool: "request_send_mail",
+          mcp_tool: mcpTool,
           mcp_operation: "mail.send_with_approval",
           mcp_correlation_id: req.request_id,
           mcp_args_summary: argsSummary,
@@ -30,7 +34,7 @@ export function makeGateAuditSink(): AuditSink {
       appendDecision({
         pass: "mcp-tool",
         decision: `send-${req.status}`,
-        mcp_tool: "request_send_mail",
+        mcp_tool: mcpTool,
         mcp_operation: "mail.send_with_approval",
         mcp_correlation_id: req.request_id,
         mcp_args_summary: argsSummary,

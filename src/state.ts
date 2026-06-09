@@ -1,14 +1,31 @@
 // All persistent state IO: progress.yaml, decisions.jsonl,
 // usage.jsonl, pending_residuals.jsonl, and the scan lock.
 
+import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
 import YAML from "yaml";
 
-import { STATE_DIR } from "./config.js";
+import { AUDIT_APPEND_ONLY, STATE_DIR } from "./config.js";
 import { log } from "./log.js";
 import type { Account, PendingResidual, Progress, ScanMode } from "./types.js";
+
+// Opt-in (AUDIT_APPEND_ONLY=1): mark decisions.jsonl OS-append-only once per
+// process via chflags(1), so a casual or accidental rewrite/truncate fails
+// (legit rotation needs `chflags nouappend` first). Best effort, macOS-only;
+// not a defense against a same-uid attacker who clears the flag — the M365
+// unified audit log remains the authoritative trail.
+const appendOnlyApplied = new Set<string>();
+function applyAppendOnly(p: string): void {
+  if (!AUDIT_APPEND_ONLY || appendOnlyApplied.has(p)) return;
+  appendOnlyApplied.add(p);
+  try {
+    execFileSync("chflags", ["uappend", p]);
+  } catch {
+    /* best effort (non-macOS / unsupported fs) */
+  }
+}
 
 function ensureStateDir(): void {
   fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
@@ -65,6 +82,7 @@ export function appendDecision(entry: Record<string, unknown>): void {
     { mode: 0o600 },
   );
   lockDownFile(DECISIONS_PATH());
+  applyAppendOnly(DECISIONS_PATH());
 }
 
 export function loadResolvedEmailIds(daysBack = 30): Set<string> {

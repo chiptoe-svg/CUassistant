@@ -51,6 +51,11 @@ export const STATE_DIR = path.resolve(
   process.env.STATE_DIR || path.join(process.cwd(), "state"),
 );
 
+// Opt-in: mark the audit log (state/decisions.jsonl) OS-append-only via chflags
+// so casual/accidental rewrites fail. Off by default to avoid surprising
+// `rm`/rotate friction. The M365 unified audit log is the authoritative trail.
+export const AUDIT_APPEND_ONLY = process.env.AUDIT_APPEND_ONLY === "1";
+
 export const TIMEZONE = process.env.TZ || "America/New_York";
 
 export const CODEX_BIN = process.env.CODEX_BIN || "codex";

@@ -38,6 +38,7 @@
 ### Task 1: Split the tool barrels
 
 **Files:**
+
 - Modify: `src/mcp-tools/index.ts`
 - Create: `src/mcp-tools/index-public.ts`
 
@@ -71,6 +72,7 @@ git commit -m "refactor(mcp): split tool barrels into credentialed + public"
 ### Task 2: Add config for transport + auth
 
 **Files:**
+
 - Modify: `src/config.ts`
 
 - [ ] **Step 1: Append the MCP transport/auth config**
@@ -108,6 +110,7 @@ git commit -m "feat(mcp): config for http transport + bearer auth"
 ### Task 3: Parameterize `startMcpServer` and add the HTTP transport
 
 **Files:**
+
 - Modify: `src/mcp-tools/server.ts`
 - Test: `test/mcp-http-auth.test.ts`
 
@@ -158,7 +161,10 @@ import { isMcpOperationExposed } from "./permissions.js";
 //  registerTools unchanged)
 
 /** Constant-time-ish bearer check. Open when expected is empty. */
-export function checkBearer(authHeader: string | undefined, expected: string): boolean {
+export function checkBearer(
+  authHeader: string | undefined,
+  expected: string,
+): boolean {
   if (!expected) return true;
   return authHeader === `Bearer ${expected}`;
 }
@@ -266,6 +272,7 @@ If the two entry points haven't been updated yet, this is expected; proceed to T
 ### Task 4: Create the public entry point
 
 **Files:**
+
 - Create: `src/mcp-public.ts`
 
 - [ ] **Step 1: Write the entry**
@@ -295,11 +302,13 @@ startMcpServer({ name: "cuassistant-public", transport: "stdio" }).catch(
 ### Task 5: Update the credentialed entry to select transport by env
 
 **Files:**
+
 - Modify: `src/mcp-server.ts`
 
 - [ ] **Step 1: Update imports + the `startMcpServer()` call**
 
 In `src/mcp-server.ts`:
+
 - Change the barrel import to the credentialed barrel: it currently is `import "./mcp-tools/index.js";` — keep it (index.ts is now the credentialed barrel).
 - Add config imports: `import { MCP_TRANSPORT, MCP_HTTP_HOST, MCP_HTTP_PORT, MCP_AUTH_TOKEN } from "./config.js";`
 - Replace the final `startMcpServer().catch(...)` with:
@@ -339,6 +348,7 @@ git commit -m "feat(mcp): dual stdio/http transport + bearer auth; split m365/cl
 ### Task 6: package.json scripts + live smoke
 
 **Files:**
+
 - Modify: `package.json`
 
 - [ ] **Step 1: Update scripts**
@@ -354,6 +364,7 @@ In `package.json` `scripts`, set:
 - [ ] **Step 2: Live smoke — HTTP transport answers and enforces auth**
 
 Run (no auth token → loopback-open):
+
 ```bash
 MCP_TRANSPORT=http MCP_HTTP_PORT=8765 npm run --silent mcp:http &
 sleep 2
@@ -361,6 +372,7 @@ curl -s -X POST http://127.0.0.1:8765/ -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | head -c 300
 kill %1
 ```
+
 Expected: HTTP 200 and a JSON-RPC body — either a tools list, or an
 `initialize`-required error (the stateless transport may require the MCP
 handshake first). Either confirms the HTTP transport is live; the real client
@@ -376,6 +388,7 @@ echo "no-auth:";  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.
 echo "good-auth:"; curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8766/ -H 'authorization: Bearer t0p' -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 kill %1
 ```
+
 Expected: `no-auth: 401`, `good-auth: 200`.
 
 - [ ] **Step 4: Commit**
@@ -392,6 +405,7 @@ git commit -m "chore(mcp): npm scripts: credentialed stdio/http + public"
 ### Task 7: MS365 Graph `sendMail` backend
 
 **Files:**
+
 - Create: `src/approval/ms365-sender.ts`
 - Test: `test/ms365-sender.test.ts`
 
@@ -489,6 +503,7 @@ git commit -m "feat(approval): MS365 Graph sendMail backend"
 ### Task 8: Wire the ms365 backend into the gate
 
 **Files:**
+
 - Modify: `src/mcp-server.ts` (the `makeSender` call inside `initApprovalGate`)
 
 - [ ] **Step 1: Import and pass the backend**
@@ -498,7 +513,9 @@ In `src/mcp-server.ts`, add `import { ms365Send } from "./approval/ms365-sender.
 ```ts
 const sender = makeSender({ gmail: gwsSend });
 ```
+
 to:
+
 ```ts
 const sender = makeSender({ gmail: gwsSend, ms365: ms365Send });
 ```
@@ -522,6 +539,7 @@ git commit -m "feat(approval): enable ms365 sender in the gate"
 ### Task 9: Split send tool into per-vendor tools
 
 **Files:**
+
 - Modify: `src/mcp-tools/mail-send.ts`
 
 - [ ] **Step 1: Replace the single tool with two vendor-explicit tools**
@@ -561,7 +579,8 @@ function sendTool(
       }
       if (!gate) return err("approval gate not initialized");
       const to = asStringArray(args.to);
-      if (to.length === 0) return err("at least one recipient (to) is required");
+      if (to.length === 0)
+        return err("at least one recipient (to) is required");
       const artifact: SendArtifact = {
         account,
         to,
@@ -578,7 +597,11 @@ function sendTool(
   };
 }
 
-export const sendOutlookMail = sendTool("send-outlook-mail", "ms365", "Outlook");
+export const sendOutlookMail = sendTool(
+  "send-outlook-mail",
+  "ms365",
+  "Outlook",
+);
 export const sendGmail = sendTool("send-gmail", "gmail", "Gmail");
 ```
 
@@ -610,6 +633,7 @@ git commit -m "feat(mcp): split send into send-outlook-mail + send-gmail"
 ### Task 10: launchd plist for the host HTTP server
 
 **Files:**
+
 - Create: `launchd/com.cuassistant.mcp-http.plist`
 
 - [ ] **Step 1: Create the plist** (mirror `launchd/com.cuassistant.clemson-refresh.plist`; placeholders `REPO_PATH`/`NPM_PATH`/`HOME_PATH`, `RunAtLoad` true, `KeepAlive` true, runs `npm run mcp:http`, logs to `HOME_PATH/Library/Logs/cuassistant.mcp.{out,err}.log`). Header comment documents that `MCP_AUTH_TOKEN` should be provided by OneCLI vault injection, not written into the plist.
@@ -626,6 +650,7 @@ git commit -m "chore(mcp): launchd plist for host http server"
 ### Task 11: Refresh `mcp-server.md` and the `add-cuassistant` skill
 
 **Files:**
+
 - Modify: `src/mcp-server.md`
 - Modify: `skills/add-cuassistant/SKILL.md`
 

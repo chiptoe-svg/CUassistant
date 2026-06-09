@@ -125,17 +125,22 @@ this repo).
    - the `add_mcp_server` self-mod tool schema (`self-mod.ts`, ~line 104)
    - Both write the entry to user/local (gitignored) config, **never** the
      committed `.mcp.json`.
-3. **Bridge — add an HTTP branch *inside* the `for…of servers` loop.** Do NOT
+3. **Bridge — add an HTTP branch _inside_ the `for…of servers` loop.** Do NOT
    reuse `createPiHttpMcpBridge`: it hardcodes the `nanoclaw` server name and
    the `x-nanoclaw-session` header and takes a bare url+sessionId. Reuse the
    transport class, not the bridge function:
    ```ts
    for (const [serverName, config] of Object.entries(servers)) {
-     if (hasHttpNanoclaw && serverName === 'nanoclaw') continue;
+     if (hasHttpNanoclaw && serverName === "nanoclaw") continue;
      const transport = config.url
-       ? new StreamableHTTPClientTransport(new URL(config.url),
-           { requestInit: { headers: resolveHeaders(config.headers) } })
-       : new StdioClientTransport({ command: config.command!, args: config.args, env: config.env });
+       ? new StreamableHTTPClientTransport(new URL(config.url), {
+           requestInit: { headers: resolveHeaders(config.headers) },
+         })
+       : new StdioClientTransport({
+           command: config.command!,
+           args: config.args,
+           env: config.env,
+         });
      // …existing connect + loadToolsFromClient(serverName, client)…
    }
    ```
@@ -154,7 +159,7 @@ NanoClaw persists a server's `headers` into the `mcp_servers` column of
 spawn — in plaintext. A literal bearer in `headers` would therefore sit at rest
 on disk, reintroducing exactly what OneCLI exists to prevent.
 
-- **Target — vault-referenced bearer.** `headers` holds a *reference*, not the
+- **Target — vault-referenced bearer.** `headers` holds a _reference_, not the
   secret: `Authorization: "Bearer ${CUASSISTANT_MCP_TOKEN}"`. OneCLI injects the
   real token into the container env at spawn (the `/add-gmail-tool` stub
   pattern); the bridge's `resolveHeaders` expands `${…}` from env at connect
@@ -175,17 +180,17 @@ injection" — no tool or transport changes.
 
 ## Security model (defense in depth)
 
-| Layer | Control |
-|---|---|
-| Agent runtime | NanoClaw container / filesystem isolation |
-| Network | credentialed server binds loopback; not exposed to LAN |
-| Caller auth | vault-referenced env-expanded bearer (target); loopback-only (interim) |
-| Capability | `action-policy.yaml` allow-list; per-call constraint validators |
-| Destructive ops | delete/RSVP/trigger-scan = `human_required`, unexposed |
-| Sends | Telegram approval gate (frozen until approved) **and** off NanoClaw's allowlist (always prompt) |
-| Audit | append-only `decisions.jsonl` |
-| Credential | MS365 token host-only (vault/.env); never in the container |
-| Public tools | isolated in a no-credential server |
+| Layer           | Control                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------- |
+| Agent runtime   | NanoClaw container / filesystem isolation                                                       |
+| Network         | credentialed server binds loopback; not exposed to LAN                                          |
+| Caller auth     | vault-referenced env-expanded bearer (target); loopback-only (interim)                          |
+| Capability      | `action-policy.yaml` allow-list; per-call constraint validators                                 |
+| Destructive ops | delete/RSVP/trigger-scan = `human_required`, unexposed                                          |
+| Sends           | Telegram approval gate (frozen until approved) **and** off NanoClaw's allowlist (always prompt) |
+| Audit           | append-only `decisions.jsonl`                                                                   |
+| Credential      | MS365 token host-only (vault/.env); never in the container                                      |
+| Public tools    | isolated in a no-credential server                                                              |
 
 ## Rollout
 

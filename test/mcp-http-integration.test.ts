@@ -7,7 +7,9 @@ import "../src/mcp-tools/index.ts"; // side-effect: register credentialed tools
 import { createHttpHandler } from "../src/mcp-tools/server.ts";
 
 test("http transport completes the MCP handshake and lists tools", async () => {
-  const server = http.createServer(createHttpHandler("test-credentialed", ""));
+  const server = http.createServer(
+    createHttpHandler("test-credentialed", () => "test-agent"),
+  );
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;

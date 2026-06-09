@@ -55,7 +55,7 @@ self-contained under this reviewed scope envelope:
 
 The host token requests `Mail.ReadWrite + Tasks.ReadWrite +
 Calendars.ReadWrite` at runtime. The scan/triage handler uses only mail read +
-To Do. Mail and calendar *writes* are exposed on the MCP server (move,
+To Do. Mail and calendar _writes_ are exposed on the MCP server (move,
 mark-read/flag/category, draft, create/update event), each gated by
 `policy/action-policy.yaml`; destructive or affects-others actions (mail/event
 delete, RSVP, task delete) stay `approval: human_required` and are not exposed.

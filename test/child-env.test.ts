@@ -11,7 +11,6 @@ const SECRET_SOURCE: NodeJS.ProcessEnv = {
   GWS_CONFIG_DIR: "/Users/test/.gws",
   HTTPS_PROXY: "http://proxy:8080",
   MS365_REFRESH_TOKEN: "secret-ms-token",
-  GRAPH_CLI_REFRESH_TOKEN: "secret-graph-token",
   OPENAI_API_KEY: "sk-secret",
   MS365_CLIENT_ID: "client-id",
 };

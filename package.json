@@ -14,9 +14,12 @@
     "mcp:http": "MCP_TRANSPORT=http tsx src/mcp-server.ts",
     "mcp:public": "tsx src/mcp-public.ts",
     "mcp:public:http": "MCP_TRANSPORT=http tsx src/mcp-public.ts",
+    "mcp:pair": "tsx scripts/mcp-consumers.ts",
+    "mcp:consumers": "tsx scripts/mcp-consumers.ts",
     "ms365-login": "tsx scripts/ms365-login.ts",
     "provider-smoke": "tsx scripts/provider-smoke.ts",
     "clemson:refresh": "tsx scripts/clemson-refresh.ts",
+    "audit:verify": "tsx scripts/verify-audit.ts",
     "tasks:cleanup-noise": "tsx scripts/cleanup-task-noise.ts",
     "cost-report": "tsx scripts/cost-report.ts",
     "preclassify:suggest": "tsx scripts/preclassify-suggest.ts",
@@ -29,7 +32,7 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "yaml": "^2.5.0"
   },
   "devDependencies": {

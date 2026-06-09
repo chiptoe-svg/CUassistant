@@ -47,14 +47,18 @@ Full tool inventory (exposed + the policy-gated-not-exposed set):
    - `npm run mcp:public:http` (public, binds
      `127.0.0.1:${MCP_PUBLIC_HTTP_PORT:-8766}`) — or the launchd service
      `launchd/com.cuassistant.mcp-public-http.plist`.
-   Confirm both are up before wiring the container.
+     Confirm both are up before wiring the container.
 3. **`MS365_REFRESH_TOKEN` is present in `$CUASSISTANT_REPO/.env`** (or
    vault-injected on the host). Without it the credentialed Graph tools cannot
    reach Microsoft 365.
-4. **Auth (optional / interim).** Either set `MCP_AUTH_TOKEN` on the host server
-   and register a vault-referenced bearer in the container (target), or run the
-   host server with no `MCP_AUTH_TOKEN` on loopback and omit the header
-   (interim). See step 1 below. The public server (8766) requires no bearer.
+4. **Auth (per-agent token, required).** The credentialed server fails closed —
+   it won't start with no authorized consumers. Mint a token for THIS agent on
+   the host: `npm run mcp:pair -- --id <agent-id>` (prints the token once).
+   Inject that token into only this agent's container env as
+   `CUASSISTANT_MCP_TOKEN` and register the vault-referenced bearer (step 1).
+   Each agent gets its own token; revoke with
+   `npm run mcp:consumers -- --revoke <agent-id>`. The public server (8766)
+   requires no token.
 
 There is no Codex CLI / Outlook connector and no Graph-CLI token anymore — do
 not look for them.
@@ -79,14 +83,18 @@ add_mcp_server({
 })
 ```
 
-The bearer is a **vault reference, not a literal**. OneCLI injects
-`CUASSISTANT_MCP_TOKEN` into the container env at spawn; NanoClaw's bridge
+The bearer is a **vault reference, not a literal**. Mint this agent's token on
+the host with `npm run mcp:pair -- --id <agent-id>`, then have OneCLI inject it
+into the container env as `CUASSISTANT_MCP_TOKEN` at spawn; NanoClaw's bridge
 expands `${...}` in the header value at connect time, so only the reference is
-ever persisted on disk.
+ever persisted on disk. Each agent has its own token in the host registry
+(`state/mcp-consumers.json`, hash only); the matched consumer id is the audit
+identity, and you revoke a single agent with
+`npm run mcp:consumers -- --revoke <agent-id>`.
 
-**Interim (before vault wiring):** run the host server with no `MCP_AUTH_TOKEN`
-on loopback and **omit the `headers` block entirely** — register just the
-`url`. The server is loopback-open in that mode.
+There is **no loopback-open mode** for the credentialed server — it fails closed
+with no registered consumer. (A single host `MCP_AUTH_TOKEN` is also accepted,
+as consumer `env-token`, for simple non-NanoClaw setups.)
 
 ### 2. Register `cuassistant-public` (HTTP)
 
@@ -178,19 +186,21 @@ cuassistant-credentialed__list-todo-task-lists()
 ```
 
 The public call needs no credential but does require the host `mcp:public:http` process to be running. The credentialed call
-exercises the HTTP reach to the host server, the bearer (if set), and the MS365
-token. If the credentialed call returns an auth error, confirm the host server
-is running (`npm run mcp:http`) and that the bearer reference resolves (or, in
-interim mode, that you registered the `url` with no `headers` and the server is
-loopback-open). If it returns an empty list, the MS365 token may be missing or
-expired in the host `.env`.
+exercises the HTTP reach to the host server, this agent's bearer token, and the
+MS365 token. If the credentialed call returns an auth error (401), confirm the
+host server is running (`npm run mcp:http`), that you minted a token for this
+agent (`npm run mcp:consumers -- --list`), and that `CUASSISTANT_MCP_TOKEN`
+resolves in the container to that token. If it returns an empty list, the MS365
+token may be missing or expired in the host `.env`.
 
 ## What this skill does **not** do
 
 - It does not start CUassistant's scheduled scan loop (cron / launchd) and does
   not modify the user's CUassistant `.env`. Those are separate per-host setup.
-- It does not provision the vault entry for `CUASSISTANT_MCP_TOKEN`. Until that
-  is wired, use interim loopback mode (no bearer).
+- It does not provision the vault entry for `CUASSISTANT_MCP_TOKEN`. Mint the
+  token with `npm run mcp:pair -- --id <agent-id>` and inject it into the
+  container env (the credentialed server fails closed without a registered
+  consumer — there is no loopback-open fallback).
 - It does not expose the policy-gated tools (delete/RSVP/trigger_scan); those
   require widening `policy/action-policy.yaml` per the procedure in
   `<CUassistant repo>/src/mcp-server.md`.

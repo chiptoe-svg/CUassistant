@@ -40,7 +40,6 @@ const ALLOWED_PREFIXES = ["LC_", "CODEX_", "XDG_", "GWS_"];
 // assert they are absent from every built child environment.
 export const FORBIDDEN_CHILD_ENV_KEYS = [
   "MS365_REFRESH_TOKEN",
-  "GRAPH_CLI_REFRESH_TOKEN",
   "OPENAI_API_KEY",
 ];
 

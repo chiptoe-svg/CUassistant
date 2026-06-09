@@ -306,6 +306,43 @@ actions:
     constraints:
       - public_data_only
 
+# LLM providers the email classifier may send mailbox content (subject + body)
+# to. This is the IT-reviewable record of where mailbox data may go. The
+# classifier refuses any provider not listed here with authorized: true
+# (fail closed). Add as many providers as needed.
+#   scope: external -> content leaves the M365 envelope; `basis` must cite the
+#                      DPA / institutional agreement that covers it, and
+#                      `authorized` attests (does not prove) that it applies.
+#   scope: local    -> on-host inference (a local LLM); content does not leave
+#                      the machine, so no data agreement is required.
+data_egress:
+  classifiers:
+    - provider: codex_chatgpt_edu
+      scope: external
+      sends: [subject, body]
+      basis: "ChatGPT Edu institutional agreement (Clemson)"
+      authorized: true
+
+    - provider: openai_api
+      scope: external
+      sends: [subject, body]
+      basis: "requires a separate OpenAI API DPA — NOT confirmed"
+      authorized: false
+
+    # Local LLM backends — on-host inference, no egress. Declared and authorized
+    # for when a local classifier backend is wired (e.g. OMLX, Ollama).
+    - provider: local_omlx
+      scope: local
+      sends: [subject, body]
+      basis: "on-host inference (OMLX); content does not leave the machine"
+      authorized: true
+
+    - provider: local_ollama
+      scope: local
+      sends: [subject, body]
+      basis: "on-host inference (Ollama); content does not leave the machine"
+      authorized: true
+
 audit_requirements:
   before_action:
     - timestamp

@@ -17,7 +17,7 @@ startMcpServer({
   transport: MCP_TRANSPORT,
   httpHost: MCP_HTTP_HOST,
   httpPort: MCP_PUBLIC_HTTP_PORT,
-  authToken: "", // public data — loopback-open, no bearer
+  auth: { kind: "open" }, // public data — loopback-open, no credentials
 }).catch((err) => {
   process.stderr.write(
     `[cuassistant-public] ${err instanceof Error ? err.message : String(err)}\n`,

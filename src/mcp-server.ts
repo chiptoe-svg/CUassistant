@@ -47,6 +47,7 @@
 import { randomUUID } from "crypto";
 import "./mcp-tools/index.js";
 import { startMcpServer } from "./mcp-tools/server.js";
+import { recordSeen } from "./mcp-tools/consumers.js";
 import { ApprovalGate } from "./approval/gate.js";
 import { makeSender } from "./approval/sender.js";
 import { gwsSend } from "./approval/gws-sender.js";
@@ -109,13 +110,24 @@ function initApprovalGate(): void {
   __setGate(gate);
 }
 
+// Throttle last-seen writes to at most once per hour per consumer, so an active
+// agent doesn't rewrite the registry on every call.
+const lastTouchMs = new Map<string, number>();
+function touchConsumer(id: string): void {
+  if (id === "env-token") return;
+  const now = Date.now();
+  if (now - (lastTouchMs.get(id) ?? 0) < 3_600_000) return;
+  lastTouchMs.set(id, now);
+  recordSeen(id, new Date(now).toISOString());
+}
+
 initApprovalGate();
 startMcpServer({
   name: "cuassistant-credentialed",
   transport: MCP_TRANSPORT,
   httpHost: MCP_HTTP_HOST,
   httpPort: MCP_HTTP_PORT,
-  authToken: MCP_AUTH_TOKEN,
+  auth: { kind: "registry", envToken: MCP_AUTH_TOKEN, onSeen: touchConsumer },
 }).catch((err) => {
   log(`server error: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

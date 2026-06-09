@@ -16,6 +16,28 @@ export function openAiConfigured(): boolean {
   return Boolean(OPENAI_API_KEY);
 }
 
+/**
+ * Why (if at all) the OpenAI residual path must NOT run. Returns a reason
+ * string to block egress, or null to allow. The direct OpenAI API call sends
+ * mailbox content outside the M365 envelope, so it runs only when the
+ * `openai_api` provider is authorized in policy/action-policy.yaml
+ * (data_egress) — the IT-reviewable record, not a hidden flag.
+ */
+export function openAiEgressBlockReason(
+  configured: boolean,
+  authorized: boolean,
+): string | null {
+  if (!configured) return "OPENAI_API_KEY is missing";
+  if (!authorized) {
+    return (
+      "openai_api egress is not authorized in policy/action-policy.yaml " +
+      "(data_egress.classifiers) — RESIDUAL_CLASSIFIER=openai sends mailbox " +
+      "content to the OpenAI API; set authorized: true only after a DPA covers it"
+    );
+  }
+  return null;
+}
+
 function buildLeanSystemPrompt(taxonomy: Taxonomy): string {
   const folderBullets = taxonomy.folders
     .map((f) => {

@@ -5,9 +5,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/install-machine-bundle.sh /path/to/cuassistant-machine-bundle [--activate-launchd] [--skip-npm] [--skip-state]
+  scripts/install-machine-bundle.sh /path/to/bundle[.tar.gz.enc] [--activate-launchd] [--skip-npm] [--skip-state]
 
-Run this from the target CUassistant repo checkout on the new Mac.
+Run this from the target CUassistant repo checkout on the new Mac. The bundle
+argument may be either an encrypted archive (<name>.tar.gz.enc, the export
+default — you will be prompted for the passphrase) or a plaintext bundle
+directory.
 
 What it does:
   - copies .env from the bundle
@@ -62,10 +65,29 @@ if [[ -z "${BUNDLE_DIR}" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUNDLE_DIR="$(cd "${BUNDLE_DIR}" && pwd)"
 
-if [[ ! -d "${BUNDLE_DIR}" ]]; then
-  echo "Bundle not found: ${BUNDLE_DIR}" >&2
+# An encrypted bundle (.tar.gz.enc) is decrypted into a temp dir first; a
+# plaintext bundle directory is used in place (back-compat).
+DECRYPT_TMP=""
+cleanup() { [[ -n "${DECRYPT_TMP}" ]] && rm -rf "${DECRYPT_TMP}"; }
+trap cleanup EXIT
+
+if [[ -f "${BUNDLE_DIR}" && "${BUNDLE_DIR}" == *.enc ]]; then
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "openssl not found — cannot decrypt ${BUNDLE_DIR}" >&2
+    exit 1
+  fi
+  ENC_FILE="$(cd "$(dirname "${BUNDLE_DIR}")" && pwd)/$(basename "${BUNDLE_DIR}")"
+  DECRYPT_TMP="$(mktemp -d)"
+  echo "Decrypting bundle (you will be prompted for the passphrase)…"
+  openssl enc -d -aes-256-cbc -pbkdf2 -in "${ENC_FILE}" | tar -xzf - -C "${DECRYPT_TMP}"
+  # The archive contains a single top-level bundle directory.
+  INNER="$(find "${DECRYPT_TMP}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  BUNDLE_DIR="${INNER:-${DECRYPT_TMP}}"
+elif [[ -d "${BUNDLE_DIR}" ]]; then
+  BUNDLE_DIR="$(cd "${BUNDLE_DIR}" && pwd)"
+else
+  echo "Bundle not found (need a .tar.gz.enc file or a bundle directory): ${BUNDLE_DIR}" >&2
   exit 1
 fi
 

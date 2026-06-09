@@ -12,7 +12,7 @@ user's behalf — but only behind a **human approval gate** that is secure even 
 the requesting agent is untrusted (prompt-injected, buggy, or eventually running in
 a container).
 
-The security goal is enforced structurally: the agent can *request* a send but has
+The security goal is enforced structurally: the agent can _request_ a send but has
 no send capability of its own. The only path to "mail leaves" runs through a
 deterministic host-side gate that freezes the proposed email, shows it to the user
 over Telegram, and executes the send **only** on the user's explicit tap.
@@ -35,16 +35,16 @@ over Telegram, and executes the send **only** on the user's explicit tap.
 
 ## Key decisions
 
-| Decision | Choice |
-|---|---|
-| Proposer | Interactive agent (B) in v1; autonomous scan (A) later. Gate is **proposer-agnostic**. |
-| Approval interaction | Approve / reject; reject loops feedback back to the agent, which revises and submits a fresh frozen proposal (C). Gate never edits. |
-| Approval ceremony | Simple tap (A). The security boundary is the agent's lack of Telegram access, not ceremony weight. |
-| MCP integration | **Async ticket** (Approach 2): submit returns `{request_id, pending}`; agent polls `get_send_status`. Survives long latency and the HTTP/container transport. |
-| Restart behavior | In-memory store, **fail-closed** — restart cancels all pending; agent re-requests. |
-| External recipients | Flagged (⚠️) in the approval message for any non-`clemson.edu` address. |
-| Telegram bot | Dedicated-vs-shared channel **deferred**; lives entirely behind `notifiers/telegram.ts`. |
-| Send backend | **Account-aware**: MS365 → Graph `sendMail` (`Mail.Send`); Gmail → `gws` (`gmail.send`). v1 can ship on the `gws` sender, **decoupling from the MS365 `Mail.Send`/admin-consent dependency**. |
+| Decision             | Choice                                                                                                                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Proposer             | Interactive agent (B) in v1; autonomous scan (A) later. Gate is **proposer-agnostic**.                                                                                                        |
+| Approval interaction | Approve / reject; reject loops feedback back to the agent, which revises and submits a fresh frozen proposal (C). Gate never edits.                                                           |
+| Approval ceremony    | Simple tap (A). The security boundary is the agent's lack of Telegram access, not ceremony weight.                                                                                            |
+| MCP integration      | **Async ticket** (Approach 2): submit returns `{request_id, pending}`; agent polls `get_send_status`. Survives long latency and the HTTP/container transport.                                 |
+| Restart behavior     | In-memory store, **fail-closed** — restart cancels all pending; agent re-requests.                                                                                                            |
+| External recipients  | Flagged (⚠️) in the approval message for any non-`clemson.edu` address.                                                                                                                       |
+| Telegram bot         | Dedicated-vs-shared channel **deferred**; lives entirely behind `notifiers/telegram.ts`.                                                                                                      |
+| Send backend         | **Account-aware**: MS365 → Graph `sendMail` (`Mail.Send`); Gmail → `gws` (`gmail.send`). v1 can ship on the `gws` sender, **decoupling from the MS365 `Mail.Send`/admin-consent dependency**. |
 
 ## Architecture
 
@@ -65,14 +65,14 @@ User tap ──▶ Telegram receiver ──▶ gate: match id + user ─▶ ✅ 
 
 ### Components
 
-| Module | Responsibility | New/changed |
-|---|---|---|
-| `src/mcp-tools/mail-send.ts` | MCP tools `request_send_mail` (freeze → return `request_id`) and `get_send_status(id)`. No token, no Telegram. | new |
-| `src/approval-gate.ts` | Pending-request store + state machine; matches taps → request; executes send on ✅, discards on ❌/timeout. Deterministic, no model. Depends on injected ports. | new |
-| `src/notifiers/telegram.ts` | Posts the approval message; receiver loop (Bot API long-poll/webhook) for the tap/reply. Fits existing notifier registry. | new |
-| `src/ms365.ts` | Add `sendMail()` → `POST /me/sendMail` (needs `Mail.Send`). | +1 helper |
-| `src/mcp-tools/permissions.ts` | Register operation `mail.send_with_approval`. | +entry |
-| `policy/action-policy.yaml` | `mail.send_with_approval: approval: none` — exposes the *submit* tool (the codebase's exposure model treats `none` as "callable"). The human gate is the **runtime Telegram approval**, not this static field; a `requires_runtime_human_approval` note documents intent (ties off finding #14). | +entry |
+| Module                         | Responsibility                                                                                                                                                                                                                                                                                   | New/changed |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
+| `src/mcp-tools/mail-send.ts`   | MCP tools `request_send_mail` (freeze → return `request_id`) and `get_send_status(id)`. No token, no Telegram.                                                                                                                                                                                   | new         |
+| `src/approval-gate.ts`         | Pending-request store + state machine; matches taps → request; executes send on ✅, discards on ❌/timeout. Deterministic, no model. Depends on injected ports.                                                                                                                                  | new         |
+| `src/notifiers/telegram.ts`    | Posts the approval message; receiver loop (Bot API long-poll/webhook) for the tap/reply. Fits existing notifier registry.                                                                                                                                                                        | new         |
+| `src/ms365.ts`                 | Add `sendMail()` → `POST /me/sendMail` (needs `Mail.Send`).                                                                                                                                                                                                                                      | +1 helper   |
+| `src/mcp-tools/permissions.ts` | Register operation `mail.send_with_approval`.                                                                                                                                                                                                                                                    | +entry      |
+| `policy/action-policy.yaml`    | `mail.send_with_approval: approval: none` — exposes the _submit_ tool (the codebase's exposure model treats `none` as "callable"). The human gate is the **runtime Telegram approval**, not this static field; a `requires_runtime_human_approval` note documents intent (ties off finding #14). | +entry      |
 
 ### Design-for-isolation
 
@@ -121,7 +121,7 @@ A later or duplicate tap on a terminal request is a no-op.
   request **and** (2) the sender is the authorized user id. The agent never sees the token
   and has no Telegram access.
 - **Integrity ("approved == sent").** The full email is frozen at submit; on ✅ the gate
-  sends *that stored artifact*, never re-reading from the agent. The agent holds only the
+  sends _that stored artifact_, never re-reading from the agent. The agent holds only the
   opaque `request_id`, so there is no TOCTOU window. `content_hash` is logged.
 - **Reject → revise loop (C).** ❌ sets `rejected`; an optional follow-up text is captured as
   `feedback`. `get_send_status` returns `{rejected, feedback}`; the agent composes a revised
@@ -133,15 +133,15 @@ A later or duplicate tap on a terminal request is a no-op.
 Governing principle: every error or ambiguity resolves to **no send**. The only path to
 "mail leaves" is a live, matched ✅ from the authorized user id.
 
-| Situation | Behavior |
-|---|---|
-| No reply within TTL (default 1 hr, configurable) | → `expired`, no send |
-| Telegram message fails to post | Fail fast → `failed` ("couldn't reach approver"), surfaced to agent; never silently pending |
-| ✅ but `ms365.sendMail` errors | → `failed`, error captured, surfaced via `get_send_status`. No auto-retry (avoids double-send) |
-| Double-tap / stale tap / replay | No-op; terminal states final |
-| Host restart with pending requests | All pending cancelled (in-memory); agent re-requests |
-| Tap from an unrecognized user id | Ignored |
-| Tap with forged/non-matching token | Ignored |
+| Situation                                        | Behavior                                                                                       |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| No reply within TTL (default 1 hr, configurable) | → `expired`, no send                                                                           |
+| Telegram message fails to post                   | Fail fast → `failed` ("couldn't reach approver"), surfaced to agent; never silently pending    |
+| ✅ but `ms365.sendMail` errors                   | → `failed`, error captured, surfaced via `get_send_status`. No auto-retry (avoids double-send) |
+| Double-tap / stale tap / replay                  | No-op; terminal states final                                                                   |
+| Host restart with pending requests               | All pending cancelled (in-memory); agent re-requests                                           |
+| Tap from an unrecognized user id                 | Ignored                                                                                        |
+| Tap with forged/non-matching token               | Ignored                                                                                        |
 
 ## Security invariants
 
@@ -179,8 +179,8 @@ prominently. Any recipient outside the configured internal-domain allowlist (def
 - **Telegram bot** — dedicated-vs-shared decision deferred; isolated behind `notifiers/telegram.ts`.
   Its token is a host-side secret under the same handling as other secrets (0600, excluded from
   transfer bundle).
-- **Per-caller auth (#2)** — recommended alongside for the HTTP/container transport (controls *who
-  can submit*), but not required for the gate's core guarantee. Tracked separately.
+- **Per-caller auth (#2)** — recommended alongside for the HTTP/container transport (controls _who
+  can submit_), but not required for the gate's core guarantee. Tracked separately.
 
 ## Testing
 
@@ -192,16 +192,16 @@ tap `{token, user_id}`); fake sender (records calls, succeed/throw); controllabl
 
 **State-machine matrix (one test per transition):**
 
-| Test | Asserts |
-|---|---|
-| Valid ✅ from authorized user | sender called once with frozen artifact → `sent` |
-| ✅ but sender throws | → `failed`, no retry |
-| ❌ with note | → `rejected`, feedback captured, sender never called |
-| TTL elapses | → `expired`, sender never called |
-| Double-tap / stale tap | no-op; sender called at most once |
-| Tap, wrong/unknown user id | ignored; sender never called |
-| Forged/non-matching token | ignored; sender never called |
-| New gate instance (restart) | prior pending gone → fail-closed |
+| Test                          | Asserts                                              |
+| ----------------------------- | ---------------------------------------------------- |
+| Valid ✅ from authorized user | sender called once with frozen artifact → `sent`     |
+| ✅ but sender throws          | → `failed`, no retry                                 |
+| ❌ with note                  | → `rejected`, feedback captured, sender never called |
+| TTL elapses                   | → `expired`, sender never called                     |
+| Double-tap / stale tap        | no-op; sender called at most once                    |
+| Tap, wrong/unknown user id    | ignored; sender never called                         |
+| Forged/non-matching token     | ignored; sender never called                         |
+| New gate instance (restart)   | prior pending gone → fail-closed                     |
 
 **Cross-cutting assertions:**
 

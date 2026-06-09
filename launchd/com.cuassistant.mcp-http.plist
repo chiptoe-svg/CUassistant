@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CUassistant credentialed MCP server (HTTP) service for launchd.
+
+  Runs the host HTTP MCP server on 127.0.0.1:${MCP_HTTP_PORT:-8765},
+  exposing all credentialed tools (send-mail approval gate, Telegram
+  channel, etc.) to local MCP clients over HTTP.
+
+  Security note: MCP_AUTH_TOKEN MUST be injected at the environment
+  level by OneCLI vault (or equivalent secret manager) — do NOT write
+  the token into this plist. Secrets do not belong in plist files.
+
+  Setup (one time):
+    1. Edit this file: replace REPO_PATH with the absolute path to your
+       local repo, NPM_PATH with the absolute path to your npm binary
+       (run `which npm`), and HOME_PATH with $HOME.
+    2. cp launchd/com.cuassistant.mcp-http.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.cuassistant.mcp-http.plist
+    4. (optional) launchctl start com.cuassistant.mcp-http  # bring up now
+    5. tail -f ~/Library/Logs/cuassistant.mcp.out.log
+
+  The service starts automatically at login and is kept alive by launchd.
+  MCP_HTTP_PORT defaults to 8765 if not set in the environment.
+
+  To unload:
+    launchctl unload ~/Library/LaunchAgents/com.cuassistant.mcp-http.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuassistant.mcp-http</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>NPM_PATH</string>
+    <string>run</string>
+    <string>mcp:http</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPO_PATH</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>HOME_PATH</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp.err.log</string>
+</dict>
+</plist>

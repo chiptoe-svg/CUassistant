@@ -3,8 +3,11 @@
 // These were stubs while the consent was outstanding; they are now wired to
 // the shared MCP Graph helper (authedFetch on getMs365AccessToken). The policy
 // boundary still applies on every call:
-//   - move:   own_mailbox_only + destination_folder_allow_list (requires
-//             MCP_ALLOWED_MAIL_DESTINATIONS) + no junk/deleted/recoverable.
+//   - move:   own_mailbox_only + destination_subtree_allow_list — destination
+//             path must be under MCP_ALLOWED_MAIL_DESTINATIONS (segment-aware)
+//             and not a system/destructive folder. account ms365 -> Graph
+//             folder; g.clemson -> Gmail label (via gws). Paths resolve to the
+//             provider's real folder/label, so a bogus path is refused.
 //   - update: metadata_only / no_body_rewrite / no_send / no_delete — body
 //             fields are rejected; this is mark-read/flag/importance/category
 //             only.
@@ -14,9 +17,11 @@
 // before any Graph call runs.
 
 import { startMcpAudit, finishMcpAudit } from "./audit.js";
+import { resolveGmailLabelByPath, moveGmailMessage } from "./gmail-folders.js";
 import {
   createDraftEmail,
   moveMailMessage,
+  resolveMs365FolderByPath,
   updateMailMessage,
 } from "./graph-helpers.js";
 import { assertMcpOperation } from "./permissions.js";
@@ -28,43 +33,76 @@ const moveMailMessageTool: McpToolDefinition = {
   tool: {
     name: "move-mail-message",
     description:
-      "Move an Outlook message into a target folder. The destination must be " +
-      "in MCP_ALLOWED_MAIL_DESTINATIONS; junk/deleted/recoverable folders are " +
-      "rejected by policy.",
+      "Move a message into a folder/label under an allowed subtree (e.g. " +
+      "sorted/Newsletters). account is 'ms365' (an Outlook folder) or " +
+      "'g.clemson' (a Gmail label — the message is labeled and archived from " +
+      "the inbox). The destination must be under MCP_ALLOWED_MAIL_DESTINATIONS; " +
+      "system folders (trash/junk/deleted/recoverable) are rejected. Use " +
+      "list-mail-folders to discover valid destinations.",
     inputSchema: {
       type: "object" as const,
       properties: {
+        account: { type: "string", enum: ["ms365", "g.clemson"] },
         id: { type: "string", description: "Message id." },
-        destinationId: {
+        destination: {
           type: "string",
-          description: "Target mail folder id (or wellKnownName).",
+          description: "Folder/label path, e.g. sorted/Newsletters.",
         },
       },
-      required: ["id", "destinationId"],
+      required: ["account", "id", "destination"],
     },
   },
   async handler(args) {
+    const account = args.account as string | undefined;
     const id = args.id as string | undefined;
-    const destinationId = args.destinationId as string | undefined;
-    if (!id || !destinationId) return err("id and destinationId are required");
+    const destination = args.destination as string | undefined;
+    if (account !== "ms365" && account !== "g.clemson") {
+      return err("account must be 'ms365' or 'g.clemson'");
+    }
+    if (!id || !destination) return err("id and destination are required");
     const audit = startMcpAudit({
       operation: "mail.move_message",
       toolName: "move-mail-message",
-      argsSummary: { id_present: true, destinationId },
+      argsSummary: { account, id_present: true, destination },
     });
     try {
-      assertMcpOperation("mail.move_message", { input: args });
+      assertMcpOperation("mail.move_message", { input: { destination } });
     } catch (e) {
       finishMcpAudit(audit, { result: "error", detail: String(e) });
       return permissionErr(e);
     }
-    const message = await moveMailMessage(id, destinationId);
-    if (!message) {
-      finishMcpAudit(audit, { result: "error", detail: "graph_move_failed" });
-      return err("Graph failed to move the message.");
+    if (account === "ms365") {
+      const folderId = await resolveMs365FolderByPath(destination);
+      if (!folderId) {
+        finishMcpAudit(audit, {
+          result: "error",
+          detail: "destination_not_found",
+        });
+        return err(`No MS365 folder matches "${destination}".`);
+      }
+      const message = await moveMailMessage(id, folderId);
+      if (!message) {
+        finishMcpAudit(audit, { result: "error", detail: "graph_move_failed" });
+        return err("Graph failed to move the message.");
+      }
+      finishMcpAudit(audit, { result: "success", object_id: message.id });
+      return okJson({ message });
     }
-    finishMcpAudit(audit, { result: "success", object_id: message.id });
-    return okJson({ message });
+    // g.clemson (Gmail): resolve the label and apply it (archive from inbox).
+    const labelId = resolveGmailLabelByPath(destination);
+    if (!labelId) {
+      finishMcpAudit(audit, {
+        result: "error",
+        detail: "destination_not_found",
+      });
+      return err(`No Gmail label matches "${destination}".`);
+    }
+    if (!moveGmailMessage(id, labelId)) {
+      finishMcpAudit(audit, { result: "error", detail: "gws_move_failed" });
+      return err("gws failed to move (label) the message.");
+    }
+    finishMcpAudit(audit, { result: "success", object_id: id });
+    return okJson({ moved: true, account, destination });
   },
 };
 

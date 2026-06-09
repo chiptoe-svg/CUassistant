@@ -14,6 +14,7 @@
 //   3. the corresponding tool file in src/mcp-tools/ that calls
 //      assertMcpOperation(...) before the backend call.
 
+import { isBlockedMailFolder, isUnderAllowedPrefix } from "../mail-paths.js";
 import { getPolicyAction } from "../policy.js";
 import type { PolicyAction } from "../policy.js";
 
@@ -52,6 +53,13 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     backend: "graph",
     status: "active",
     policyActionId: "mail.fetch_body",
+  },
+  // Read-only folder/label discovery. Dispatches by account: ms365 -> Graph,
+  // g.clemson -> gws (the backend field is nominal for this dual-provider op).
+  "mail.list_folders": {
+    backend: "graph",
+    status: "active",
+    policyActionId: "mail.list_folders",
   },
 
   // --- Calendar reads (GCassistant Graph app — Calendars.ReadWrite) ---
@@ -261,6 +269,29 @@ function rejectSharedCalendarInput(
     : null;
 }
 
+function validateSubtreeDestination(
+  input: Record<string, unknown>,
+): string | null {
+  const dest = typeof input.destination === "string" ? input.destination : "";
+  if (!dest) {
+    return "destination_subtree_allow_list requires a destination path";
+  }
+  const prefixes = (process.env.MCP_ALLOWED_MAIL_DESTINATIONS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (prefixes.length === 0) {
+    return "destination_subtree_allow_list requires MCP_ALLOWED_MAIL_DESTINATIONS";
+  }
+  if (isBlockedMailFolder(dest)) {
+    return "destination_subtree_allow_list rejected a system/destructive folder";
+  }
+  if (!isUnderAllowedPrefix(dest, prefixes)) {
+    return `destination "${dest}" is not under an allowed subtree`;
+  }
+  return null;
+}
+
 function validateDestinationAllowList(destination: string): string | null {
   const allowed = (process.env.MCP_ALLOWED_MAIL_DESTINATIONS ?? "")
     .split(",")
@@ -307,6 +338,8 @@ function validateConstraint(
         : null;
     case "destination_folder_allow_list":
       return validateDestinationAllowList(destination);
+    case "destination_subtree_allow_list":
+      return validateSubtreeDestination(input);
     case "no_delete_folder":
       return destination.includes("deleted") || destination.includes("trash")
         ? "no_delete_folder rejected destinationId"

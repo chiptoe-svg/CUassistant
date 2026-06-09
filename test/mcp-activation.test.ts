@@ -40,24 +40,24 @@ test("destructive / affects-others ops stay policy-blocked", () => {
   }
 });
 
-test("move requires the destination allow-list", () => {
+test("move requires the destination subtree allow-list", () => {
   const prev = process.env.MCP_ALLOWED_MAIL_DESTINATIONS;
   delete process.env.MCP_ALLOWED_MAIL_DESTINATIONS;
   try {
     assert.throws(
       () =>
         assertMcpOperation("mail.move_message", {
-          input: { id: "x", destinationId: "archive" },
+          input: { destination: "sorted/News" },
         }),
       (err) =>
         err instanceof McpPermissionDeniedError &&
-        /destination_folder_allow_list/.test(err.message),
+        /destination_subtree_allow_list/.test(err.message),
     );
-    // With the folder allow-listed, the constraint passes.
-    process.env.MCP_ALLOWED_MAIL_DESTINATIONS = "archive";
+    // With the subtree allow-listed, any path under it passes.
+    process.env.MCP_ALLOWED_MAIL_DESTINATIONS = "sorted";
     assert.doesNotThrow(() =>
       assertMcpOperation("mail.move_message", {
-        input: { id: "x", destinationId: "archive" },
+        input: { destination: "sorted/News" },
       }),
     );
   } finally {

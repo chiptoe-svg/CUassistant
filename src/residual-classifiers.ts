@@ -1,5 +1,6 @@
 import { classifyBatchWithCodex } from "./codex-agent.js";
-import { CLASSIFIER_BATCH_SIZE, MODE, OPENAI_EGRESS_ACK } from "./config.js";
+import { CLASSIFIER_BATCH_SIZE, MODE } from "./config.js";
+import { isEgressAuthorized } from "./policy.js";
 import { loadTaxonomy } from "./loaders.js";
 import { log } from "./log.js";
 import {
@@ -86,7 +87,10 @@ export async function classifyResidualsOpenAi(
 ): Promise<ApiOutcome> {
   const taxonomy = loadTaxonomy();
   const out = createApiOutcome();
-  const block = openAiEgressBlockReason(openAiConfigured(), OPENAI_EGRESS_ACK);
+  const block = openAiEgressBlockReason(
+    openAiConfigured(),
+    isEgressAuthorized("openai_api"),
+  );
   if (block) {
     log.warn(
       `RESIDUAL_CLASSIFIER=openai blocked: ${block}; residuals stay pending`,

@@ -67,10 +67,6 @@ export const CLASSIFIER_BATCH_SIZE = Math.max(
 );
 
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-// Egress acknowledgment for the direct OpenAI residual path. Mailbox content
-// leaves the M365 / ChatGPT-Edu envelope for the OpenAI API; require an explicit
-// opt-in so it can't happen silently. Codex (ChatGPT Edu) is unaffected.
-export const OPENAI_EGRESS_ACK = process.env.OPENAI_EGRESS_ACK === "1";
 export const OPENAI_CLASSIFIER_MODEL =
   process.env.OPENAI_CLASSIFIER_MODEL || "gpt-5.4-mini";
 export const OPENAI_CLASSIFIER_TIMEOUT_MS = Number(

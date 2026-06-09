@@ -14,13 +14,13 @@ test("egress blocked when OpenAI is not configured", () => {
   );
 });
 
-test("egress blocked when configured but not acknowledged", () => {
+test("egress blocked when configured but not authorized in policy", () => {
   assert.match(
     openAiEgressBlockReason(true, false) ?? "",
-    /OPENAI_EGRESS_ACK=1 is required/,
+    /not authorized in policy/,
   );
 });
 
-test("egress allowed only when configured AND acknowledged", () => {
+test("egress allowed only when configured AND authorized", () => {
   assert.equal(openAiEgressBlockReason(true, true), null);
 });

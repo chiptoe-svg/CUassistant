@@ -17,6 +17,7 @@ import path from "path";
 import { buildChildEnv } from "./child-env.js";
 import { CODEX_BIN, CODEX_MODEL, CODEX_TIMEOUT_MS } from "./config.js";
 import { log } from "./log.js";
+import { isEgressAuthorized } from "./policy.js";
 import { composeSystemPrompt } from "./prompts.js";
 import { ClassificationResult, LlmCandidate, Taxonomy } from "./types.js";
 
@@ -237,6 +238,15 @@ export async function classifyBatchWithCodex(
 ): Promise<CodexBatchOutput> {
   const out: CodexBatchOutput = { results: new Map(), usage: null };
   if (candidates.length === 0) return out;
+  // Mailbox content egresses to Codex (ChatGPT Edu). Gate on the policy's
+  // data_egress declaration — refuse if the provider is not authorized.
+  if (!isEgressAuthorized("codex_chatgpt_edu")) {
+    log.warn(
+      "codex classifier egress not authorized in policy/action-policy.yaml " +
+        "(data_egress: codex_chatgpt_edu); skipping classification",
+    );
+    return out;
+  }
   const prompt = buildBatchPrompt(candidates, taxonomy);
   let exec: CodexExecResult;
   try {

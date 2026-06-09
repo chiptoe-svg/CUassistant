@@ -31,7 +31,10 @@ reach a third-party server by URL.
      **vendor-namespaced** tools (`outlook-*` / `gmail-*`). One
      `action-policy.yaml`, one audit log, one host-HTTP + bearer boundary.
    - **Public server** (`cuassistant-public`): the Clemson class-schedule
-     tools. No credentials, public data → may run stdio in-container; no secret.
+     tools. No credentials, public data → served over **loopback HTTP on :8766**
+     (no bearer); reached from the container via `host.docker.internal:8766`.
+     Stdio-in-container was found not to work during the NanoClaw integration
+     test: the container lacks the host path, CUassistant repo, and node/tsx.
 4. **Writes/sends always prompt** and stay off NanoClaw's allowlist; reads may
    be allowlisted later.
 5. **No plaintext credentials:** pluggable secret source — `.env` for standalone
@@ -45,23 +48,26 @@ reach a third-party server by URL.
 ```
 ┌─ NanoClaw container ───────────────┐        ┌─ Host (macOS / Docker Desktop) ──────────┐
 │ Claude agent + chat channels       │        │                                          │
-│ pi-mcp-bridge                       │        │ cuassistant-credentialed          │
+│ pi-mcp-bridge                       │        │ cuassistant-credentialed                 │
 │   • cuassistant-credentialed (url, bearer) ─┼─HTTP──▶│   Streamable HTTP @ 127.0.0.1:8765       │
 │       host.docker.internal:8765     │+secret │   bearer auth · policy · audit · gate    │
-│   • cuassistant-public (stdio)     │        │   MS365 token (vault/.env, host only) ───┼─▶ Graph / Clemson
-│                                     │        │                                          │
-│   clemson tools run in-container ───┼─(local)│ cuassistant-public (public)   │
-│       (no secret, public data)      │ stdio  │   stdio subprocess (or simple HTTP)      │
+│   • cuassistant-public (url)        │        │   MS365 token (vault/.env, host only) ───┼─▶ Graph
+│       host.docker.internal:8766    ─┼─HTTP──▶│                                          │
+│       (no bearer, public data)      │        │ cuassistant-public (public)              │
+│                                     │        │   Streamable HTTP @ 127.0.0.1:8766       │
+│                                     │        │   no bearer · loopback-only ─────────────┼─▶ Clemson Banner
 └─────────────────────────────────────┘        └────────────────────────────────────────┘
 ```
 
-- **Loopback + `host.docker.internal`:** the credentialed server binds
-  `127.0.0.1` (not network-exposed). The container reaches it via Docker
-  Desktop's `host.docker.internal` hostname. A bearer secret guards against
-  other host-local processes.
-- **Public Clemson server:** no token, so the simplest path is the existing
-  NanoClaw stdio model — it runs in-container and reaches Clemson's public
-  Banner API directly. No host process, no secret.
+- **Loopback + `host.docker.internal`:** both servers bind `127.0.0.1` (not
+  network-exposed). The container reaches each via Docker Desktop's
+  `host.docker.internal` hostname. The credentialed server's bearer guards
+  against other host-local processes; the public server is loopback-open
+  (public data, no secret).
+- **Public Clemson server:** served over loopback HTTP on `:8766` — no bearer.
+  Stdio-in-container was the original plan but was ruled out during the NanoClaw
+  integration test: the Bun container image has no host path, no CUassistant
+  repo, and no node/tsx to spawn.
 
 ## CUassistant repo changes
 
@@ -95,7 +101,8 @@ reach a third-party server by URL.
    - GCassistant Graph backend (not Codex/graph-cli), active mail/calendar
      writes, the 5 Clemson tools, send-via-approval-gate, snapshots/refresh.
    - Register `cuassistant-credentialed` as an HTTP server (url + vault-injected bearer)
-     in NanoClaw **user/local** config; register `cuassistant-public` as stdio.
+     in NanoClaw **user/local** config; register `cuassistant-public` as an HTTP server
+     (`url: "http://host.docker.internal:8766/"`, no bearer).
    - Keep write/send tools off the NanoClaw allowlist.
 
 ## nanoclaw-personal repo changes (the contract)

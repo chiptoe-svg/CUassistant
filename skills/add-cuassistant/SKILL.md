@@ -1,6 +1,6 @@
 ---
 name: add-cuassistant
-description: Install CUassistant's MCP servers into a NanoClaw v2 agent group. Registers the host-side credentialed server (MS365 mail/calendar/tasks + send-via-approval-gate) over HTTP and the public Clemson class-schedule server over stdio, so the agent gains tools mangled as `cuassistant-credentialed__*` and `cuassistant-public__*`. Use when the user asks to install, add, wire, or enable CUassistant in NanoClaw.
+description: Install CUassistant's MCP servers into a NanoClaw v2 agent group. Registers the host-side credentialed server (MS365 mail/calendar/tasks + send-via-approval-gate) over HTTP on :8765 and the public Clemson class-schedule server over HTTP on :8766, so the agent gains tools mangled as `cuassistant-credentialed__*` and `cuassistant-public__*`. Use when the user asks to install, add, wire, or enable CUassistant in NanoClaw.
 ---
 
 # /add-cuassistant
@@ -22,9 +22,12 @@ Two servers, split by security class. The credential never enters the container.
   which go through the Telegram human-approval gate. It is a vendor-neutral
   credentialed registry: future credentialed vendors register here,
   vendor-namespaced — they do not get their own server.
-- **`cuassistant-public`** — registered as a **stdio** server. No credentials;
-  public Clemson Banner class-schedule data only; safe to run as a subprocess
-  inside the container.
+- **`cuassistant-public`** — registered as an **HTTP** server pointing at the
+  host (`host.docker.internal:8766`). No credentials; public Clemson Banner
+  class-schedule data only; no bearer required. Stdio-in-container cannot work
+  because NanoClaw's Bun container has no host path, no CUassistant repo, and no
+  node/tsx — so this server is served over loopback HTTP just like the
+  credentialed one.
 
 NanoClaw name-mangles tools as `<serverName>__<tool>`, e.g.
 `cuassistant-credentialed__send-outlook-mail`,
@@ -38,18 +41,20 @@ Full tool inventory (exposed + the policy-gated-not-exposed set):
 1. **CUassistant is checked out and `npm install` has been run.** The repo path
    must be known. If `$CUASSISTANT_REPO` is not set in the user's shell, ask for
    the absolute path before proceeding — do not guess.
-2. **The host credentialed MCP server is running over HTTP.** Either
-   `cd $CUASSISTANT_REPO && npm run mcp:http` (binds
-   `127.0.0.1:${MCP_HTTP_PORT:-8765}`), or the launchd service
-   `launchd/com.cuassistant.mcp-http.plist`. Confirm it is up before wiring the
-   container.
+2. **Both host MCP servers are running over HTTP.**
+   - `npm run mcp:http` (credentialed, binds `127.0.0.1:${MCP_HTTP_PORT:-8765}`)
+     — or the launchd service `launchd/com.cuassistant.mcp-http.plist`.
+   - `npm run mcp:public:http` (public, binds
+     `127.0.0.1:${MCP_PUBLIC_HTTP_PORT:-8766}`) — or the launchd service
+     `launchd/com.cuassistant.mcp-public-http.plist`.
+   Confirm both are up before wiring the container.
 3. **`MS365_REFRESH_TOKEN` is present in `$CUASSISTANT_REPO/.env`** (or
    vault-injected on the host). Without it the credentialed Graph tools cannot
    reach Microsoft 365.
 4. **Auth (optional / interim).** Either set `MCP_AUTH_TOKEN` on the host server
    and register a vault-referenced bearer in the container (target), or run the
    host server with no `MCP_AUTH_TOKEN` on loopback and omit the header
-   (interim). See step 1 below.
+   (interim). See step 1 below. The public server (8766) requires no bearer.
 
 There is no Codex CLI / Outlook connector and no Graph-CLI token anymore — do
 not look for them.
@@ -83,19 +88,20 @@ ever persisted on disk.
 on loopback and **omit the `headers` block entirely** — register just the
 `url`. The server is loopback-open in that mode.
 
-### 2. Register `cuassistant-public` (stdio)
+### 2. Register `cuassistant-public` (HTTP)
 
 ```
 add_mcp_server({
   name: "cuassistant-public",
-  command: "npm",
-  args: ["--prefix", "<absolute path to CUassistant>", "run", "mcp:public"],
-  env: {}
+  url: "http://host.docker.internal:8766/"
 })
 ```
 
-(Equivalently `command: "tsx", args: ["<repo>/src/mcp-public.ts"]`.) This server
-holds no secrets, so running it as an in-container stdio subprocess is fine.
+No `headers` block — this server is public (no bearer). The host must be running
+`npm run mcp:public:http` (or the `com.cuassistant.mcp-public-http.plist` launchd
+service) before the container connects. Stdio (`npm run mcp:public`) is retained
+for local/dev use only; it cannot work inside the container because the Bun image
+has no host path, no CUassistant repo, and no node/tsx.
 
 ### 3. Inject agent docs
 
@@ -171,7 +177,7 @@ cuassistant-public__list-clemson-terms()
 cuassistant-credentialed__list-todo-task-lists()
 ```
 
-The public call needs no host process or credential. The credentialed call
+The public call needs no credential but does require the host `mcp:public:http` process to be running. The credentialed call
 exercises the HTTP reach to the host server, the bearer (if set), and the MS365
 token. If the credentialed call returns an auth error, confirm the host server
 is running (`npm run mcp:http`) and that the bearer reference resolves (or, in

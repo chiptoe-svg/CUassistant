@@ -50,9 +50,23 @@ whether they hold credentials — not by vendor domain.
 
 - **What.** The Clemson class-schedule tools backed by Clemson's public
   Banner Browse Classes API. No credentials, public data only.
-- **Transport.** stdio — `npm run mcp:public` (`tsx src/mcp-public.ts`).
-  Because it holds no secret, it is safe to run as a stdio subprocess **inside**
-  a NanoClaw container and reach Clemson's public API directly.
+- **Transports.** Dual.
+  - **Streamable HTTP** — `npm run mcp:public:http` (`MCP_TRANSPORT=http`).
+    Binds `${MCP_PUBLIC_HTTP_HOST:-127.0.0.1}:${MCP_PUBLIC_HTTP_PORT:-8766}`.
+    This is the path a containerized NanoClaw agent uses, reaching the host via
+    `host.docker.internal:8766`. No bearer required (public data; loopback-open).
+    A launchd service (`launchd/com.cuassistant.mcp-public-http.plist`) runs it
+    as a host daemon.
+  - **stdio** — `npm run mcp:public` (`tsx src/mcp-public.ts`). Retained for
+    local/dev use only. stdio-in-container cannot work because NanoClaw's
+    container has no host path, no CUassistant repo, and no node/tsx.
+- **Inbound auth.** None — public data, no bearer. The server is
+  **loopback-open** (`127.0.0.1` only; not network-exposed).
+- **Ops note.** Both HTTP servers are loopback-only. Their ports are tracked in
+  `~/.dev-ports.yaml` (cuassistant: `mcp_credentialed` 8765, `mcp_public` 8766).
+  To bring up both: `npm run mcp:http` (credentialed, 8765) and
+  `npm run mcp:public:http` (public, 8766) — or load their respective launchd
+  plists.
 
 ## Allow-list and authorized use
 

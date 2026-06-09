@@ -93,3 +93,15 @@ export const SEND_INTERNAL_DOMAINS = (
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 export const TELEGRAM_APPROVER_USER_ID =
   process.env.TELEGRAM_APPROVER_USER_ID || "";
+
+// --- MCP server transport (credentialed server) ---
+// MCP_TRANSPORT: "stdio" (default, local/dev) or "http" (containerized agent).
+export const MCP_TRANSPORT = (
+  process.env.MCP_TRANSPORT === "http" ? "http" : "stdio"
+) as "stdio" | "http";
+export const MCP_HTTP_HOST = process.env.MCP_HTTP_HOST || "127.0.0.1";
+export const MCP_HTTP_PORT = Number(process.env.MCP_HTTP_PORT || 8765);
+// When set, the HTTP transport requires `Authorization: Bearer <token>`.
+// When unset, the server is loopback-open (interim mode). The value is read
+// from the environment, which OneCLI can populate from its vault at spawn.
+export const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";

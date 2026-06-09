@@ -15,6 +15,7 @@
 
 import fs from "fs";
 import path from "path";
+import zlib from "zlib";
 
 import { STATE_DIR } from "./config.js";
 import { log } from "./log.js";
@@ -507,11 +508,13 @@ async function fetchSectionsPaged(
 // --- Per-term snapshots (disk) ---
 //
 // A full-term scan is ~20 requests and Banner rate-limits bursts, so the live
-// (registering) terms are scanned once a day by a separate job and written to
-// state/clemson/<term>.json. Queries read the snapshot (cheap, always reflects
-// the latest file) and stamp results with its date. Snapshots are per term —
-// Banner binds one term per session, so each term is its own scan/file. Past
-// "(View Only)" terms never change, so once written they need no refresh.
+// (registering) terms are scanned once a day by a separate job and written
+// gzip-compressed to state/clemson/<term>.json.gz (JSON-of-records compresses
+// ~20x — repeated keys + low-cardinality values). Queries read the snapshot and
+// stamp results with its date. Reads are memoized in-process keyed by file
+// mtime, so the ~6.5MB term parses once and is reused across requests until the
+// daily job rewrites the file. Snapshots are per term — Banner binds one term
+// per session. Past "(View Only)" terms never change, so they need no refresh.
 
 export interface ClemsonTermSnapshot {
   term: string;
@@ -528,21 +531,53 @@ function snapshotPath(term: string): string {
   return path.join(snapshotDir(), `${term}.json`);
 }
 
+/** Serialize a snapshot to a gzipped JSON buffer. */
+export function serializeSnapshot(snap: ClemsonTermSnapshot): Buffer {
+  return zlib.gzipSync(Buffer.from(JSON.stringify(snap), "utf-8"));
+}
+
+/** Parse a snapshot buffer — gzip (magic 1f 8b) or legacy plain JSON. */
+export function deserializeSnapshot(buf: Buffer): ClemsonTermSnapshot {
+  const isGzip = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+  const json = (isGzip ? zlib.gunzipSync(buf) : buf).toString("utf-8");
+  return JSON.parse(json) as ClemsonTermSnapshot;
+}
+
+// Parsed-snapshot cache, keyed by file path, invalidated by mtime change.
+const snapshotCache = new Map<
+  string,
+  { mtimeMs: number; snap: ClemsonTermSnapshot }
+>();
+
 export function loadClemsonSnapshot(term: string): ClemsonTermSnapshot | null {
-  try {
-    const p = snapshotPath(term);
-    if (!fs.existsSync(p)) return null;
-    return JSON.parse(fs.readFileSync(p, "utf-8")) as ClemsonTermSnapshot;
-  } catch (err) {
-    log.warn("clemson snapshot read failed", { term, err: String(err) });
-    return null;
+  // Prefer the gzipped file; fall back to a legacy uncompressed .json.
+  for (const p of [`${snapshotPath(term)}.gz`, snapshotPath(term)]) {
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(p);
+    } catch {
+      continue; // not this format; try the next
+    }
+    const cached = snapshotCache.get(p);
+    if (cached && cached.mtimeMs === st.mtimeMs) return cached.snap;
+    try {
+      const snap = deserializeSnapshot(fs.readFileSync(p));
+      snapshotCache.set(p, { mtimeMs: st.mtimeMs, snap });
+      return snap;
+    } catch (err) {
+      log.warn("clemson snapshot read failed", { term, err: String(err) });
+      return null;
+    }
   }
+  return null;
 }
 
 function saveClemsonSnapshot(snap: ClemsonTermSnapshot): void {
   try {
     fs.mkdirSync(snapshotDir(), { recursive: true });
-    fs.writeFileSync(snapshotPath(snap.term), JSON.stringify(snap));
+    const p = `${snapshotPath(snap.term)}.gz`;
+    fs.writeFileSync(p, serializeSnapshot(snap));
+    snapshotCache.delete(p); // next read re-loads with the fresh mtime
   } catch (err) {
     log.warn("clemson snapshot write failed", {
       term: snap.term,

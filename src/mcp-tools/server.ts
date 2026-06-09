@@ -11,6 +11,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import crypto from "crypto";
 import http from "http";
 
 import type { McpToolDefinition } from "./types.js";
@@ -49,13 +50,30 @@ export function registerTools(tools: McpToolDefinition[]): void {
   }
 }
 
-/** Bearer check. Open when expected is empty (loopback interim mode). */
+/** Bearer check. Open when expected is empty (loopback interim mode, gated at
+ *  bind time by assertHttpAuthConfig). Constant-time compare otherwise. */
 export function checkBearer(
   authHeader: string | undefined,
   expected: string,
 ): boolean {
   if (!expected) return true;
-  return authHeader === `Bearer ${expected}`;
+  const prefix = "Bearer ";
+  if (!authHeader || !authHeader.startsWith(prefix)) return false;
+  const got = Buffer.from(authHeader.slice(prefix.length));
+  const exp = Buffer.from(expected);
+  return got.length === exp.length && crypto.timingSafeEqual(got, exp);
+}
+
+/** Fail closed: no token is only allowed on a loopback bind. */
+export function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+export function assertHttpAuthConfig(expected: string, host: string): void {
+  if (!expected && !isLoopbackHost(host)) {
+    throw new Error(
+      `MCP_AUTH_TOKEN is required when MCP_HTTP_HOST is not loopback (got "${host}")`,
+    );
+  }
 }
 
 export interface StartOptions {
@@ -93,6 +111,7 @@ export async function startMcpServer(opts: StartOptions): Promise<void> {
     const host = opts.httpHost ?? "127.0.0.1";
     const port = opts.httpPort ?? 8765;
     const expected = opts.authToken ?? "";
+    assertHttpAuthConfig(expected, host);
     const server = buildServer(opts.name);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

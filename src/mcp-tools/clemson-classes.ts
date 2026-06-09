@@ -160,10 +160,10 @@ const instructorClasses: McpToolDefinition = {
       "code (202608) or text ('Fall 2026'). If the name is ambiguous (e.g. " +
       "just 'Cox') it returns `candidates` to choose from and no sections; " +
       "when it resolves to one person, `matched` is set and `sections` is " +
-      "populated. STRONGLY prefer passing the instructor's `subject` (e.g. " +
-      "GC, CPSC) — the tool then searches just that department and is fast " +
-      "and reliable. Without a subject it scans the entire term (~10k " +
-      "sections, slower).",
+      "populated. Normally served from the daily class snapshot, so it is fast " +
+      "and needs no `subject`. Pass `subject` (e.g. GC, CPSC) only as a " +
+      "fallback for a term with no snapshot yet — it scopes a live scan to one " +
+      "department instead of the full term.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -178,8 +178,9 @@ const instructorClasses: McpToolDefinition = {
         subject: {
           type: "string",
           description:
-            "Subject/department to scope the search, e.g. GC or CPSC. " +
-            "Recommended — much faster and more reliable than a full scan.",
+            "Optional. Subject/department, e.g. GC or CPSC. Only used as a " +
+            "cold-term fallback (no snapshot yet) to scope a live scan; " +
+            "ignored when the snapshot is present.",
         },
         openOnly: {
           type: "boolean",
@@ -236,10 +237,11 @@ const roomAvailability: McpToolDefinition = {
       "'MW' — a free slot is open on ALL listed days). Returns busy blocks " +
       "(with the courses) and free blocks within a day window (default " +
       "08:00-22:00). Classes only — ad-hoc 25Live events are NOT included " +
-      "(25Live's public API doesn't expose most rooms). Pass `subject` (the " +
-      "department that owns the room, e.g. GC for Godfrey) — that's one fast, " +
-      "reliable request. Without it the tool scans the whole term (~20 " +
-      "requests) which is slower and can be rate-limited by Banner.",
+      "(25Live's public API doesn't expose most rooms). Served from the daily " +
+      "snapshot — fast and complete; **leave `subject` off for room questions**: " +
+      "a room hosts classes from many departments, and `subject` narrows to one " +
+      "(it can undercount what's actually in the room). `subject` is only a " +
+      "cold-term fallback when no snapshot exists.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -261,8 +263,10 @@ const roomAvailability: McpToolDefinition = {
         subject: {
           type: "string",
           description:
-            "Optional subject (e.g. GC) to scope the scan — faster, but only " +
-            "counts that department's classes in the room.",
+            "Optional, and best left OFF for rooms. Cold-term fallback only: " +
+            "scopes a live scan to one department, which UNDERCOUNTS a room " +
+            "(rooms host multiple departments). Ignored when the snapshot " +
+            "is present.",
         },
         dayStart: {
           type: "string",

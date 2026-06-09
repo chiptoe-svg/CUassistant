@@ -101,6 +101,9 @@ export const MCP_TRANSPORT = (
 ) as "stdio" | "http";
 export const MCP_HTTP_HOST = process.env.MCP_HTTP_HOST || "127.0.0.1";
 export const MCP_HTTP_PORT = Number(process.env.MCP_HTTP_PORT || 8765);
+export const MCP_PUBLIC_HTTP_PORT = Number(
+  process.env.MCP_PUBLIC_HTTP_PORT || 8766,
+);
 // When set, the HTTP transport requires `Authorization: Bearer <token>`.
 // When unset, the server is loopback-open (interim mode). The value is read
 // from the environment, which OneCLI can populate from its vault at spawn.

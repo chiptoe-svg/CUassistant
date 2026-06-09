@@ -106,37 +106,55 @@ function buildServer(name: string): Server {
   return server;
 }
 
+export function createHttpHandler(
+  name: string,
+  expectedToken: string,
+): http.RequestListener {
+  return (req, res) => {
+    if (!checkBearer(req.headers.authorization, expectedToken)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c as Buffer));
+    req.on("end", () => {
+      let body: unknown = undefined;
+      if (chunks.length) {
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+        } catch {
+          /* no body */
+        }
+      }
+      // Stateless MCP: a FRESH server+transport per request. Sharing one
+      // stateless transport across requests 500s on the post-initialize
+      // notifications/initialized POST (verified by the nanoclaw integration test).
+      void (async () => {
+        const server = buildServer(name);
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        res.on("close", () => {
+          void transport.close();
+          void server.close();
+        });
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+      })();
+    });
+  };
+}
+
 export async function startMcpServer(opts: StartOptions): Promise<void> {
   if ((opts.transport ?? "stdio") === "http") {
     const host = opts.httpHost ?? "127.0.0.1";
     const port = opts.httpPort ?? 8765;
     const expected = opts.authToken ?? "";
     assertHttpAuthConfig(expected, host);
-    const server = buildServer(opts.name);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    await server.connect(transport);
-    const httpServer = http.createServer((req, res) => {
-      if (!checkBearer(req.headers.authorization, expected)) {
-        res.writeHead(401, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "unauthorized" }));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      req.on("data", (c) => chunks.push(c as Buffer));
-      req.on("end", () => {
-        let body: unknown = undefined;
-        if (chunks.length) {
-          try {
-            body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-          } catch {
-            /* no body */
-          }
-        }
-        void transport.handleRequest(req, res, body);
-      });
-    });
+    const httpServer = http.createServer(
+      createHttpHandler(opts.name, expected),
+    );
     httpServer.listen(port, host, () => {
       log(
         `${opts.name} http on ${host}:${port} (auth ${expected ? "required" : "OPEN-loopback"}) tools: ${allTools.map((t) => t.tool.name).join(", ")}`,

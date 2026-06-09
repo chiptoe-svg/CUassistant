@@ -13,6 +13,7 @@
     "mcp": "tsx src/mcp-server.ts",
     "mcp:http": "MCP_TRANSPORT=http tsx src/mcp-server.ts",
     "mcp:public": "tsx src/mcp-public.ts",
+    "mcp:public:http": "MCP_TRANSPORT=http tsx src/mcp-public.ts",
     "ms365-login": "tsx scripts/ms365-login.ts",
     "provider-smoke": "tsx scripts/provider-smoke.ts",
     "clemson:refresh": "tsx scripts/clemson-refresh.ts",

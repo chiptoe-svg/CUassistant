@@ -1,8 +1,12 @@
 import { classifyBatchWithCodex } from "./codex-agent.js";
-import { CLASSIFIER_BATCH_SIZE, MODE } from "./config.js";
+import { CLASSIFIER_BATCH_SIZE, MODE, OPENAI_EGRESS_ACK } from "./config.js";
 import { loadTaxonomy } from "./loaders.js";
 import { log } from "./log.js";
-import { classifyEmailWithApi, openAiConfigured } from "./openai-classifier.js";
+import {
+  classifyEmailWithApi,
+  openAiConfigured,
+  openAiEgressBlockReason,
+} from "./openai-classifier.js";
 import { computeCostUsd } from "./pricing.js";
 import { TaskWriter } from "./providers.js";
 import { appendUsage } from "./state.js";
@@ -82,9 +86,10 @@ export async function classifyResidualsOpenAi(
 ): Promise<ApiOutcome> {
   const taxonomy = loadTaxonomy();
   const out = createApiOutcome();
-  if (!openAiConfigured()) {
+  const block = openAiEgressBlockReason(openAiConfigured(), OPENAI_EGRESS_ACK);
+  if (block) {
     log.warn(
-      "RESIDUAL_CLASSIFIER=openai but OPENAI_API_KEY is missing; residuals stay pending",
+      `RESIDUAL_CLASSIFIER=openai blocked: ${block}; residuals stay pending`,
     );
     for (const email of outcome.llm_candidates) noteApiFailure(out, email);
     return out;

@@ -16,6 +16,28 @@ export function openAiConfigured(): boolean {
   return Boolean(OPENAI_API_KEY);
 }
 
+/**
+ * Why (if at all) the OpenAI residual path must NOT run. Returns a reason
+ * string to block egress, or null to allow. Unlike the Codex path (ChatGPT Edu,
+ * institutional), the direct OpenAI API call sends mailbox content to a third
+ * party that may be outside the M365 data envelope — so it requires an explicit
+ * operator acknowledgment (OPENAI_EGRESS_ACK) confirming DPA coverage.
+ */
+export function openAiEgressBlockReason(
+  configured: boolean,
+  ack: boolean,
+): string | null {
+  if (!configured) return "OPENAI_API_KEY is missing";
+  if (!ack) {
+    return (
+      "OPENAI_EGRESS_ACK=1 is required — RESIDUAL_CLASSIFIER=openai sends " +
+      "mailbox content to the OpenAI API, outside the M365 / ChatGPT-Edu " +
+      "envelope; set it only after confirming DPA coverage"
+    );
+  }
+  return null;
+}
+
 function buildLeanSystemPrompt(taxonomy: Taxonomy): string {
   const folderBullets = taxonomy.folders
     .map((f) => {

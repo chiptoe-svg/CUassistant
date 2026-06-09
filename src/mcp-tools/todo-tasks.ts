@@ -1,4 +1,4 @@
-// MS To Do tools — Graph CLI backend.
+// MS To Do tools — MS Graph backend (GCassistant Azure AD app via graph-helpers).
 //
 // Tool names mirror CUagent's @softeria/ms-365-mcp-server surface
 // (list-todo-task-lists, list-todo-tasks, get-todo-task, create-todo-task,
@@ -40,7 +40,7 @@ const listTodoTaskLists: McpToolDefinition = {
       return permissionErr(e);
     }
     const lists = await listTodoLists();
-    if (lists === null) return err("Graph CLI returned no lists.");
+    if (lists === null) return err("MS Graph returned no lists.");
     return okJson({ lists });
   },
 };
@@ -75,7 +75,7 @@ const listTodoTasksTool: McpToolDefinition = {
     if (!listId) return err("listId is required");
     const top = typeof args.top === "number" ? (args.top as number) : undefined;
     const tasks = await listTodoTasks(listId, { top });
-    if (tasks === null) return err("Graph CLI returned no tasks.");
+    if (tasks === null) return err("MS Graph returned no tasks.");
     return okJson({ listId, tasks });
   },
 };
@@ -181,9 +181,9 @@ const createTodoTaskTool: McpToolDefinition = {
       if (!task) {
         finishMcpAudit(audit, {
           result: "error",
-          detail: "graph_cli_create_failed",
+          detail: "graph_create_failed",
         });
-        return err("Graph CLI failed to create task.");
+        return err("MS Graph failed to create task.");
       }
       finishMcpAudit(audit, { result: "success", object_id: task.id });
       return okJson({ task });
@@ -269,9 +269,9 @@ const updateTodoTaskTool: McpToolDefinition = {
       if (!task) {
         finishMcpAudit(audit, {
           result: "error",
-          detail: "graph_cli_update_failed",
+          detail: "graph_update_failed",
         });
-        return err("Graph CLI failed to update task.");
+        return err("MS Graph failed to update task.");
       }
       finishMcpAudit(audit, { result: "success", object_id: task.id });
       return okJson({ task });
@@ -318,10 +318,10 @@ const deleteTodoTaskTool: McpToolDefinition = {
       if (!result.ok) {
         finishMcpAudit(audit, {
           result: "error",
-          detail: `graph_cli_delete_failed status=${result.status ?? "null"}`,
+          detail: `graph_delete_failed status=${result.status ?? "null"}`,
         });
         return err(
-          `Graph CLI failed to delete task (status ${result.status ?? "null"}).`,
+          `MS Graph failed to delete task (status ${result.status ?? "null"}).`,
         );
       }
       finishMcpAudit(audit, { result: "success", object_id: taskId });

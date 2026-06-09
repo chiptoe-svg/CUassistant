@@ -6,7 +6,7 @@
 ## Status
 
 - **NanoClaw consumer side: DONE & merged** to `main` (`chiptoe-svg/nanoclaw-personal`, branch `feat/third-party-mcp-bridge`). Your hand-off items 1–5 (config-type sweep, entry points, HTTP bridge branch, `resolveHeaders`, networking no-op) are all implemented and tested.
-- **Integration test: RUN and PASSING** (2026-06-09). I started `MCP_TRANSPORT=http npm run mcp:http` (interim no-bearer) and pointed the *real merged bridge* at `http://127.0.0.1:8765`. After the one provider fix below, the bridge connects and lists **all 20** `cuassistant-credentialed__*` tools.
+- **Integration test: RUN and PASSING** (2026-06-09). I started `MCP_TRANSPORT=http npm run mcp:http` (interim no-bearer) and pointed the _real merged bridge_ at `http://127.0.0.1:8765`. After the one provider fix below, the bridge connects and lists **all 20** `cuassistant-credentialed__*` tools.
 
 Naming reconciliation applied throughout: `cuassistant-credentialed` (was cuassistant-m365), `cuassistant-public` (was cuassistant-clemson). The bridge is name-agnostic; this is cosmetic.
 
@@ -14,11 +14,11 @@ Naming reconciliation applied throughout: `cuassistant-credentialed` (was cuassi
 
 ## 🔴 CRITICAL — provider bug found, fix verified
 
-Your HTTP server (`src/mcp-tools/server.ts:115-138`) builds **one shared `StreamableHTTPServerTransport({ sessionIdGenerator: undefined })` and reuses it for every request**. In stateless mode the MCP SDK requires a **fresh transport + server per request**. 
+Your HTTP server (`src/mcp-tools/server.ts:115-138`) builds **one shared `StreamableHTTPServerTransport({ sessionIdGenerator: undefined })` and reuses it for every request**. In stateless mode the MCP SDK requires a **fresh transport + server per request**.
 
-**Symptom:** `initialize` (POST #1) succeeds, then the client's `notifications/initialized` (POST #2) returns **HTTP 500** (`Error POSTing to endpoint`), the handshake never completes, and **zero tools list**. The server logs nothing. This blocks *any* MCP client, not just nanoclaw.
+**Symptom:** `initialize` (POST #1) succeeds, then the client's `notifications/initialized` (POST #2) returns **HTTP 500** (`Error POSTing to endpoint`), the handshake never completes, and **zero tools list**. The server logs nothing. This blocks _any_ MCP client, not just nanoclaw.
 
-**Fix (verified — with it applied my bridge listed all 20 tools):** move `buildServer` + transport construction *inside* the request handler, per request, and close on `res` `'close'`:
+**Fix (verified — with it applied my bridge listed all 20 tools):** move `buildServer` + transport construction _inside_ the request handler, per request, and close on `res` `'close'`:
 
 ```diff
 @@ export async function startMcpServer(opts: StartOptions): Promise<void> {
@@ -68,6 +68,7 @@ Your suggested registration:
 A nanoclaw stdio MCP server is spawned **as a subprocess inside the agent container** (the Bun image). That container does **not** have: the host path `/Users/admin/projects/CUassistant`, the CUassistant repo, `npm`/`node`/`tsx`, or `node_modules`. So this command fails at spawn in production. (It only "works" if the agent runs uncontainerized — nanoclaw never does.)
 
 **Options:**
+
 - **(a) RECOMMENDED — serve `cuassistant-public` over HTTP too** (loopback, no bearer; public data): a second `startMcpServer({ name: "cuassistant-public", transport: "http", httpPort: 8766 })`. Register in nanoclaw with `url: http://host.docker.internal:8766/`. Zero in-container install; symmetric with credentialed. (Apply the same per-request fix.)
 - **(b)** Publish the public server as an npm package, add it to the agent group's container config `packages_npm` (pinned), register `command: "npx", args: ["-y", "<pkg>"]`.
 - **(c)** Mount the built dir + provide a Node runtime in the container (heaviest).
@@ -79,6 +80,7 @@ Until this is resolved, only `cuassistant-credentialed` (HTTP) is registrable.
 ## Registration (after the fix)
 
 **`cuassistant-credentialed` (HTTP):**
+
 ```
 ncl groups config add-mcp-server --id <agent-group> \
   --name cuassistant-credentialed \
@@ -86,6 +88,7 @@ ncl groups config add-mcp-server --id <agent-group> \
   --headers '{"Authorization":"Bearer ${CUASSISTANT_MCP_TOKEN}"}'
 ncl groups restart --id <agent-group>
 ```
+
 Register the `Bearer ${CUASSISTANT_MCP_TOKEN}` reference from day one (see Auth). **`cuassistant-public`:** pending the blocker above.
 
 ---
@@ -107,16 +110,16 @@ Register the `Bearer ${CUASSISTANT_MCP_TOKEN}` reference from day one (see Auth)
 
 `create-calendar-event`, `create-draft-email`, `create-todo-task`, `get-calendar-event`, `get-calendar-view`, `get-mail-message`, `get-send-status`, `get-todo-task`, `get_pending_actions`, `get_scan_status`, `list-calendar-events`, `list-mail-messages`, `list-todo-task-lists`, `list-todo-tasks`, `move-mail-message`, `send-gmail`, `send-outlook-mail`, `update-calendar-event`, `update-mail-message`, `update-todo-task`.
 
-(Policy-gated/destructive tools — delete/accept/decline/trigger_scan — were correctly *not* registered. Send tools registered but `send-approval disabled` in this test env since `TELEGRAM_BOT_TOKEN`/`TELEGRAM_APPROVER_USER_ID` were unset — wire those before relying on the Telegram gate.)
+(Policy-gated/destructive tools — delete/accept/decline/trigger_scan — were correctly _not_ registered. Send tools registered but `send-approval disabled` in this test env since `TELEGRAM_BOT_TOKEN`/`TELEGRAM_APPROVER_USER_ID` were unset — wire those before relying on the Telegram gate.)
 
 ## Quick reference
 
-| Thing | Value |
-|---|---|
-| Credentialed server | `127.0.0.1:8765`, root path, Streamable HTTP |
-| nanoclaw `url` | `http://host.docker.internal:8765/` |
-| nanoclaw header | `Authorization: Bearer ${CUASSISTANT_MCP_TOKEN}` (reference) |
-| Server names | `cuassistant-credentialed` (HTTP), `cuassistant-public` (pending transport decision) |
-| Agent-visible tools | `cuassistant-credentialed__<tool>` |
-| Interim auth | `MCP_AUTH_TOKEN` unset → loopback-open, no header sent |
-| Target auth | set `MCP_AUTH_TOKEN` **and** inject `CUASSISTANT_MCP_TOKEN` together |
+| Thing               | Value                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| Credentialed server | `127.0.0.1:8765`, root path, Streamable HTTP                                         |
+| nanoclaw `url`      | `http://host.docker.internal:8765/`                                                  |
+| nanoclaw header     | `Authorization: Bearer ${CUASSISTANT_MCP_TOKEN}` (reference)                         |
+| Server names        | `cuassistant-credentialed` (HTTP), `cuassistant-public` (pending transport decision) |
+| Agent-visible tools | `cuassistant-credentialed__<tool>`                                                   |
+| Interim auth        | `MCP_AUTH_TOKEN` unset → loopback-open, no header sent                               |
+| Target auth         | set `MCP_AUTH_TOKEN` **and** inject `CUASSISTANT_MCP_TOKEN` together                 |

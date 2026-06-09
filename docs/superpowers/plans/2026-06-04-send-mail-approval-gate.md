@@ -12,31 +12,32 @@
 
 **Scope (v1):** gate core + Gmail/`gws` sender + Telegram channel + MCP tools + policy/wiring. The MS365 Graph sender is a clearly-marked disabled backend (added in a follow-on once `Mail.Send` consent lands). Persistence, autonomous proposer, and the general agent↔Telegram channel are out of scope.
 
-**Policy note:** Per the codebase's binary exposure model (`isMcpOperationExposed` requires `approval: "none"`), the `mail.send_with_approval` policy action uses `approval: none` to mean "the agent may *submit* a request." The human-required control is the runtime Telegram gate, recorded with a `requires_runtime_human_approval` constraint for reviewability.
+**Policy note:** Per the codebase's binary exposure model (`isMcpOperationExposed` requires `approval: "none"`), the `mail.send_with_approval` policy action uses `approval: none` to mean "the agent may _submit_ a request." The human-required control is the runtime Telegram gate, recorded with a `requires_runtime_human_approval` constraint for reviewability.
 
 ---
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `src/approval/types.ts` | Shared types + port interfaces (`SendArtifact`, `PendingSend`, `Sender`, `ApprovalChannel`, `Clock`, `IdGen`, `GateConfig`). |
-| `src/approval/freeze.ts` | Pure helpers: `hashArtifact`, `externalRecipients`. |
-| `src/approval/gate.ts` | `ApprovalGate` state machine (submit/getStatus/approve/reject/sweep). No I/O; ports injected. |
-| `src/approval/sender.ts` | Account-aware `Sender` dispatcher: `gmail`→gws, `ms365`→disabled error (v1). |
-| `src/approval/gws-sender.ts` | Real Gmail send via `gws`. |
-| `src/notifiers/telegram-approval.ts` | Telegram `ApprovalChannel`: post message + receiver loop mapping taps→gate. |
-| `src/mcp-tools/mail-send.ts` | MCP tools `request_send_mail` + `get_send_status`, wired to a gate singleton. |
-| `src/mcp-tools/permissions.ts` | +1 `MCP_ALLOWED_OPERATIONS` entry. |
-| `policy/action-policy.yaml` | +1 action `mail.send_with_approval`. |
-| `src/mcp-server.ts` | Composition root: build gate with real ports; register the approval channel. |
-| `test/approval-*.test.ts` | Unit tests for freeze + gate state machine + sender dispatch. |
+| File                                 | Responsibility                                                                                                               |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `src/approval/types.ts`              | Shared types + port interfaces (`SendArtifact`, `PendingSend`, `Sender`, `ApprovalChannel`, `Clock`, `IdGen`, `GateConfig`). |
+| `src/approval/freeze.ts`             | Pure helpers: `hashArtifact`, `externalRecipients`.                                                                          |
+| `src/approval/gate.ts`               | `ApprovalGate` state machine (submit/getStatus/approve/reject/sweep). No I/O; ports injected.                                |
+| `src/approval/sender.ts`             | Account-aware `Sender` dispatcher: `gmail`→gws, `ms365`→disabled error (v1).                                                 |
+| `src/approval/gws-sender.ts`         | Real Gmail send via `gws`.                                                                                                   |
+| `src/notifiers/telegram-approval.ts` | Telegram `ApprovalChannel`: post message + receiver loop mapping taps→gate.                                                  |
+| `src/mcp-tools/mail-send.ts`         | MCP tools `request_send_mail` + `get_send_status`, wired to a gate singleton.                                                |
+| `src/mcp-tools/permissions.ts`       | +1 `MCP_ALLOWED_OPERATIONS` entry.                                                                                           |
+| `policy/action-policy.yaml`          | +1 action `mail.send_with_approval`.                                                                                         |
+| `src/mcp-server.ts`                  | Composition root: build gate with real ports; register the approval channel.                                                 |
+| `test/approval-*.test.ts`            | Unit tests for freeze + gate state machine + sender dispatch.                                                                |
 
 ---
 
 ## Task 1: Core types and pure helpers
 
 **Files:**
+
 - Create: `src/approval/types.ts`
 - Create: `src/approval/freeze.ts`
 - Test: `test/approval-freeze.test.ts`
@@ -117,7 +118,10 @@ const base: SendArtifact = {
 
 test("hashArtifact is stable for identical artifacts and changes with content", () => {
   assert.equal(hashArtifact(base), hashArtifact({ ...base }));
-  assert.notEqual(hashArtifact(base), hashArtifact({ ...base, body: "Changed" }));
+  assert.notEqual(
+    hashArtifact(base),
+    hashArtifact({ ...base, body: "Changed" }),
+  );
 });
 
 test("externalRecipients flags only non-internal domains", () => {
@@ -186,6 +190,7 @@ git commit -m "feat(approval): core types + freeze/external-recipient helpers"
 ## Task 2: ApprovalGate.submit (caps, rate limit, notify)
 
 **Files:**
+
 - Create: `src/approval/gate.ts`
 - Test: `test/approval-gate.test.ts`
 
@@ -347,7 +352,10 @@ export class ApprovalGate {
     this.ports.channel = channel;
   }
 
-  async submit(artifact: SendArtifact, proposer: string): Promise<SubmitResult> {
+  async submit(
+    artifact: SendArtifact,
+    proposer: string,
+  ): Promise<SubmitResult> {
     this.sweepExpired();
     const now = this.ports.clock.now();
 
@@ -453,6 +461,7 @@ git commit -m "feat(approval): gate.submit with caps, rate limit, fail-closed no
 ## Task 3: approve / reject / expiry transitions
 
 **Files:**
+
 - Modify: `test/approval-gate.test.ts` (append tests)
 
 - [ ] **Step 1: Append the failing tests** to `test/approval-gate.test.ts`
@@ -552,6 +561,7 @@ git commit -m "test(approval): cover approve/reject/expiry/idempotency transitio
 ## Task 4: Account-aware sender dispatcher
 
 **Files:**
+
 - Create: `src/approval/sender.ts`
 - Test: `test/approval-sender.test.ts`
 
@@ -564,8 +574,18 @@ import test from "node:test";
 import { makeSender } from "../src/approval/sender.ts";
 import type { SendArtifact } from "../src/approval/types.ts";
 
-const gmail: SendArtifact = { account: "gmail", to: ["a@x.com"], subject: "s", body: "b" };
-const ms365: SendArtifact = { account: "ms365", to: ["a@x.com"], subject: "s", body: "b" };
+const gmail: SendArtifact = {
+  account: "gmail",
+  to: ["a@x.com"],
+  subject: "s",
+  body: "b",
+};
+const ms365: SendArtifact = {
+  account: "ms365",
+  to: ["a@x.com"],
+  subject: "s",
+  body: "b",
+};
 
 test("dispatches gmail to the gws backend", async () => {
   const calls: SendArtifact[] = [];
@@ -637,6 +657,7 @@ git commit -m "feat(approval): account-aware sender dispatch (gmail enabled, ms3
 ## Task 5: Gmail send backend via `gws`
 
 **Files:**
+
 - Create: `src/approval/gws-sender.ts`
 
 > Integration code that shells out to `gws`; not unit-tested (no network in CI). Mirrors the env-hardening already used in `src/gmail.ts` (`buildChildEnv`).
@@ -663,7 +684,15 @@ export async function gwsSend(a: SendArtifact): Promise<SentResult> {
   };
   const out = execFileSync(
     GWS_BIN,
-    ["gmail", "messages", "send", "--params", JSON.stringify(params), "--format", "json"],
+    [
+      "gmail",
+      "messages",
+      "send",
+      "--params",
+      JSON.stringify(params),
+      "--format",
+      "json",
+    ],
     {
       encoding: "utf-8",
       env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
@@ -696,6 +725,7 @@ git commit -m "feat(approval): Gmail send backend via gws (hardened child env)"
 ## Task 6: Telegram approval channel (post + receiver)
 
 **Files:**
+
 - Create: `src/notifiers/telegram-approval.ts`
 - Test: `test/telegram-approval-format.test.ts`
 
@@ -734,7 +764,10 @@ test("approval message includes recipients, subject, body, and flags externals",
 });
 
 test("long bodies are truncated with a marker", () => {
-  const long = { ...req, artifact: { ...req.artifact, body: "x".repeat(5000) } };
+  const long = {
+    ...req,
+    artifact: { ...req.artifact, body: "x".repeat(5000) },
+  };
   const msg = formatApprovalMessage(long, []);
   assert.match(msg, /truncated, 5000 chars total/);
   assert.ok(msg.length < 4096);
@@ -833,7 +866,11 @@ async function pollLoop(
       const r = await fetch(api("getUpdates"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offset, timeout: 25, allowed_updates: ["callback_query"] }),
+        body: JSON.stringify({
+          offset,
+          timeout: 25,
+          allowed_updates: ["callback_query"],
+        }),
       });
       const data = (await r.json()) as {
         result?: Array<{
@@ -884,6 +921,7 @@ git commit -m "feat(approval): Telegram approval channel (formatter + long-poll 
 ## Task 7: Config knobs for the gate
 
 **Files:**
+
 - Modify: `src/config.ts` (append exports)
 
 - [ ] **Step 1: Append to `src/config.ts`**
@@ -927,24 +965,26 @@ git commit -m "feat(approval): config knobs (TTL, caps, internal domains, telegr
 ## Task 8: Policy action + MCP operation entry
 
 **Files:**
+
 - Modify: `policy/action-policy.yaml` (add an action)
 - Modify: `src/mcp-tools/permissions.ts` (add an operation entry)
 
 - [ ] **Step 1: Add the action to `policy/action-policy.yaml`** (under `actions:`)
 
 ```yaml
-  - id: mail.send_with_approval
-    surface: mail
-    risk: high
-    reversibility: irreversible
-    approval: none          # "none" = the agent may SUBMIT a request; the
-                            # human gate is enforced at runtime by the Telegram
-                            # approval, not by this static field.
-    # NOTE: the runtime human-approval + frozen-artifact controls are enforced
-    # in code (ApprovalGate), not as policy constraints, so they are documented
-    # here as comments rather than constraint IDs the validator must recognize.
-    constraints:
-      - own_mailbox_only
+- id: mail.send_with_approval
+  surface: mail
+  risk: high
+  reversibility: irreversible
+  approval:
+    none # "none" = the agent may SUBMIT a request; the
+    # human gate is enforced at runtime by the Telegram
+    # approval, not by this static field.
+  # NOTE: the runtime human-approval + frozen-artifact controls are enforced
+  # in code (ApprovalGate), not as policy constraints, so they are documented
+  # here as comments rather than constraint IDs the validator must recognize.
+  constraints:
+    - own_mailbox_only
 ```
 
 > Before adding constraints beyond `own_mailbox_only`, read `assertPolicyConstraints` in `src/mcp-tools/permissions.ts`: if it rejects or ignores unknown constraint IDs, only use IDs it recognizes. `own_mailbox_only` is already used by existing actions and is safe.
@@ -962,9 +1002,11 @@ git commit -m "feat(approval): config knobs (TTL, caps, internal domains, telegr
 - [ ] **Step 3: Verify exposure** with a throwaway check
 
 Run:
+
 ```bash
 npx tsx -e "import('./src/mcp-tools/permissions.ts').then(m => console.log(m.isMcpOperationExposed('mail.send_with_approval')))"
 ```
+
 Expected: `true`.
 
 - [ ] **Step 4: Run existing policy tests + typecheck**
@@ -984,6 +1026,7 @@ git commit -m "feat(approval): policy action + MCP operation for mail.send_with_
 ## Task 9: MCP tools (request_send_mail, get_send_status)
 
 **Files:**
+
 - Create: `src/mcp-tools/mail-send.ts`
 - Test: `test/mail-send-tool.test.ts`
 
@@ -995,7 +1038,11 @@ git commit -m "feat(approval): policy action + MCP operation for mail.send_with_
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { requestSendMail, getSendStatus, __setGate } from "../src/mcp-tools/mail-send.ts";
+import {
+  requestSendMail,
+  getSendStatus,
+  __setGate,
+} from "../src/mcp-tools/mail-send.ts";
 
 function fakeGate() {
   return {
@@ -1003,7 +1050,7 @@ function fakeGate() {
       return { request_id: "req1", status: "pending" as const };
     },
     getStatus(id: string) {
-      return id === "req1" ? ({ status: "pending" as const }) : null;
+      return id === "req1" ? { status: "pending" as const } : null;
     },
   };
 }
@@ -1023,7 +1070,12 @@ test("request_send_mail validates and returns a request_id", async () => {
 
 test("request_send_mail rejects missing recipients", async () => {
   __setGate(fakeGate() as never);
-  const res = await requestSendMail.handler({ account: "gmail", to: [], subject: "s", body: "b" });
+  const res = await requestSendMail.handler({
+    account: "gmail",
+    to: [],
+    subject: "s",
+    body: "b",
+  });
   assert.equal(res.isError, true);
 });
 
@@ -1155,6 +1207,7 @@ git commit -m "feat(approval): request_send_mail + get_send_status MCP tools"
 ## Task 10: Composition root (wire the gate in the MCP server)
 
 **Files:**
+
 - Modify: `src/mcp-server.ts`
 
 > Build the gate with real ports and inject it into the tool module. Import `mail-send` for its registration side effect. Follow the existing import-for-side-effect pattern used for the other tool modules.
@@ -1229,9 +1282,11 @@ Expected: clean; all tests pass.
 - [ ] **Step 5: Smoke-test registration**
 
 Run:
+
 ```bash
 npx tsx -e "import('./src/mcp-tools/permissions.ts').then(m=>console.log('exposed:', m.isMcpOperationExposed('mail.send_with_approval')))"
 ```
+
 Expected: `exposed: true`.
 
 - [ ] **Step 6: Commit**
@@ -1246,6 +1301,7 @@ git commit -m "feat(approval): wire approval gate + telegram channel into MCP se
 ## Task 11: Docs + .env.example
 
 **Files:**
+
 - Modify: `.env.example`
 - Modify: `src/mcp-server.md` (tool table)
 
@@ -1266,8 +1322,8 @@ TELEGRAM_APPROVER_USER_ID=
 - [ ] **Step 2: Add the two tools to the table in `src/mcp-server.md`**
 
 ```markdown
-| `request_send_mail`                 | `mail.send_with_approval`           | `mail.send_with_approval`        | host gate + gws/Graph  | gmail.send / Mail.Send      | yes: runtime human approval |
-| `get_send_status`                   | `mail.send_with_approval`           | `mail.send_with_approval`        | host gate              | —                           | yes |
+| `request_send_mail` | `mail.send_with_approval` | `mail.send_with_approval` | host gate + gws/Graph | gmail.send / Mail.Send | yes: runtime human approval |
+| `get_send_status` | `mail.send_with_approval` | `mail.send_with_approval` | host gate | — | yes |
 ```
 
 - [ ] **Step 3: Commit**
@@ -1287,6 +1343,7 @@ git commit -m "docs(approval): .env.example + MCP tool table entries"
 - With `TELEGRAM_*` set and a `gws` auth that includes `gmail.send`, a real `request_send_mail` for `account: "gmail"` delivers a Telegram approval and sends only on ✅.
 
 ## Follow-on (out of scope here)
+
 - MS365 Graph sender (`ms365.sendMail` → `POST /me/sendMail`) behind the existing `makeSender({ ms365 })` slot, once IT grants `Mail.Send` on the GCassistant app.
 - Per-caller auth on the broker (#2) for the HTTP/container transport.
 - Optional persistence of pending approvals across restart.

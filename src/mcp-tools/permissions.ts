@@ -27,7 +27,7 @@ export interface McpOperationSpec {
    * "external-http" = a public, no-auth third-party HTTP API (e.g. Clemson's
    * Banner Browse Classes).
    */
-  backend: "graph" | "host-scan" | "host-state" | "external-http";
+  backend: "graph" | "host-scan" | "host-state" | "external-http" | "gws";
   /** The policy/action-policy.yaml action that gates this operation. */
   policyActionId: string;
   /**
@@ -185,6 +185,72 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     policyActionId: "mail.send_with_approval",
   },
 
+  // --- Google Sheets / Docs (gws — Clemson Google Workspace account) ---
+  // Reads + routine value/text writes are exposed (approval: none). Destructive
+  // edges below map to human_required policy actions and are therefore wired
+  // but NOT exposed.
+  "sheets.read": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.read_values",
+  },
+  "sheets.info": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.read_metadata",
+  },
+  "sheets.update": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.update_values",
+  },
+  "sheets.append": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.append_values",
+  },
+  "docs.read": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "docs.read",
+  },
+  "docs.create": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "docs.create",
+  },
+  "docs.append": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "docs.append_text",
+  },
+  // Destructive edges — declared + gated (human_required), not exposed.
+  "sheets.delete": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.delete_spreadsheet",
+  },
+  "sheets.share": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.share",
+  },
+  "docs.delete": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "docs.delete",
+  },
+  "docs.share": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "docs.share",
+  },
+  "docs.overwrite": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "docs.overwrite_body",
+  },
+
   // --- Clemson public class schedule (Banner Browse Classes — no auth) ---
   "clemson.list_terms": {
     backend: "external-http",
@@ -315,6 +381,7 @@ function validateConstraint(
   switch (constraint) {
     case "own_mailbox_only":
     case "own_task_list_only":
+    case "own_workspace_only":
     case "local_state_only":
     case "no_delete":
     case "no_permanent_delete":

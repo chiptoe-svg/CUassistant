@@ -314,6 +314,105 @@ actions:
     constraints:
       - public_data_only
 
+  # --- Google Sheets / Docs (gws — Clemson Google Workspace) ---
+  # Reads + routine value/text writes flow ungated (audited). Destructive edges
+  # (delete / share / overwrite-whole-doc) are human_required and not exposed.
+  - id: sheets.read_values
+    surface: sheets
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: sheets.read_metadata
+    surface: sheets
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: sheets.update_values
+    surface: sheets
+    risk: low_medium
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: sheets.append_values
+    surface: sheets
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: docs.read
+    surface: docs
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: docs.create
+    surface: docs
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: docs.append_text
+    surface: docs
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_workspace_only
+
+  - id: sheets.delete_spreadsheet
+    surface: sheets
+    risk: high
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: sheets.share
+    surface: sheets
+    risk: high
+    reversibility: affects_other_users
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: docs.delete
+    surface: docs
+    risk: high
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: docs.share
+    surface: docs
+    risk: high
+    reversibility: affects_other_users
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
+  - id: docs.overwrite_body
+    surface: docs
+    risk: medium
+    reversibility: destructive
+    approval: human_required
+    constraints:
+      - disabled_by_default
+
 # LLM providers the email classifier may send mailbox content (subject + body)
 # to. This is the IT-reviewable record of where mailbox data may go. The
 # classifier refuses any provider not listed here with authorized: true

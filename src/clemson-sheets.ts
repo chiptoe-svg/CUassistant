@@ -110,13 +110,18 @@ export function updateSheetRange(
   values: string[][],
   valueInputOption: "USER_ENTERED" | "RAW" = "USER_ENTERED",
 ): boolean {
+  // gws splits URL/query params (--params) from the request body (--json). The
+  // ValueRange body (`values`) MUST go in --json; in --params it 400s as an
+  // unbindable query parameter.
   const out = runGws([
     "sheets",
     "spreadsheets",
     "values",
     "update",
     "--params",
-    JSON.stringify({ spreadsheetId, range, valueInputOption, values }),
+    JSON.stringify({ spreadsheetId, range, valueInputOption }),
+    "--json",
+    JSON.stringify({ values }),
     "--format",
     "json",
   ]);

@@ -15,6 +15,7 @@
 //      assertMcpOperation(...) before the backend call.
 
 import { isBlockedMailFolder, isUnderAllowedPrefix } from "../mail-paths.js";
+import { isOwnedFile } from "./gws-owned.js";
 import { getPolicyAction } from "../policy.js";
 import type { PolicyAction } from "../policy.js";
 
@@ -199,6 +200,11 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "sheets.read_metadata",
   },
+  "sheets.create": {
+    backend: "gws",
+    status: "active",
+    policyActionId: "sheets.create",
+  },
   "sheets.update": {
     backend: "gws",
     status: "active",
@@ -335,6 +341,23 @@ function rejectSharedCalendarInput(
     : null;
 }
 
+function validateOwnedFile(input: Record<string, unknown>): string | null {
+  const id =
+    (typeof input.spreadsheetId === "string" && input.spreadsheetId) ||
+    (typeof input.documentId === "string" && input.documentId) ||
+    "";
+  if (!id) {
+    return "own_created_file_only requires a spreadsheetId or documentId";
+  }
+  if (!isOwnedFile(id)) {
+    return (
+      `own_created_file_only: file "${id}" was not created by this agent ` +
+      `(reads are allowed; to permit edits, grant it with \`npm run gws:grant\`)`
+    );
+  }
+  return null;
+}
+
 function validateSubtreeDestination(
   input: Record<string, unknown>,
 ): string | null {
@@ -407,6 +430,8 @@ function validateConstraint(
       return validateDestinationAllowList(destination);
     case "destination_subtree_allow_list":
       return validateSubtreeDestination(input);
+    case "own_created_file_only":
+      return validateOwnedFile(input);
     case "no_delete_folder":
       return destination.includes("deleted") || destination.includes("trash")
         ? "no_delete_folder rejected destinationId"

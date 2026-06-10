@@ -26,6 +26,22 @@ export function parseSheetValues(json: string): SheetValues {
   };
 }
 
+export interface CreatedSpreadsheet {
+  spreadsheetId: string;
+  title: string;
+}
+
+export function parseCreatedSpreadsheet(json: string): CreatedSpreadsheet {
+  const d = JSON.parse(json) as {
+    spreadsheetId?: string;
+    properties?: { title?: string };
+  };
+  return {
+    spreadsheetId: d.spreadsheetId ?? "",
+    title: d.properties?.title ?? "",
+  };
+}
+
 export interface SpreadsheetInfo {
   title: string;
   tabs: Array<{ title: string; sheetId: number }>;
@@ -74,6 +90,25 @@ export function readSheetRange(
   if (!ok(out, "read")) return null;
   try {
     return parseSheetValues(out as string);
+  } catch {
+    return null;
+  }
+}
+
+/** Create a new spreadsheet with a title; returns its id (non-destructive). */
+export function createSpreadsheet(title: string): CreatedSpreadsheet | null {
+  const out = runGws([
+    "sheets",
+    "spreadsheets",
+    "create",
+    "--json",
+    JSON.stringify({ properties: { title } }),
+    "--format",
+    "json",
+  ]);
+  if (!ok(out, "create")) return null;
+  try {
+    return parseCreatedSpreadsheet(out as string);
   } catch {
     return null;
   }

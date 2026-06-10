@@ -20,6 +20,7 @@
     "provider-smoke": "tsx scripts/provider-smoke.ts",
     "clemson:refresh": "tsx scripts/clemson-refresh.ts",
     "audit:verify": "tsx scripts/verify-audit.ts",
+    "gws:grant": "tsx scripts/gws-grant.ts",
     "tasks:cleanup-noise": "tsx scripts/cleanup-task-noise.ts",
     "cost-report": "tsx scripts/cost-report.ts",
     "preclassify:suggest": "tsx scripts/preclassify-suggest.ts",

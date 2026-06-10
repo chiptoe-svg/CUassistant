@@ -4,11 +4,13 @@
 
 import {
   appendSheetRows,
+  createSpreadsheet,
   getSpreadsheetInfo,
   readSheetRange,
   updateSheetRange,
 } from "../clemson-sheets.js";
 import { startMcpAudit, finishMcpAudit } from "./audit.js";
+import { registerOwnedFile } from "./gws-owned.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -80,6 +82,44 @@ const getSpreadsheetInfoTool: McpToolDefinition = {
   },
 };
 
+const createSpreadsheetTool: McpToolDefinition = {
+  operation: "sheets.create",
+  tool: {
+    name: "create-spreadsheet",
+    description:
+      "Create a new Google Spreadsheet with a title. Returns its " +
+      "spreadsheetId. The agent may then edit THIS sheet (and any it created); " +
+      "update/append are restricted to agent-created files.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { title: { type: "string" } },
+      required: ["title"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("sheets.create");
+    } catch (e) {
+      return permissionErr(e);
+    }
+    const title = args.title as string | undefined;
+    if (!title) return err("title required");
+    const audit = startMcpAudit({
+      operation: "sheets.create",
+      toolName: "create-spreadsheet",
+      argsSummary: { title_length: title.length },
+    });
+    const res = createSpreadsheet(title);
+    if (res === null || !res.spreadsheetId) {
+      finishMcpAudit(audit, { result: "error", detail: "gws_create_failed" });
+      return err("gws sheets create failed.");
+    }
+    registerOwnedFile(res.spreadsheetId, "spreadsheet", title);
+    finishMcpAudit(audit, { result: "success", object_id: res.spreadsheetId });
+    return okJson(res);
+  },
+};
+
 const updateSheetRangeTool: McpToolDefinition = {
   operation: "sheets.update",
   tool: {
@@ -106,7 +146,7 @@ const updateSheetRangeTool: McpToolDefinition = {
   },
   async handler(args) {
     try {
-      assertMcpOperation("sheets.update");
+      assertMcpOperation("sheets.update", { input: args });
     } catch (e) {
       return permissionErr(e);
     }
@@ -158,7 +198,7 @@ const appendSheetRowsTool: McpToolDefinition = {
   },
   async handler(args) {
     try {
-      assertMcpOperation("sheets.append");
+      assertMcpOperation("sheets.append", { input: args });
     } catch (e) {
       return permissionErr(e);
     }
@@ -186,6 +226,7 @@ const appendSheetRowsTool: McpToolDefinition = {
 registerTools([
   readSheetRangeTool,
   getSpreadsheetInfoTool,
+  createSpreadsheetTool,
   updateSheetRangeTool,
   appendSheetRowsTool,
 ]);

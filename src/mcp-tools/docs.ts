@@ -5,6 +5,7 @@
 
 import { appendDocText, createDoc, readDoc } from "../clemson-docs.js";
 import { startMcpAudit, finishMcpAudit } from "./audit.js";
+import { registerOwnedFile } from "./gws-owned.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -67,6 +68,7 @@ const createDocTool: McpToolDefinition = {
       finishMcpAudit(audit, { result: "error", detail: "gws_create_failed" });
       return err("gws docs create failed.");
     }
+    registerOwnedFile(res.documentId, "document", title);
     finishMcpAudit(audit, { result: "success", object_id: res.documentId });
     return okJson(res);
   },
@@ -91,7 +93,7 @@ const appendDocTextTool: McpToolDefinition = {
   },
   async handler(args) {
     try {
-      assertMcpOperation("docs.append");
+      assertMcpOperation("docs.append", { input: args });
     } catch (e) {
       return permissionErr(e);
     }

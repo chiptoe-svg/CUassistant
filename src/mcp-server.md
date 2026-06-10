@@ -116,18 +116,24 @@ whether they hold credentials — not by vendor domain.
 | `send-outlook-mail`     | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + Graph | Mail.Send           | yes: via approval gate   |
 | `send-gmail`            | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + `gws` | gmail.send          | yes: via approval gate   |
 | `get-send-status`       | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate         | —                   | yes                      |
-| `read-sheet-range`      | `sheets.read`              | `sheets.read_values`             | `gws`             | spreadsheets        | yes                      |
-| `get-spreadsheet-info`  | `sheets.info`              | `sheets.read_metadata`           | `gws`             | spreadsheets        | yes                      |
-| `update-sheet-range`    | `sheets.update`            | `sheets.update_values`           | `gws`             | spreadsheets        | yes                      |
-| `append-sheet-rows`     | `sheets.append`            | `sheets.append_values`           | `gws`             | spreadsheets        | yes                      |
-| `read-doc`              | `docs.read`                | `docs.read`                      | `gws`             | documents           | yes                      |
+| `read-sheet-range`      | `sheets.read`              | `sheets.read_values`             | `gws`             | spreadsheets        | yes (read any)           |
+| `get-spreadsheet-info`  | `sheets.info`              | `sheets.read_metadata`           | `gws`             | spreadsheets        | yes (read any)           |
+| `create-spreadsheet`    | `sheets.create`            | `sheets.create`                  | `gws`             | spreadsheets        | yes                      |
+| `update-sheet-range`    | `sheets.update`            | `sheets.update_values`           | `gws`             | spreadsheets        | yes (own files only)     |
+| `append-sheet-rows`     | `sheets.append`            | `sheets.append_values`           | `gws`             | spreadsheets        | yes (own files only)     |
+| `read-doc`              | `docs.read`                | `docs.read`                      | `gws`             | documents           | yes (read any)           |
 | `create-doc`            | `docs.create`              | `docs.create`                    | `gws`             | documents           | yes                      |
-| `append-doc-text`       | `docs.append`              | `docs.append_text`               | `gws`             | documents           | yes                      |
+| `append-doc-text`       | `docs.append`              | `docs.append_text`               | `gws`             | documents           | yes (own files only)     |
 
 `gws` = the Clemson Google Workspace account via the `gws` CLI (host-side,
 keyring `file` backend; same credential boundary as MS365 — never in the
-container). Destructive Sheets/Docs edges (delete / share / overwrite whole
-body) are `human_required` and unexposed — see below.
+container). **Read-any / write-own:** reads work on any file the account can
+see; **writes (`update`/`append`) are refused unless the target was created by
+this agent** (`own_created_file_only`, checked against
+`state/gws-created-files.json`; `create-*` register the new id, and
+`npm run gws:grant` adds a specific pre-existing file by hand). Destructive
+Sheets/Docs edges (delete / share / overwrite whole body) are `human_required`
+and unexposed — see below.
 
 ### Wired but NOT exposed (policy `human_required`)
 

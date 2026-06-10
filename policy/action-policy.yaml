@@ -315,8 +315,10 @@ actions:
       - public_data_only
 
   # --- Google Sheets / Docs (gws — Clemson Google Workspace) ---
-  # Reads + routine value/text writes flow ungated (audited). Destructive edges
-  # (delete / share / overwrite-whole-doc) are human_required and not exposed.
+  # READ ANY file (own_workspace_only). WRITE only files this agent created
+  # (own_created_file_only — checked against state/gws-created-files.json).
+  # Destructive edges (delete / share / overwrite-whole-doc) stay human_required
+  # and not exposed (a later step can flip them to own-files-only).
   - id: sheets.read_values
     surface: sheets
     risk: low
@@ -333,13 +335,21 @@ actions:
     constraints:
       - own_workspace_only
 
+  - id: sheets.create
+    surface: sheets
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - own_workspace_only
+
   - id: sheets.update_values
     surface: sheets
     risk: low_medium
     reversibility: reversible
     approval: none
     constraints:
-      - own_workspace_only
+      - own_created_file_only
 
   - id: sheets.append_values
     surface: sheets
@@ -347,7 +357,7 @@ actions:
     reversibility: reversible
     approval: none
     constraints:
-      - own_workspace_only
+      - own_created_file_only
 
   - id: docs.read
     surface: docs
@@ -371,7 +381,7 @@ actions:
     reversibility: reversible
     approval: none
     constraints:
-      - own_workspace_only
+      - own_created_file_only
 
   - id: sheets.delete_spreadsheet
     surface: sheets

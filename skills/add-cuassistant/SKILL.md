@@ -139,7 +139,8 @@ Credentialed (`cuassistant-credentialed__*`) — the user's MS365 assistant:
 - _Google Sheets (gws)_: `read-sheet-range`, `get-spreadsheet-info`,
   `update-sheet-range`, `append-sheet-rows`. Reads + routine value writes;
   `update-sheet-range` takes `valueInputOption` USER_ENTERED to keep formulas
-  live. Reversible via Sheet version history.
+  live; `append-sheet-rows` takes a `range` to target a specific tab (e.g.
+  'Submissions'). Reversible via Sheet version history.
 - _Google Docs (gws)_: `read-doc`, `create-doc`, `append-doc-text`. Read +
   routine text writes. (Delete / share / overwrite-whole-body are policy-gated
   and not exposed.)

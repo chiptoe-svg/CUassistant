@@ -128,18 +128,33 @@ export function updateSheetRange(
   return ok(out, "update");
 }
 
-/** Append rows after the existing table (a routine, reversible write). */
+/**
+ * Append rows after the existing table on a specific tab (routine, reversible).
+ * `range` selects the table — a tab name ("Submissions") or A1 anchor
+ * ("Submissions!A1"); INSERT_ROWS adds new rows rather than overwriting below.
+ * (Uses the raw values.append, not the gws +append helper, which has no range
+ * and always targets the first tab.)
+ */
 export function appendSheetRows(
   spreadsheetId: string,
+  range: string,
   values: string[][],
+  valueInputOption: "USER_ENTERED" | "RAW" = "USER_ENTERED",
 ): boolean {
   const out = runGws([
     "sheets",
-    "+append",
-    "--spreadsheet",
-    spreadsheetId,
-    "--json-values",
-    JSON.stringify(values),
+    "spreadsheets",
+    "values",
+    "append",
+    "--params",
+    JSON.stringify({
+      spreadsheetId,
+      range,
+      valueInputOption,
+      insertDataOption: "INSERT_ROWS",
+    }),
+    "--json",
+    JSON.stringify({ values }),
     "--format",
     "json",
   ]);

@@ -44,7 +44,7 @@ export const FORBIDDEN_CHILD_ENV_KEYS = [
 ];
 
 // Build a sanitized environment for a spawned child. `extra` is merged last,
-// so explicit overrides (e.g. GWS_CREDENTIAL_STORE) always take effect.
+// so explicit overrides (e.g. GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND) always take effect.
 export function buildChildEnv(
   extra: Record<string, string> = {},
   source: NodeJS.ProcessEnv = process.env,

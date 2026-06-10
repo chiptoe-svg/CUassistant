@@ -116,6 +116,18 @@ whether they hold credentials — not by vendor domain.
 | `send-outlook-mail`     | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + Graph | Mail.Send           | yes: via approval gate   |
 | `send-gmail`            | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate + `gws` | gmail.send          | yes: via approval gate   |
 | `get-send-status`       | `mail.send_with_approval`  | `mail.send_with_approval`        | host gate         | —                   | yes                      |
+| `read-sheet-range`      | `sheets.read`              | `sheets.read_values`             | `gws`             | spreadsheets        | yes                      |
+| `get-spreadsheet-info`  | `sheets.info`              | `sheets.read_metadata`           | `gws`             | spreadsheets        | yes                      |
+| `update-sheet-range`    | `sheets.update`            | `sheets.update_values`           | `gws`             | spreadsheets        | yes                      |
+| `append-sheet-rows`     | `sheets.append`            | `sheets.append_values`           | `gws`             | spreadsheets        | yes                      |
+| `read-doc`              | `docs.read`                | `docs.read`                      | `gws`             | documents           | yes                      |
+| `create-doc`            | `docs.create`              | `docs.create`                    | `gws`             | documents           | yes                      |
+| `append-doc-text`       | `docs.append`              | `docs.append_text`               | `gws`             | documents           | yes                      |
+
+`gws` = the Clemson Google Workspace account via the `gws` CLI (host-side,
+keyring `file` backend; same credential boundary as MS365 — never in the
+container). Destructive Sheets/Docs edges (delete / share / overwrite whole
+body) are `human_required` and unexposed — see below.
 
 ### Wired but NOT exposed (policy `human_required`)
 
@@ -130,6 +142,14 @@ mapped policy action is `approval: human_required`. They are gated, not absent.
 | `decline-calendar-event`            | `calendar.respond_to_invite` | affects others (RSVP) |
 | `tentatively-accept-calendar-event` | `calendar.respond_to_invite` | affects others (RSVP) |
 | `trigger_scan`                      | `host.trigger_scan`          | host side effect      |
+| _(sheets)_ `sheets.delete`          | `sheets.delete_spreadsheet`  | destructive           |
+| _(sheets)_ `sheets.share`           | `sheets.share`               | affects others        |
+| _(docs)_ `docs.delete`              | `docs.delete`                | destructive           |
+| _(docs)_ `docs.share`               | `docs.share`                 | affects others        |
+| _(docs)_ `docs.overwrite`           | `docs.overwrite_body`        | destructive           |
+
+(The Sheets/Docs destructive ops are declared in the policy + operation registry
+but have no tool handler — reserved/gated, not built.)
 
 ## Operation table — `cuassistant-public`
 

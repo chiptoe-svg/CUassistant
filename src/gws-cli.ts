@@ -15,7 +15,7 @@ export function runGws(args: string[], timeoutMs = 20_000): string | null {
   try {
     return execFileSync(GWS_BIN, args, {
       encoding: "utf-8",
-      env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
+      env: buildChildEnv({ GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" }),
       stdio: ["ignore", "pipe", "pipe"],
       timeout: timeoutMs,
       maxBuffer: 16 * 1024 * 1024,

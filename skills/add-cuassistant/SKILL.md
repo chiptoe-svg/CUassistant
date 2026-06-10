@@ -136,6 +136,13 @@ Credentialed (`cuassistant-credentialed__*`) — the user's MS365 assistant:
 - _Tasks_: `list-todo-task-lists`, `list-todo-tasks`, `get-todo-task`,
   `create-todo-task`, `update-todo-task`.
 - _Orchestration (read)_: `get_scan_status`, `get_pending_actions`.
+- _Google Sheets (gws)_: `read-sheet-range`, `get-spreadsheet-info`,
+  `update-sheet-range`, `append-sheet-rows`. Reads + routine value writes;
+  `update-sheet-range` takes `valueInputOption` USER_ENTERED to keep formulas
+  live. Reversible via Sheet version history.
+- _Google Docs (gws)_: `read-doc`, `create-doc`, `append-doc-text`. Read +
+  routine text writes. (Delete / share / overwrite-whole-body are policy-gated
+  and not exposed.)
 - _Send (approval-gated)_: `send-outlook-mail`, `send-gmail` submit a frozen
   request and return a `request_id`; nothing sends until the user approves it
   out-of-band via Telegram. Poll `get-send-status` for the outcome.

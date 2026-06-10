@@ -30,7 +30,7 @@ export async function gwsSend(a: SendArtifact): Promise<SentResult> {
 
   const out = execFileSync(GWS_BIN, argv, {
     encoding: "utf-8",
-    env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
+    env: buildChildEnv({ GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" }),
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 20_000,
     maxBuffer: 8 * 1024 * 1024,

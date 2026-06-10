@@ -53,7 +53,7 @@ export function listGmail(
         ],
         {
           encoding: "utf-8",
-          env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
+          env: buildChildEnv({ GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" }),
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 20_000,
           maxBuffer: 8 * 1024 * 1024,
@@ -94,7 +94,7 @@ export function listGmail(
         ],
         {
           encoding: "utf-8",
-          env: buildChildEnv({ GWS_CREDENTIAL_STORE: "plaintext" }),
+          env: buildChildEnv({ GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" }),
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 15_000,
           maxBuffer: 4 * 1024 * 1024,
@@ -144,7 +144,7 @@ export function fetchGmailBody(id: string): string {
       ],
       {
         encoding: "utf-8",
-        env: { ...process.env, GWS_CREDENTIAL_STORE: "plaintext" },
+        env: buildChildEnv({ GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" }),
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 15_000,
         maxBuffer: 8 * 1024 * 1024,

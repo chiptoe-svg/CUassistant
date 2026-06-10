@@ -137,15 +137,23 @@ const appendSheetRowsTool: McpToolDefinition = {
   tool: {
     name: "append-sheet-rows",
     description:
-      "Append rows after the existing data in a sheet. Give spreadsheetId and " +
-      "a 2-D array of rows. Non-destructive (adds below existing content).",
+      "Append rows after the existing data on a specific tab. Give " +
+      "spreadsheetId, a `range` selecting the tab (a tab name like " +
+      "'Submissions', or an A1 anchor like 'Submissions!A1'), and a 2-D array " +
+      "of rows. Non-destructive — inserts new rows below existing content. Use " +
+      "get-spreadsheet-info to discover tab names.",
     inputSchema: {
       type: "object" as const,
       properties: {
         spreadsheetId: { type: "string" },
+        range: {
+          type: "string",
+          description:
+            "Tab name or A1 anchor, e.g. 'Submissions' or 'Sheet1!A1'.",
+        },
         values: { type: "array", items: { type: "array", items: {} } },
       },
-      required: ["spreadsheetId", "values"],
+      required: ["spreadsheetId", "range", "values"],
     },
   },
   async handler(args) {
@@ -155,15 +163,17 @@ const appendSheetRowsTool: McpToolDefinition = {
       return permissionErr(e);
     }
     const spreadsheetId = args.spreadsheetId as string | undefined;
-    if (!spreadsheetId) return err("spreadsheetId required");
+    const range = args.range as string | undefined;
+    if (!spreadsheetId || !range)
+      return err("spreadsheetId and range required");
     const grid = asGrid(args.values);
     if (grid.length === 0) return err("values must be a non-empty 2-D array");
     const audit = startMcpAudit({
       operation: "sheets.append",
       toolName: "append-sheet-rows",
-      argsSummary: { spreadsheetId, rows: grid.length },
+      argsSummary: { spreadsheetId, range, rows: grid.length },
     });
-    const okres = appendSheetRows(spreadsheetId, grid);
+    const okres = appendSheetRows(spreadsheetId, range, grid);
     if (!okres) {
       finishMcpAudit(audit, { result: "error", detail: "gws_append_failed" });
       return err("gws sheets append failed.");

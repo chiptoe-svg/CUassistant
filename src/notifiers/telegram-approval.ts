@@ -3,6 +3,24 @@ import type { ApprovalChannel, PendingSend } from "../approval/types.js";
 
 const BODY_LIMIT = 1500;
 
+/**
+ * Consecutive getUpdates failures after which the poll loop exits so launchd's
+ * keepalive restarts the process. The poll loop retries the SAME fetch on each
+ * error; if the process's fetch layer is wedged (stale DNS/connections after a
+ * sleep/wake or network change), it never self-heals. A fresh process does.
+ * 10 errors at a 3s backoff is ~30s+ of solid failure, so a transient blip
+ * won't trip it.
+ */
+export const MAX_CONSECUTIVE_POLL_ERRORS = 10;
+
+/** Whether the poll loop has hit enough consecutive errors to warrant a restart. */
+export function shouldRestartAfterPollErrors(
+  consecutiveErrors: number,
+  threshold: number = MAX_CONSECUTIVE_POLL_ERRORS,
+): boolean {
+  return consecutiveErrors >= threshold;
+}
+
 export function formatApprovalMessage(
   req: PendingSend,
   externals: string[],
@@ -93,6 +111,7 @@ async function pollLoop(
   gate: ApprovalGate,
 ): Promise<void> {
   let offset = 0;
+  let consecutiveErrors = 0;
   for (;;) {
     try {
       const r = await fetch(api("getUpdates"), {
@@ -119,6 +138,9 @@ async function pollLoop(
           };
         }>;
       };
+      // A successful getUpdates means the fetch layer is healthy — clear the
+      // watchdog counter.
+      consecutiveErrors = 0;
       for (const u of data.result ?? []) {
         offset = u.update_id + 1;
         const cq = u.callback_query;
@@ -154,7 +176,17 @@ async function pollLoop(
         }
       }
     } catch (e) {
-      process.stderr.write(`[telegram-approval] poll error: ${String(e)}\n`);
+      consecutiveErrors++;
+      process.stderr.write(
+        `[telegram-approval] poll error (${consecutiveErrors}): ${String(e)}\n`,
+      );
+      if (shouldRestartAfterPollErrors(consecutiveErrors)) {
+        process.stderr.write(
+          `[telegram-approval] ${consecutiveErrors} consecutive poll errors — ` +
+            `exiting so launchd restarts the process (clears a stuck fetch state).\n`,
+        );
+        process.exit(1);
+      }
       await new Promise((res) => setTimeout(res, 3000));
     }
   }

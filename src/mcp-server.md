@@ -120,20 +120,21 @@ whether they hold credentials — not by vendor domain.
 | `get-spreadsheet-info`  | `sheets.info`              | `sheets.read_metadata`           | `gws`             | spreadsheets        | yes (read any)           |
 | `create-spreadsheet`    | `sheets.create`            | `sheets.create`                  | `gws`             | spreadsheets        | yes                      |
 | `update-sheet-range`    | `sheets.update`            | `sheets.update_values`           | `gws`             | spreadsheets        | yes (own files only)     |
-| `append-sheet-rows`     | `sheets.append`            | `sheets.append_values`           | `gws`             | spreadsheets        | yes (own files only)     |
+| `append-sheet-rows`     | `sheets.append`            | `sheets.append_values`           | `gws`             | spreadsheets        | yes (append any)         |
 | `read-doc`              | `docs.read`                | `docs.read`                      | `gws`             | documents           | yes (read any)           |
 | `create-doc`            | `docs.create`              | `docs.create`                    | `gws`             | documents           | yes                      |
-| `append-doc-text`       | `docs.append`              | `docs.append_text`               | `gws`             | documents           | yes (own files only)     |
+| `append-doc-text`       | `docs.append`              | `docs.append_text`               | `gws`             | documents           | yes (append any)         |
 
 `gws` = the Clemson Google Workspace account via the `gws` CLI (host-side,
 keyring `file` backend; same credential boundary as MS365 — never in the
-container). **Read-any / write-own:** reads work on any file the account can
-see; **writes (`update`/`append`) are refused unless the target was created by
-this agent** (`own_created_file_only`, checked against
-`state/gws-created-files.json`; `create-*` register the new id, and
-`npm run gws:grant` adds a specific pre-existing file by hand). Destructive
-Sheets/Docs edges (delete / share / overwrite whole body) are `human_required`
-and unexposed — see below.
+container). **Read-any · append-any · update-own:** reads and appends
+(additive) work on any file the account can see; the one write that can
+overwrite existing data — **`update-sheet-range`** (cell overwrite) — is
+refused unless the target was created by this agent (`own_created_file_only`,
+checked against `state/gws-created-files.json`; `create-*` register the new id,
+`npm run gws:grant` adds a specific pre-existing file). Destructive edges
+(delete / share / overwrite whole body) are `human_required` and unexposed —
+see below.
 
 ### Wired but NOT exposed (policy `human_required`)
 

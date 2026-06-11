@@ -139,10 +139,11 @@ Credentialed (`cuassistant-credentialed__*`) — the user's MS365 assistant:
 - _Google Sheets (gws)_: `read-sheet-range`, `get-spreadsheet-info`,
   `create-spreadsheet`, `update-sheet-range`, `append-sheet-rows`.
 - _Google Docs (gws)_: `read-doc`, `create-doc`, `append-doc-text`.
-  **Read-any / write-own:** you can READ any Sheet/Doc the account can see, but
-  `update-sheet-range` / `append-sheet-rows` / `append-doc-text` only work on
-  files THIS agent created (via `create-spreadsheet` / `create-doc`). To edit a
-  pre-existing file, the operator grants it with `npm run gws:grant`.
+  **Read-any · append-any · update-own:** you can READ any Sheet/Doc and APPEND
+  to any (additive — `append-sheet-rows`, `append-doc-text`). The one write that
+  can overwrite existing data — `update-sheet-range` (cell overwrite) — only
+  works on sheets THIS agent created (via `create-spreadsheet`); to allow it on
+  a pre-existing sheet, the operator grants it with `npm run gws:grant`.
   `update-sheet-range` keeps formulas live with `valueInputOption: USER_ENTERED`;
   `append-sheet-rows` takes a `range` to target a tab. (Delete / share /
   overwrite-whole-body remain policy-gated and not exposed.)

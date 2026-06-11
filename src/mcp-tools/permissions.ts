@@ -573,6 +573,7 @@ export const SCOPE_OPERATIONS: Record<string, string[]> = {
     "clemson.instructor_classes",
     "clemson.room_availability",
   ],
+  // host.trigger_scan is human_required -> not exposed -> intentionally absent.
   "host:read": ["host.get_scan_status", "host.get_pending_actions"],
 };
 

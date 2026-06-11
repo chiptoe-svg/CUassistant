@@ -45,3 +45,12 @@ test("every operation named in SCOPE_OPERATIONS is a real, exposed operation", (
     }
   }
 });
+
+test("unknown scope tokens contribute nothing (no silent widening)", () => {
+  assert.equal(expandScopes(["bogus:write"]).size, 0);
+  assert.equal(
+    expandScopes(["mail:read", "bogus"]).has("mail.list_messages"),
+    true,
+  );
+  assert.equal(expandScopes(["mail:read", "bogus"]).size, 3);
+});

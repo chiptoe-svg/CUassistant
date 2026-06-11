@@ -24,13 +24,18 @@ import {
 import http from "http";
 
 import {
-  authenticateBearer,
+  authenticateConsumer,
   hashToken,
   loadConsumers,
   type Consumer,
 } from "./consumers.js";
 import type { McpToolDefinition } from "./types.js";
-import { isMcpOperationExposed } from "./permissions.js";
+import {
+  allExposedOperations,
+  expandScopes,
+  isMcpOperationExposed,
+} from "./permissions.js";
+import { isAgentBackendAuthorized } from "../policy.js";
 
 /** Reject bodies larger than this on the HTTP transport (local DoS guard). */
 const MAX_BODY_BYTES = 1_048_576; // 1 MiB
@@ -68,11 +73,23 @@ export function registerTools(tools: McpToolDefinition[]): void {
   }
 }
 
-/** Authenticates an HTTP request; returns the consumer id, or null to reject. */
-export type Authenticator = (authHeader: string | undefined) => string | null;
+/** The authenticated caller: id (audit identity), allowed operation set, provider. */
+export interface Principal {
+  id: string;
+  scopes: Set<string>;
+  provider?: string;
+}
 
-/** Open mode: no credentials. Used by the public server (loopback-only). */
-export const openAuthenticator: Authenticator = () => "public";
+/** Authenticates an HTTP request; returns the Principal, or null to reject. */
+export type Authenticator = (
+  authHeader: string | undefined,
+) => Principal | null;
+
+/** Open mode: no credentials (public server, loopback-only). Full public scope. */
+export const openAuthenticator: Authenticator = () => ({
+  id: "public",
+  scopes: allExposedOperations(),
+});
 
 /** Fail closed: open mode is only allowed on a loopback bind. */
 export function isLoopbackHost(host: string): boolean {
@@ -89,6 +106,8 @@ export function assertHttpAuthConfig(expected: string, host: string): void {
 export interface ResolveAuthOptions {
   /** Optional single token (MCP_AUTH_TOKEN) accepted as an "env-token" consumer. */
   envToken?: string;
+  /** Provider attested for the env-token consumer (MCP_AUTH_TOKEN_PROVIDER). */
+  envTokenProvider?: string;
   /** Registry loader; defaults to the on-disk registry. Injectable for tests. */
   load?: () => Consumer[];
   /** Called with the consumer id on each successful auth (for last-seen touch). */
@@ -105,6 +124,7 @@ export function resolveCredentialedAuth(
 ): Authenticator {
   const load = opts.load ?? loadConsumers;
   const envToken = (opts.envToken ?? "").trim();
+  const envTokenProvider = (opts.envTokenProvider ?? "").trim();
   const gather = (): Consumer[] => {
     const live = load();
     if (envToken) {
@@ -112,6 +132,7 @@ export function resolveCredentialedAuth(
         id: "env-token",
         token_hash: hashToken(envToken),
         created_at: "",
+        provider: envTokenProvider || undefined,
       });
     }
     return live;
@@ -119,18 +140,33 @@ export function resolveCredentialedAuth(
   if (gather().length === 0) {
     throw new Error(
       "credentialed MCP HTTP server has no authorized consumers — provision " +
-        "one with `npm run mcp:pair -- --id <agent>` (or set MCP_AUTH_TOKEN). " +
-        "Refusing to start open.",
+        "one with `npm run mcp:pair -- --id <agent> --provider <p>` (or set " +
+        "MCP_AUTH_TOKEN + MCP_AUTH_TOKEN_PROVIDER). Refusing to start open.",
     );
   }
   return (authHeader) => {
-    const id = authenticateBearer(authHeader, gather());
-    if (id) opts.onSeen?.(id);
-    return id;
+    const consumer = authenticateConsumer(authHeader, gather());
+    if (!consumer) return null;
+    // Runtime attestation re-check (fail closed): the consumer must declare a
+    // provider that policy currently authorizes. Flipping authorized:false in
+    // policy cuts the agent off on the next request after a server restart.
+    if (!consumer.provider || !isAgentBackendAuthorized(consumer.provider)) {
+      log(
+        `auth: rejecting "${consumer.id}" — provider ` +
+          `"${consumer.provider ?? "(none)"}" not authorized (model_unauthorized)`,
+      );
+      return null;
+    }
+    opts.onSeen?.(consumer.id);
+    return {
+      id: consumer.id,
+      scopes: expandScopes(consumer.scopes),
+      provider: consumer.provider,
+    };
   };
 }
 
-function buildServer(name: string): Server {
+function buildServer(name: string, _principal?: Principal): Server {
   const server = new Server(
     { name, version: "0.1.0" },
     { capabilities: { tools: {} } },
@@ -157,8 +193,8 @@ export function createHttpHandler(
   authenticate: Authenticator,
 ): http.RequestListener {
   return (req, res) => {
-    const consumerId = authenticate(req.headers.authorization);
-    if (!consumerId) {
+    const principal = authenticate(req.headers.authorization);
+    if (!principal) {
       log(
         `${name}: 401 unauthorized ${req.method ?? "?"} from ${req.socket.remoteAddress ?? "?"}`,
       );
@@ -195,7 +231,7 @@ export function createHttpHandler(
       // stateless transport across requests 500s on the post-initialize
       // notifications/initialized POST (verified by the nanoclaw integration test).
       void (async () => {
-        const server = buildServer(name);
+        const server = buildServer(name, principal);
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         });
@@ -212,7 +248,12 @@ export function createHttpHandler(
 
 export type AuthConfig =
   | { kind: "open" }
-  | { kind: "registry"; envToken?: string; onSeen?: (id: string) => void };
+  | {
+      kind: "registry";
+      envToken?: string;
+      envTokenProvider?: string;
+      onSeen?: (id: string) => void;
+    };
 
 export interface StartOptions {
   name: string;
@@ -235,6 +276,7 @@ export async function startMcpServer(opts: StartOptions): Promise<void> {
     } else {
       authenticate = resolveCredentialedAuth({
         envToken: opts.auth.envToken,
+        envTokenProvider: opts.auth.envTokenProvider,
         onSeen: opts.auth.onSeen,
       });
       const count = loadConsumers().length + (opts.auth.envToken ? 1 : 0);

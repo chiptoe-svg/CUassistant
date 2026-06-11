@@ -26,8 +26,8 @@ test("isLoopbackHost", () => {
 });
 
 test("openAuthenticator always admits", () => {
-  assert.equal(openAuthenticator(undefined), "public");
-  assert.equal(openAuthenticator("Bearer whatever"), "public");
+  assert.equal(openAuthenticator(undefined)?.id, "public");
+  assert.equal(openAuthenticator("Bearer whatever")?.id, "public");
 });
 
 test("resolveCredentialedAuth fails closed with no consumers", () => {
@@ -40,13 +40,18 @@ test("resolveCredentialedAuth fails closed with no consumers", () => {
 test("resolveCredentialedAuth authenticates a registered token and reports it", () => {
   const seen: string[] = [];
   const consumers: Consumer[] = [
-    { id: "agent-1", token_hash: hashToken("cma_tok"), created_at: "x" },
+    {
+      id: "agent-1",
+      token_hash: hashToken("cma_tok"),
+      created_at: "x",
+      provider: "chatgpt_edu",
+    },
   ];
   const authenticate = resolveCredentialedAuth({
     load: () => consumers,
     onSeen: (id) => seen.push(id),
   });
-  assert.equal(authenticate("Bearer cma_tok"), "agent-1");
+  assert.equal(authenticate("Bearer cma_tok")?.id, "agent-1");
   assert.equal(authenticate("Bearer nope"), null);
   assert.deepEqual(seen, ["agent-1"]); // onSeen fires only on success
 });
@@ -55,8 +60,9 @@ test("resolveCredentialedAuth accepts the env token as a consumer", () => {
   const authenticate = resolveCredentialedAuth({
     load: () => [],
     envToken: "env-secret",
+    envTokenProvider: "chatgpt_edu",
   });
-  assert.equal(authenticate("Bearer env-secret"), "env-token");
+  assert.equal(authenticate("Bearer env-secret")?.id, "env-token");
 });
 
 test("createHttpHandler rejects an oversized body with 413", () => {

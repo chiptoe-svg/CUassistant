@@ -447,8 +447,8 @@ data_egress:
     - provider: openai_api
       scope: external
       sends: [subject, body]
-      basis: "requires a separate OpenAI API DPA — NOT confirmed"
-      authorized: false
+      basis: "OpenAI — covered under Clemson institutional contract"
+      authorized: true
 
     # Local LLM backends — on-host inference, no egress. Declared and authorized
     # for when a local classifier backend is wired (e.g. OMLX, Ollama).

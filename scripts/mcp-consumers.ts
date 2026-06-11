@@ -9,6 +9,7 @@
 // at pair time — copy it into the target agent's container env then.
 
 import {
+  attestConsumer,
   generateToken,
   hashToken,
   loadConsumers,
@@ -16,6 +17,12 @@ import {
   staleConsumers,
   type Consumer,
 } from "../src/mcp-tools/consumers.js";
+import {
+  approvedProviders,
+  invalidScopeTokens,
+  providerIsApproved,
+  validScopeTokens,
+} from "./mcp-consumers-helpers.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -27,6 +34,42 @@ function has(name: string): boolean {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Read + validate --provider against the policy approved list, or exit(1). */
+function requireApprovedProvider(): string {
+  const provider = arg("--provider");
+  if (!provider) {
+    console.error("error: --provider <p> is required.");
+    console.error(`approved providers: ${approvedProviders().join(", ")}`);
+    process.exit(1);
+  }
+  if (!providerIsApproved(provider)) {
+    console.error(
+      `error: provider "${provider}" is not authorized in ` +
+        `policy/action-policy.yaml (data_egress.agent_backends).`,
+    );
+    console.error(`approved providers: ${approvedProviders().join(", ")}`);
+    process.exit(1);
+  }
+  return provider;
+}
+
+/** Read + validate --scope (optional); undefined when absent; exit(1) on a bad token. */
+function parseScopeArg(): string[] | undefined {
+  const raw = arg("--scope");
+  if (raw === undefined) return undefined;
+  const tokens = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const bad = invalidScopeTokens(tokens);
+  if (bad.length) {
+    console.error(`error: unknown scope token(s): ${bad.join(", ")}`);
+    console.error(`valid tokens: ${validScopeTokens().join(", ")}`);
+    process.exit(1);
+  }
+  return tokens;
 }
 
 function printRegistrationHelp(id: string, token: string): void {
@@ -52,9 +95,13 @@ function printRegistrationHelp(id: string, token: string): void {
 function pair(): void {
   const id = arg("--id");
   if (!id) {
-    console.error('usage: mcp:pair -- --id <agent> [--note "..."]');
+    console.error(
+      'usage: mcp:pair -- --id <agent> --provider <p> [--scope a,b] [--note "..."]',
+    );
     process.exit(1);
   }
+  const provider = requireApprovedProvider();
+  const scopes = parseScopeArg();
   const note = arg("--note");
   const token = generateToken();
   const list = loadConsumers();
@@ -62,17 +109,25 @@ function pair(): void {
   if (existing) {
     existing.token_hash = hashToken(token);
     existing.last_seen_at = undefined;
+    existing.provider = provider;
+    if (scopes !== undefined) existing.scopes = scopes;
     if (note !== undefined) existing.note = note;
-    console.log(`Rotated token for existing consumer "${id}".`);
+    console.log(
+      `Rotated token for "${id}" (provider=${provider}, scope=${scopes?.join(",") ?? "full"}).`,
+    );
   } else {
     const c: Consumer = {
       id,
       token_hash: hashToken(token),
       created_at: nowIso(),
+      provider,
     };
+    if (scopes !== undefined) c.scopes = scopes;
     if (note !== undefined) c.note = note;
     list.push(c);
-    console.log(`Registered new consumer "${id}".`);
+    console.log(
+      `Registered "${id}" (provider=${provider}, scope=${scopes?.join(",") ?? "full"}).`,
+    );
   }
   saveConsumers(list);
   printRegistrationHelp(id, token);
@@ -88,9 +143,14 @@ function list(): void {
     return;
   }
   for (const c of consumers) {
+    const att = c.provider
+      ? `provider=${c.provider}`
+      : "UNATTESTED(run --attest)";
+    const scope = c.scopes?.length ? c.scopes.join(",") : "full";
     console.log(
-      `- ${c.id}  created=${c.created_at}  last_seen=${c.last_seen_at ?? "never"}` +
-        `  hash=${c.token_hash.slice(0, 8)}…${c.note ? `  note=${c.note}` : ""}`,
+      `- ${c.id}  ${att}  scope=${scope}  created=${c.created_at}  ` +
+        `last_seen=${c.last_seen_at ?? "never"}  hash=${c.token_hash.slice(0, 8)}…` +
+        `${c.note ? `  note=${c.note}` : ""}`,
     );
   }
 }
@@ -111,6 +171,31 @@ function revoke(): void {
   console.log(
     `Revoked "${id}". Restart the server to drop it immediately (or it lapses ` +
       `on the next per-request registry reload).`,
+  );
+}
+
+function attest(): void {
+  const id = arg("--attest");
+  if (!id) {
+    console.error(
+      "usage: mcp:consumers -- --attest <agent> --provider <p> [--scope a,b]",
+    );
+    process.exit(1);
+  }
+  const provider = requireApprovedProvider();
+  const scopes = parseScopeArg();
+  const list = loadConsumers();
+  try {
+    attestConsumer(list, id, provider, scopes);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+  saveConsumers(list);
+  const c = list.find((x) => x.id === id);
+  console.log(
+    `Attested "${id}": provider=${provider}, scope=${c?.scopes?.join(",") ?? "full"} ` +
+      `(token unchanged). Restart the server to apply.`,
   );
 }
 
@@ -135,9 +220,19 @@ function check(): void {
       `- ${f.id}: ${f.reason} (age=${f.ageDays}d, idle=${f.idleDays}d)`,
     );
   }
+  const unattested = loadConsumers()
+    .filter((c) => !c.provider)
+    .map((c) => c.id);
+  if (unattested.length) {
+    console.log(
+      `Unattested (rejected at runtime — run ` +
+        `\`mcp:consumers -- --attest <id> --provider <p>\`): ${unattested.join(", ")}`,
+    );
+  }
 }
 
 if (has("--list")) list();
 else if (has("--revoke")) revoke();
+else if (has("--attest")) attest();
 else if (has("--check")) check();
 else pair();

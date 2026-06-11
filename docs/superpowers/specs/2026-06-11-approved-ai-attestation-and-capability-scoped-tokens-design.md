@@ -98,9 +98,11 @@ and `isAgentBackendAuthorized(provider): boolean` (true iff entry exists **and**
 
 `Consumer` gains:
 - `provider?: string` — attested backend provider (e.g. `chatgpt_edu`).
-- `egress_basis?: string` — optional convenience copy of the policy basis text
-  (authoritative basis lives in policy; this is for `--list` readability).
 - `scopes?: string[]` — scope tokens; **absent ⇒ full access**.
+
+(`--list` shows the basis by reading it live from the policy `agent_backends`
+entry for the consumer's provider — no stored copy on the consumer, so it can't
+go stale.)
 
 `parseConsumers` stays backward-compatible (old entries simply lack these). Hash-
 only storage and `0600` perms unchanged.
@@ -156,6 +158,13 @@ type Authenticator = (authHeader: string | undefined) => Principal | null;
   provider is absent or not authorized, return `null` (→ 401, logged
   `model_unauthorized`, never logging the token). Otherwise expand
   `consumer.scopes` (or the full set) and return the `Principal`.
+  - **Policy timing caveat:** `policy.ts` loads the policy **once at module
+    load** (`const ACTION_POLICY = loadPolicyFile()`), as every policy action
+    already does. So flipping a provider to `authorized: false` takes effect on
+    **server restart**, not mid-process — consistent with how revoke already
+    instructs a restart. The per-request re-check still means **no re-pair of the
+    agent is needed**: edit policy + restart, and the agent is cut off without
+    touching its token or container.
 - `env-token`: its provider comes from a new `MCP_AUTH_TOKEN_PROVIDER` env var,
   validated the same way; unset/unauthorized ⇒ env-token is not added (fail
   closed, consistent with registry consumers). Its scope is full (no per-token
@@ -219,7 +228,9 @@ type Authenticator = (authHeader: string | undefined) => Principal | null;
 
 ## Testing
 
-Unit (Vitest, matching existing suites):
+Unit (`node:test` + `node:assert/strict`, run via `npm test` =
+`node --import tsx --test test/**/*.test.ts`; test files live in `test/` and
+import source with the `.ts` extension, matching `test/mcp-consumers.test.ts`):
 - `consumers.ts`: parse entries with/without provider+scopes; scope expansion
   (tokens → op set), default-full, unknown-token rejection.
 - attestation: `isAgentBackendAuthorized` against a policy fixture (authorized,

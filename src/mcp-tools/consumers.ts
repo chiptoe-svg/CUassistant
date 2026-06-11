@@ -32,8 +32,6 @@ export interface Consumer {
   note?: string;
   /** Attested model-backend provider (e.g. "chatgpt_edu"). Absent = unattested. */
   provider?: string;
-  /** Optional convenience copy of the policy basis text (for `--list`). */
-  egress_basis?: string;
   /** Capability scope tokens (see SCOPE_OPERATIONS); absent/empty = full access. */
   scopes?: string[];
 }
@@ -99,6 +97,10 @@ export function saveConsumers(consumers: Consumer[]): void {
  * Constant-time match of a presented `Authorization` header against the
  * registry. Returns the matched Consumer, or null. Compares fixed-length hex
  * digests so the comparison leaks neither the token nor its length.
+ *
+ * The returned object is a live reference into the caller's `consumers` array —
+ * read it, do not mutate it. Persisted changes go through loadConsumers ->
+ * mutate -> saveConsumers (see recordSeen / attestConsumer).
  */
 export function authenticateConsumer(
   authHeader: string | undefined,

@@ -32,8 +32,21 @@ export interface EgressClassifier {
   authorized: boolean;
 }
 
+/**
+ * A model-backend provider that a consuming agent may attest to. Same shape and
+ * `provider` vocabulary as EgressClassifier. `authorized` is the operator's
+ * attestation (recorded, not proven) that Clemson's agreement covers it.
+ */
+export interface AgentBackend {
+  provider: string;
+  scope: "external" | "local";
+  basis: string;
+  authorized: boolean;
+}
+
 export interface DataEgress {
   classifiers: EgressClassifier[];
+  agent_backends: AgentBackend[];
 }
 
 export interface ActionPolicy {
@@ -60,6 +73,17 @@ export function egressAuthorizedIn(
   return classifiers.find((c) => c.provider === provider)?.authorized === true;
 }
 
+/**
+ * Whether `provider` is an authorized agent backend in the given list.
+ * FAIL CLOSED: an unknown or unset provider is not authorized.
+ */
+export function agentBackendAuthorizedIn(
+  backends: AgentBackend[],
+  provider: string,
+): boolean {
+  return backends.find((b) => b.provider === provider)?.authorized === true;
+}
+
 function loadPolicyFile(): ActionPolicy {
   const policyDir = path.resolve(
     process.env.POLICY_DIR || path.join(process.cwd(), "policy"),
@@ -84,21 +108,40 @@ function loadPolicyFile(): ActionPolicy {
 }
 
 function parseDataEgress(raw: unknown): DataEgress | undefined {
-  const list = (raw as { classifiers?: unknown[] })?.classifiers;
-  if (!Array.isArray(list)) return undefined;
-  const classifiers = list
-    .filter(
-      (c): c is Partial<EgressClassifier> =>
-        Boolean(c) && typeof (c as EgressClassifier).provider === "string",
-    )
-    .map((c) => ({
-      provider: String(c.provider),
-      scope: c.scope === "local" ? ("local" as const) : ("external" as const),
-      sends: Array.isArray(c.sends) ? c.sends.map(String) : [],
-      basis: typeof c.basis === "string" ? c.basis : "",
-      authorized: c.authorized === true, // fail closed: anything but true is false
-    }));
-  return { classifiers };
+  if (!raw || typeof raw !== "object") return undefined;
+  const classifiersRaw = (raw as { classifiers?: unknown[] }).classifiers;
+  const classifiers = Array.isArray(classifiersRaw)
+    ? classifiersRaw
+        .filter(
+          (c): c is Partial<EgressClassifier> =>
+            Boolean(c) && typeof (c as EgressClassifier).provider === "string",
+        )
+        .map((c) => ({
+          provider: String(c.provider),
+          scope:
+            c.scope === "local" ? ("local" as const) : ("external" as const),
+          sends: Array.isArray(c.sends) ? c.sends.map(String) : [],
+          basis: typeof c.basis === "string" ? c.basis : "",
+          authorized: c.authorized === true,
+        }))
+    : [];
+  const backendsRaw = (raw as { agent_backends?: unknown[] }).agent_backends;
+  const agent_backends = Array.isArray(backendsRaw)
+    ? backendsRaw
+        .filter(
+          (b): b is Partial<AgentBackend> =>
+            Boolean(b) && typeof (b as AgentBackend).provider === "string",
+        )
+        .map((b) => ({
+          provider: String(b.provider),
+          scope:
+            b.scope === "local" ? ("local" as const) : ("external" as const),
+          basis: typeof b.basis === "string" ? b.basis : "",
+          authorized: b.authorized === true,
+        }))
+    : [];
+  if (classifiers.length === 0 && agent_backends.length === 0) return undefined;
+  return { classifiers, agent_backends };
 }
 
 const ACTION_POLICY = loadPolicyFile();
@@ -125,4 +168,17 @@ export function isEgressAuthorized(provider: string): boolean {
 /** The full declared classifier-provider list (for tooling/inspection). */
 export function getEgressClassifiers(): EgressClassifier[] {
   return ACTION_POLICY.data_egress?.classifiers ?? [];
+}
+
+/** Whether `provider` is an authorized agent backend per policy. Fail closed. */
+export function isAgentBackendAuthorized(provider: string): boolean {
+  return agentBackendAuthorizedIn(
+    ACTION_POLICY.data_egress?.agent_backends ?? [],
+    provider,
+  );
+}
+
+/** The full declared agent-backend list (for tooling/inspection). */
+export function getAgentBackends(): AgentBackend[] {
+  return ACTION_POLICY.data_egress?.agent_backends ?? [];
 }

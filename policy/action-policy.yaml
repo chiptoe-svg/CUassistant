@@ -264,9 +264,10 @@ actions:
     surface: mail
     risk: high
     reversibility: irreversible
-    approval: none          # "none" = the agent may SUBMIT a request; the
-                            # human gate is enforced at runtime by the Telegram
-                            # approval, not by this static field.
+    approval:
+      none # "none" = the agent may SUBMIT a request; the
+      # human gate is enforced at runtime by the Telegram
+      # approval, not by this static field.
     # NOTE: the runtime human-approval + frozen-artifact controls are enforced
     # in code (ApprovalGate), not as policy constraints.
     constraints:
@@ -447,8 +448,8 @@ data_egress:
     - provider: openai_api
       scope: external
       sends: [subject, body]
-      basis: "requires a separate OpenAI API DPA — NOT confirmed"
-      authorized: false
+      basis: "OpenAI — covered under Clemson institutional contract"
+      authorized: true
 
     # Local LLM backends — on-host inference, no egress. Declared and authorized
     # for when a local classifier backend is wired (e.g. OMLX, Ollama).
@@ -462,6 +463,31 @@ data_egress:
       scope: local
       sends: [subject, body]
       basis: "on-host inference (Ollama); content does not leave the machine"
+      authorized: true
+
+  # Model backends that a CONSUMING AGENT (a paired MCP client) may attest to.
+  # An agent's per-agent token is minted only if its --provider is listed here
+  # with authorized: true, and the server re-checks this on every request. This
+  # is the IT-reviewable record of which AI providers Clemson data may reach via
+  # an agent's own reasoning model (distinct from the classifier list above).
+  agent_backends:
+    - provider: chatgpt_edu
+      scope: external
+      basis: "ChatGPT Edu institutional agreement (Clemson)"
+      authorized: true
+    - provider: openai_api
+      scope: external
+      basis: "OpenAI — covered under Clemson institutional contract"
+      authorized: true
+    - provider: anthropic
+      scope: external
+      basis: "no Clemson agreement covering Anthropic"
+      authorized: false
+    # `local` is the agent --provider value for on-host inference; distinct
+    # namespace from the classifier list's local_omlx / local_ollama above.
+    - provider: local
+      scope: local
+      basis: "on-host inference; content does not leave the machine"
       authorized: true
 
 audit_requirements:

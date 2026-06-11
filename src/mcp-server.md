@@ -74,6 +74,29 @@ whether they hold credentials — not by vendor domain.
   `npm run mcp:public:http` (public, 8766) — or load their respective launchd
   plists.
 
+## Provider attestation + capability scopes
+
+Each credentialed consumer is paired with an attested model-backend **provider**
+and an optional **scope** set:
+
+- `npm run mcp:pair -- --id <agent> --provider <p> [--scope a,b]` — mint a token.
+  `--provider` is required and must be authorized in
+  `policy/action-policy.yaml` → `data_egress.agent_backends` (fail closed).
+- `npm run mcp:consumers -- --attest <agent> --provider <p> [--scope a,b]` —
+  set/replace provider and scope IN PLACE without rotating the token (no
+  container change). Takes effect on the next request (the registry is reloaded
+  per request); no restart needed.
+- `npm run mcp:consumers -- --list` / `--check` — show each consumer's provider
+  and scope, and flag UNATTESTED consumers (which are rejected at runtime).
+
+The server re-checks the attested provider against policy on **every request**;
+flipping a provider to `authorized: false` cuts that agent off after a server
+restart (policy is loaded once at process start). Scope tokens map to operation
+groups (`mail:read`, `mail:send`, `sheets:write`, `clemson`, …); out-of-scope
+tools are omitted from the tool list and refused on call. No scope = full access.
+The audit log (`state/decisions.jsonl`) records the matched consumer id in
+`mcp_consumer_id` on every write row (the stdio path uses `"stdio"`).
+
 ## Allow-list and authorized use
 
 - `src/mcp-tools/permissions.ts` is the operation registry; both servers

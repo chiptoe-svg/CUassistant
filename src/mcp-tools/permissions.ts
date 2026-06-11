@@ -539,3 +539,69 @@ export function describeMcpOperations(): Array<{
     pendingScope: spec.pendingScope ?? null,
   }));
 }
+
+/**
+ * Capability scope vocabulary: surface + read/write split. Each token maps to
+ * the MCP_ALLOWED_OPERATIONS keys it grants. `mail:send` is deliberately its
+ * own scope (the highest-risk op). Only EXPOSED operations are reachable; this
+ * map never widens beyond the exposed set (enforced by expandScopes).
+ */
+export const SCOPE_OPERATIONS: Record<string, string[]> = {
+  "mail:read": ["mail.list_messages", "mail.get_message", "mail.list_folders"],
+  "mail:write": [
+    "mail.move_message",
+    "mail.update_message",
+    "mail.create_draft",
+  ],
+  "mail:send": ["mail.send_with_approval"],
+  "calendar:read": [
+    "calendar.list_events",
+    "calendar.get_event",
+    "calendar.get_view",
+  ],
+  "calendar:write": ["calendar.create_event", "calendar.update_event"],
+  "tasks:read": ["todo.list_lists", "todo.list_tasks", "todo.get_task"],
+  "tasks:write": ["todo.create_task", "todo.update_task"],
+  "sheets:read": ["sheets.read", "sheets.info"],
+  "sheets:write": ["sheets.create", "sheets.update", "sheets.append"],
+  "docs:read": ["docs.read"],
+  "docs:write": ["docs.create", "docs.append"],
+  clemson: [
+    "clemson.list_terms",
+    "clemson.search_classes",
+    "clemson.section_details",
+    "clemson.instructor_classes",
+    "clemson.room_availability",
+  ],
+  // host.trigger_scan is human_required -> not exposed -> intentionally absent.
+  "host:read": ["host.get_scan_status", "host.get_pending_actions"],
+};
+
+/** Whether `token` is a recognized scope token. */
+export function isValidScopeToken(token: string): boolean {
+  return Object.prototype.hasOwnProperty.call(SCOPE_OPERATIONS, token);
+}
+
+/** The set of all currently-exposed operation keys (the implicit full scope). */
+export function allExposedOperations(): Set<string> {
+  return new Set(
+    Object.keys(MCP_ALLOWED_OPERATIONS).filter(isMcpOperationExposed),
+  );
+}
+
+/**
+ * Expand scope tokens to the operation keys they grant, intersected with the
+ * exposed set. Undefined/empty tokens => full exposed set (default-allow).
+ * Unknown tokens contribute nothing (the CLI rejects them at pair time).
+ */
+export function expandScopes(tokens: string[] | undefined): Set<string> {
+  if (!tokens || tokens.length === 0) return allExposedOperations();
+  const exposed = allExposedOperations();
+  const out = new Set<string>();
+  for (const token of tokens) {
+    for (const op of SCOPE_OPERATIONS[token] ?? []) {
+      if (exposed.has(op)) out.add(op);
+    }
+  }
+  return out;
+}

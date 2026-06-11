@@ -51,14 +51,21 @@ Full tool inventory (exposed + the policy-gated-not-exposed set):
 3. **`MS365_REFRESH_TOKEN` is present in `$CUASSISTANT_REPO/.env`** (or
    vault-injected on the host). Without it the credentialed Graph tools cannot
    reach Microsoft 365.
-4. **Auth (per-agent token, required).** The credentialed server fails closed —
-   it won't start with no authorized consumers. Mint a token for THIS agent on
-   the host: `npm run mcp:pair -- --id <agent-id>` (prints the token once).
-   Inject that token into only this agent's container env as
-   `CUASSISTANT_MCP_TOKEN` and register the vault-referenced bearer (step 1).
-   Each agent gets its own token; revoke with
-   `npm run mcp:consumers -- --revoke <agent-id>`. The public server (8766)
-   requires no token.
+4. **Auth (per-agent token + provider attestation, required).** The credentialed
+   server fails closed — it won't start with no authorized consumers, and it
+   rejects any consumer whose attested model **provider** isn't authorized in
+   `policy/action-policy.yaml` (`data_egress.agent_backends`). Mint a token for
+   THIS agent on the host, declaring its model-backend provider:
+   `npm run mcp:pair -- --id <agent-id> --provider <chatgpt_edu|openai_api|local>`
+   (prints the token once). Optionally narrow the token with
+   `--scope mail:read,calendar:read,clemson` (omit for full access). Inject that
+   token into only this agent's container env as `CUASSISTANT_MCP_TOKEN`. Each
+   agent gets its own token; revoke with
+   `npm run mcp:consumers -- --revoke <agent-id>`. To change a provider/scope
+   without re-issuing the token (no container change), use
+   `npm run mcp:consumers -- --attest <agent-id> --provider <p> [--scope ...]` —
+   it takes effect on the next request (the registry is reloaded per request, no
+   restart needed). The public server (8766) requires no token or attestation.
 
 There is no Codex CLI / Outlook connector and no Graph-CLI token anymore — do
 not look for them.
@@ -156,6 +163,13 @@ Public (`cuassistant-public__*`) — Clemson class schedule (public Banner data)
 - `list-clemson-terms`, `search-clemson-classes`,
   `get-clemson-section-details`, `find-clemson-instructor-classes`,
   `get-clemson-room-availability`.
+
+**Capability scopes (optional token narrowing).** A token may be limited to a set
+of surface scopes; out-of-scope tools are hidden from the agent entirely. Tokens:
+`mail:read · mail:write · mail:send · calendar:read · calendar:write · tasks:read ·
+tasks:write · sheets:read · sheets:write · docs:read · docs:write · clemson ·
+host:read`. No `--scope` = full access. `mail:send` is separate from `mail:write`,
+so a token can read/triage mail without the ability to submit a send.
 
 **Sends are never silent.** `send-outlook-mail` / `send-gmail` always go through
 the Telegram approval gate; the user can reject with feedback.

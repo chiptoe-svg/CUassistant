@@ -67,6 +67,7 @@ import {
   MCP_HTTP_HOST,
   MCP_HTTP_PORT,
   MCP_AUTH_TOKEN,
+  MCP_AUTH_TOKEN_PROVIDER,
 } from "./config.js";
 
 function log(msg: string): void {
@@ -127,7 +128,12 @@ startMcpServer({
   transport: MCP_TRANSPORT,
   httpHost: MCP_HTTP_HOST,
   httpPort: MCP_HTTP_PORT,
-  auth: { kind: "registry", envToken: MCP_AUTH_TOKEN, onSeen: touchConsumer },
+  auth: {
+    kind: "registry",
+    envToken: MCP_AUTH_TOKEN,
+    envTokenProvider: MCP_AUTH_TOKEN_PROVIDER,
+    onSeen: touchConsumer,
+  },
 }).catch((err) => {
   log(`server error: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

@@ -7,7 +7,22 @@
 // Rows go to state/decisions.jsonl through the same appendDecision() the scan
 // uses, so IT review tooling sees a single source of truth.
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { appendDecision } from "../state.js";
+
+/** Request-scoped store for the authenticated consumer id (set in buildServer). */
+export const auditContext = new AsyncLocalStorage<{ consumerId: string }>();
+
+/** Attach the current ALS consumer id (or null) to an audit row. */
+export function withConsumer(
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...row,
+    mcp_consumer_id: auditContext.getStore()?.consumerId ?? null,
+  };
+}
 
 export interface McpAuditContext {
   /** The MCP operation key as listed in MCP_ALLOWED_OPERATIONS. */
@@ -33,14 +48,16 @@ export function startMcpAudit(input: {
   argsSummary: Record<string, unknown>;
 }): McpAuditContext {
   const ctx: McpAuditContext = { ...input, correlationId: newCorrelationId() };
-  appendDecision({
-    pass: "mcp-tool-intent",
-    decision: "mcp-tool-intent",
-    mcp_tool: ctx.toolName,
-    mcp_operation: ctx.operation,
-    mcp_correlation_id: ctx.correlationId,
-    mcp_args_summary: ctx.argsSummary,
-  });
+  appendDecision(
+    withConsumer({
+      pass: "mcp-tool-intent",
+      decision: "mcp-tool-intent",
+      mcp_tool: ctx.toolName,
+      mcp_operation: ctx.operation,
+      mcp_correlation_id: ctx.correlationId,
+      mcp_args_summary: ctx.argsSummary,
+    }),
+  );
   return ctx;
 }
 
@@ -53,14 +70,16 @@ export function finishMcpAudit(
     object_id?: string | null;
   },
 ): void {
-  appendDecision({
-    pass: "mcp-tool",
-    decision: outcome.result,
-    mcp_tool: ctx.toolName,
-    mcp_operation: ctx.operation,
-    mcp_correlation_id: ctx.correlationId,
-    mcp_args_summary: ctx.argsSummary,
-    mcp_object_id: outcome.object_id ?? null,
-    mcp_detail: outcome.detail ?? null,
-  });
+  appendDecision(
+    withConsumer({
+      pass: "mcp-tool",
+      decision: outcome.result,
+      mcp_tool: ctx.toolName,
+      mcp_operation: ctx.operation,
+      mcp_correlation_id: ctx.correlationId,
+      mcp_args_summary: ctx.argsSummary,
+      mcp_object_id: outcome.object_id ?? null,
+      mcp_detail: outcome.detail ?? null,
+    }),
+  );
 }

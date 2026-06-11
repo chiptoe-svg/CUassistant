@@ -36,6 +36,7 @@ import {
   isMcpOperationExposed,
 } from "./permissions.js";
 import { isAgentBackendAuthorized } from "../policy.js";
+import { auditContext } from "./audit.js";
 
 /** Reject bodies larger than this on the HTTP transport (local DoS guard). */
 const MAX_BODY_BYTES = 1_048_576; // 1 MiB
@@ -173,13 +174,26 @@ export function resolveCredentialedAuth(
   };
 }
 
-function buildServer(name: string, _principal?: Principal): Server {
+/** The Tool descriptors whose operation is within `scopes` (for ListTools). */
+export function toolsForScope(scopes: Set<string>) {
+  return allTools.filter((t) => scopes.has(t.operation)).map((t) => t.tool);
+}
+
+/** Whether a registered tool's operation is within `scopes` (for CallTool). */
+export function isToolInScope(toolName: string, scopes: Set<string>): boolean {
+  const t = toolMap.get(toolName);
+  return !!t && scopes.has(t.operation);
+}
+
+function buildServer(name: string, principal?: Principal): Server {
+  const scopes = principal?.scopes ?? allExposedOperations();
+  const consumerId = principal?.id ?? "stdio";
   const server = new Server(
     { name, version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: allTools.map((t) => t.tool),
+    tools: toolsForScope(scopes),
   }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name: toolName, arguments: args } = request.params;
@@ -190,7 +204,18 @@ function buildServer(name: string, _principal?: Principal): Server {
         isError: true,
       };
     }
-    return tool.handler(args ?? {});
+    if (!scopes.has(tool.operation)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: tool "${toolName}" is not in this agent's scope`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    return auditContext.run({ consumerId }, () => tool.handler(args ?? {}));
   });
   return server;
 }

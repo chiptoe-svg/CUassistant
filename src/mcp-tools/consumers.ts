@@ -30,6 +30,12 @@ export interface Consumer {
   last_seen_at?: string;
   /** Free-text operator note (e.g. what the agent is for). */
   note?: string;
+  /** Attested model-backend provider (e.g. "chatgpt_edu"). Absent = unattested. */
+  provider?: string;
+  /** Optional convenience copy of the policy basis text (for `--list`). */
+  egress_basis?: string;
+  /** Capability scope tokens (see SCOPE_OPERATIONS); absent/empty = full access. */
+  scopes?: string[];
 }
 
 const REGISTRY_PATH = (): string => path.join(STATE_DIR, "mcp-consumers.json");
@@ -91,23 +97,31 @@ export function saveConsumers(consumers: Consumer[]): void {
 
 /**
  * Constant-time match of a presented `Authorization` header against the
- * registry. Returns the matched consumer id, or null. Compares fixed-length
- * hex digests so the comparison leaks neither the token nor its length.
+ * registry. Returns the matched Consumer, or null. Compares fixed-length hex
+ * digests so the comparison leaks neither the token nor its length.
  */
-export function authenticateBearer(
+export function authenticateConsumer(
   authHeader: string | undefined,
   consumers: Consumer[],
-): string | null {
+): Consumer | null {
   const prefix = "Bearer ";
   if (!authHeader || !authHeader.startsWith(prefix)) return null;
   const got = Buffer.from(hashToken(authHeader.slice(prefix.length)));
   for (const c of consumers) {
     const exp = Buffer.from(c.token_hash);
     if (got.length === exp.length && crypto.timingSafeEqual(got, exp)) {
-      return c.id;
+      return c;
     }
   }
   return null;
+}
+
+/** Backward-compatible: returns just the matched consumer id, or null. */
+export function authenticateBearer(
+  authHeader: string | undefined,
+  consumers: Consumer[],
+): string | null {
+  return authenticateConsumer(authHeader, consumers)?.id ?? null;
 }
 
 /** Update a consumer's last_seen_at (best effort; no-op for unknown ids). */
@@ -121,6 +135,24 @@ export function recordSeen(id: string, nowIso: string): void {
   } catch {
     /* best effort */
   }
+}
+
+/**
+ * Set a consumer's attested provider (and optionally scopes) IN PLACE, without
+ * touching its token_hash or last_seen_at. Mutates and returns the list.
+ * Throws if the id is not present. This backs `mcp:consumers --attest`.
+ */
+export function attestConsumer(
+  consumers: Consumer[],
+  id: string,
+  provider: string,
+  scopes?: string[],
+): Consumer[] {
+  const c = consumers.find((x) => x.id === id);
+  if (!c) throw new Error(`No consumer "${id}" found.`);
+  c.provider = provider;
+  if (scopes !== undefined) c.scopes = scopes;
+  return consumers;
 }
 
 export interface StaleOptions {

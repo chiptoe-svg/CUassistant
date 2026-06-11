@@ -483,6 +483,8 @@ data_egress:
       scope: external
       basis: "no Clemson agreement covering Anthropic"
       authorized: false
+    # `local` is the agent --provider value for on-host inference; distinct
+    # namespace from the classifier list's local_omlx / local_ollama above.
     - provider: local
       scope: local
       basis: "on-host inference; content does not leave the machine"

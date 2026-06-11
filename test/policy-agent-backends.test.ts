@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   agentBackendAuthorizedIn,
+  getAgentBackends,
   isAgentBackendAuthorized,
   type AgentBackend,
 } from "../src/policy.ts";
@@ -31,4 +32,13 @@ test("real policy authorizes chatgpt_edu + openai_api, not anthropic", () => {
   assert.equal(isAgentBackendAuthorized("chatgpt_edu"), true);
   assert.equal(isAgentBackendAuthorized("openai_api"), true);
   assert.equal(isAgentBackendAuthorized("anthropic"), false);
+});
+
+test("getAgentBackends exposes the declared backend list including local", () => {
+  const providers = getAgentBackends().map((b) => b.provider);
+  assert.ok(providers.includes("local"), "expected a local backend");
+  assert.equal(
+    getAgentBackends().find((b) => b.provider === "local")?.authorized,
+    true,
+  );
 });

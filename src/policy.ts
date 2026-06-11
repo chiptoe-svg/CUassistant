@@ -33,9 +33,10 @@ export interface EgressClassifier {
 }
 
 /**
- * A model-backend provider that a consuming agent may attest to. Same shape and
- * `provider` vocabulary as EgressClassifier. `authorized` is the operator's
- * attestation (recorded, not proven) that Clemson's agreement covers it.
+ * A model-backend provider that a consuming agent may attest to. Same shape as
+ * EgressClassifier minus `sends` (backends don't declare sent fields), and the
+ * same `provider` vocabulary. `authorized` is the operator's attestation
+ * (recorded, not proven) that Clemson's agreement covers it.
  */
 export interface AgentBackend {
   provider: string;

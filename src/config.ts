@@ -114,4 +114,4 @@ export const MCP_PUBLIC_HTTP_PORT = Number(
 // from the environment, which OneCLI can populate from its vault at spawn.
 export const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 export const MCP_AUTH_TOKEN_PROVIDER =
-  process.env.MCP_AUTH_TOKEN_PROVIDER ?? "";
+  process.env.MCP_AUTH_TOKEN_PROVIDER || "";

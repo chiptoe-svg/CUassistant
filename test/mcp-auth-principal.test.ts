@@ -61,4 +61,10 @@ test("env-token uses its configured provider", () => {
     envTokenProvider: "anthropic",
   });
   assert.equal(authBad(`Bearer cma_env2`), null);
+  // env-token with no provider configured is rejected (silent-misconfig guard).
+  const authNoProvider = resolveCredentialedAuth({
+    load: (): Consumer[] => [],
+    envToken: "cma_env3",
+  });
+  assert.equal(authNoProvider(`Bearer cma_env3`), null);
 });

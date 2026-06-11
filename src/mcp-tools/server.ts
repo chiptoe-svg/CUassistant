@@ -144,12 +144,19 @@ export function resolveCredentialedAuth(
         "MCP_AUTH_TOKEN + MCP_AUTH_TOKEN_PROVIDER). Refusing to start open.",
     );
   }
+  if (envToken && !envTokenProvider) {
+    log(
+      "warning: MCP_AUTH_TOKEN is set but MCP_AUTH_TOKEN_PROVIDER is empty — " +
+        "the env-token consumer has no provider and will be rejected at auth time.",
+    );
+  }
   return (authHeader) => {
     const consumer = authenticateConsumer(authHeader, gather());
     if (!consumer) return null;
     // Runtime attestation re-check (fail closed): the consumer must declare a
     // provider that policy currently authorizes. Flipping authorized:false in
-    // policy cuts the agent off on the next request after a server restart.
+    // policy cuts the agent off on the next request after a process restart
+    // (policy is loaded once at process start, like every other policy action).
     if (!consumer.provider || !isAgentBackendAuthorized(consumer.provider)) {
       log(
         `auth: rejecting "${consumer.id}" — provider ` +

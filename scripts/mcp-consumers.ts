@@ -1,10 +1,16 @@
 // Manage the per-agent credential registry for the credentialed MCP server.
 //
-//   npm run mcp:pair   -- --id <agent> [--note "..."]   mint/rotate a token
+//   npm run mcp:pair -- --id <agent> --provider <p> [--scope a,b] [--note "..."]
+//                                                        mint/rotate a token
+//   npm run mcp:consumers -- --attest <agent> --provider <p> [--scope a,b]
+//                                                        set provider/scope in
+//                                                        place (token unchanged)
 //   npm run mcp:consumers -- --list                      list authorized agents
 //   npm run mcp:consumers -- --revoke <agent>            revoke an agent
 //   npm run mcp:consumers -- --check [--max-age-days N] [--max-idle-days N]
 //
+// --provider must be authorized in policy/action-policy.yaml (data_egress.
+// agent_backends); --scope tokens come from SCOPE_OPERATIONS (omit = full).
 // Only the SHA-256 hash of each token is stored. The raw token is printed ONCE
 // at pair time — copy it into the target agent's container env then.
 

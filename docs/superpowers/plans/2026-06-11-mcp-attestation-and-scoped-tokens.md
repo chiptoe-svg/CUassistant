@@ -11,6 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-06-11-approved-ai-attestation-and-capability-scoped-tokens-design.md`
 
 **Conventions to follow:**
+
 - Test files: `test/<name>.test.ts`, `import test from "node:test"; import assert from "node:assert/strict";`, import source with the **`.ts`** extension (e.g. `from "../src/policy.ts"`), matching `test/mcp-consumers.test.ts`.
 - Source files: import siblings with the **`.js`** extension (ESM/tsx convention), matching existing `src/` files.
 - Run a single test file: `node --import tsx --test test/<name>.test.ts`. Run all: `npm test`. Typecheck: `npm run typecheck`. Format: `npm run format`.
@@ -20,24 +21,25 @@
 
 ## File Structure
 
-| File | Responsibility | Change |
-|---|---|---|
-| `policy/action-policy.yaml` | Declared egress providers | Add `data_egress.agent_backends` |
-| `src/policy.ts` | Policy parse + accessors | Add `AgentBackend`, parse, `agentBackendAuthorizedIn`, `isAgentBackendAuthorized`, `getAgentBackends` |
-| `src/mcp-tools/permissions.ts` | Operation allow-list + scope vocabulary | Add `SCOPE_OPERATIONS`, `isValidScopeToken`, `allExposedOperations`, `expandScopes` |
-| `src/mcp-tools/consumers.ts` | Per-agent registry | Add `provider`/`egress_basis`/`scopes` fields, `authenticateConsumer`, `attestConsumer` |
-| `src/config.ts` | Env config | Add `MCP_AUTH_TOKEN_PROVIDER` |
-| `src/mcp-tools/server.ts` | HTTP transport + auth + dispatch | `Authenticator → Principal`; attestation re-check; scope-filtered ListTools; CallTool scope gate; ALS audit wrap; export `toolsForScope`/`isToolInScope` for tests |
-| `src/mcp-tools/audit.ts` | Decision-log rows | `auditContext` ALS; `withConsumer`; stamp `mcp_consumer_id` |
-| `src/mcp-server.ts` | Credentialed entrypoint | Pass `envTokenProvider: MCP_AUTH_TOKEN_PROVIDER` |
-| `scripts/mcp-consumers.ts` | Pair/attest/list CLI | `--provider` (required on pair), `--scope`, new `--attest`, enriched `--list`/`--check` |
-| `skills/add-cuassistant/SKILL.md`, `src/mcp-server.md` | Operator docs | Document `--provider`/`--scope`/`--attest` + scope vocabulary |
+| File                                                   | Responsibility                          | Change                                                                                                                                                             |
+| ------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `policy/action-policy.yaml`                            | Declared egress providers               | Add `data_egress.agent_backends`                                                                                                                                   |
+| `src/policy.ts`                                        | Policy parse + accessors                | Add `AgentBackend`, parse, `agentBackendAuthorizedIn`, `isAgentBackendAuthorized`, `getAgentBackends`                                                              |
+| `src/mcp-tools/permissions.ts`                         | Operation allow-list + scope vocabulary | Add `SCOPE_OPERATIONS`, `isValidScopeToken`, `allExposedOperations`, `expandScopes`                                                                                |
+| `src/mcp-tools/consumers.ts`                           | Per-agent registry                      | Add `provider`/`egress_basis`/`scopes` fields, `authenticateConsumer`, `attestConsumer`                                                                            |
+| `src/config.ts`                                        | Env config                              | Add `MCP_AUTH_TOKEN_PROVIDER`                                                                                                                                      |
+| `src/mcp-tools/server.ts`                              | HTTP transport + auth + dispatch        | `Authenticator → Principal`; attestation re-check; scope-filtered ListTools; CallTool scope gate; ALS audit wrap; export `toolsForScope`/`isToolInScope` for tests |
+| `src/mcp-tools/audit.ts`                               | Decision-log rows                       | `auditContext` ALS; `withConsumer`; stamp `mcp_consumer_id`                                                                                                        |
+| `src/mcp-server.ts`                                    | Credentialed entrypoint                 | Pass `envTokenProvider: MCP_AUTH_TOKEN_PROVIDER`                                                                                                                   |
+| `scripts/mcp-consumers.ts`                             | Pair/attest/list CLI                    | `--provider` (required on pair), `--scope`, new `--attest`, enriched `--list`/`--check`                                                                            |
+| `skills/add-cuassistant/SKILL.md`, `src/mcp-server.md` | Operator docs                           | Document `--provider`/`--scope`/`--attest` + scope vocabulary                                                                                                      |
 
 ---
 
 ## Task 1: Policy — `agent_backends` provider list + accessors
 
 **Files:**
+
 - Modify: `src/policy.ts`
 - Modify: `policy/action-policy.yaml`
 - Test: `test/policy-agent-backends.test.ts`
@@ -93,28 +95,28 @@ Expected: FAIL — `agentBackendAuthorizedIn`/`isAgentBackendAuthorized`/`AgentB
 In `policy/action-policy.yaml`, inside the existing `data_egress:` map, add `agent_backends:` as a sibling of `classifiers:` (place it immediately after the last classifier entry, before `audit_requirements:`):
 
 ```yaml
-  # Model backends that a CONSUMING AGENT (a paired MCP client) may attest to.
-  # An agent's per-agent token is minted only if its --provider is listed here
-  # with authorized: true, and the server re-checks this on every request. This
-  # is the IT-reviewable record of which AI providers Clemson data may reach via
-  # an agent's own reasoning model (distinct from the classifier list above).
-  agent_backends:
-    - provider: chatgpt_edu
-      scope: external
-      basis: "ChatGPT Edu institutional agreement (Clemson)"
-      authorized: true
-    - provider: openai_api
-      scope: external
-      basis: "OpenAI — covered under Clemson institutional contract"
-      authorized: true
-    - provider: anthropic
-      scope: external
-      basis: "no Clemson agreement covering Anthropic"
-      authorized: false
-    - provider: local
-      scope: local
-      basis: "on-host inference; content does not leave the machine"
-      authorized: true
+# Model backends that a CONSUMING AGENT (a paired MCP client) may attest to.
+# An agent's per-agent token is minted only if its --provider is listed here
+# with authorized: true, and the server re-checks this on every request. This
+# is the IT-reviewable record of which AI providers Clemson data may reach via
+# an agent's own reasoning model (distinct from the classifier list above).
+agent_backends:
+  - provider: chatgpt_edu
+    scope: external
+    basis: "ChatGPT Edu institutional agreement (Clemson)"
+    authorized: true
+  - provider: openai_api
+    scope: external
+    basis: "OpenAI — covered under Clemson institutional contract"
+    authorized: true
+  - provider: anthropic
+    scope: external
+    basis: "no Clemson agreement covering Anthropic"
+    authorized: false
+  - provider: local
+    scope: local
+    basis: "on-host inference; content does not leave the machine"
+    authorized: true
 ```
 
 - [ ] **Step 4: Add the type, parser, and accessors to `src/policy.ts`**
@@ -240,6 +242,7 @@ git commit -m "feat(policy): add data_egress.agent_backends provider attestation
 ## Task 2: Scope vocabulary — `SCOPE_OPERATIONS` map + expander
 
 **Files:**
+
 - Modify: `src/mcp-tools/permissions.ts`
 - Test: `test/mcp-scopes.test.ts`
 
@@ -391,6 +394,7 @@ git commit -m "feat(mcp): add capability scope vocabulary + expander"
 ## Task 3: Consumer registry — fields, `authenticateConsumer`, `attestConsumer`
 
 **Files:**
+
 - Modify: `src/mcp-tools/consumers.ts`
 - Test: `test/mcp-consumers.test.ts` (append to existing)
 
@@ -562,6 +566,7 @@ git commit -m "feat(mcp): consumer provider/scopes fields + authenticateConsumer
 ## Task 4: Config + server auth — `Principal` with attestation re-check
 
 **Files:**
+
 - Modify: `src/config.ts`
 - Modify: `src/mcp-tools/server.ts`
 - Modify: `src/mcp-server.ts`
@@ -650,7 +655,8 @@ Expected: FAIL — `resolveCredentialedAuth` currently returns an `Authenticator
 Find the line exporting `MCP_AUTH_TOKEN` in `src/config.ts` and add directly beneath it:
 
 ```ts
-export const MCP_AUTH_TOKEN_PROVIDER = process.env.MCP_AUTH_TOKEN_PROVIDER ?? "";
+export const MCP_AUTH_TOKEN_PROVIDER =
+  process.env.MCP_AUTH_TOKEN_PROVIDER ?? "";
 ```
 
 - [ ] **Step 4: Change the `Authenticator` to return a `Principal` in `src/mcp-tools/server.ts`**
@@ -684,7 +690,9 @@ export interface Principal {
 }
 
 /** Authenticates an HTTP request; returns the Principal, or null to reject. */
-export type Authenticator = (authHeader: string | undefined) => Principal | null;
+export type Authenticator = (
+  authHeader: string | undefined,
+) => Principal | null;
 
 /** Open mode: no credentials (public server, loopback-only). Full public scope. */
 export const openAuthenticator: Authenticator = () => ({
@@ -769,7 +777,7 @@ Update `createHttpHandler` (lines 155-168) so the variable is a `Principal` and 
 And in the same function, change the per-request server construction (line 198) from `const server = buildServer(name);` to:
 
 ```ts
-        const server = buildServer(name, principal);
+const server = buildServer(name, principal);
 ```
 
 > `buildServer`'s signature change (adding the optional `principal`) and the ListTools/CallTool body changes land in **Task 5**. For this task, make `buildServer` accept and ignore the extra arg so the file compiles: change its signature to `function buildServer(name: string, _principal?: Principal): Server {`. Task 5 replaces the body.
@@ -803,11 +811,11 @@ export type AuthConfig =
 And forward it in `startMcpServer`'s registry branch (line 236-239):
 
 ```ts
-      authenticate = resolveCredentialedAuth({
-        envToken: opts.auth.envToken,
-        envTokenProvider: opts.auth.envTokenProvider,
-        onSeen: opts.auth.onSeen,
-      });
+authenticate = resolveCredentialedAuth({
+  envToken: opts.auth.envToken,
+  envTokenProvider: opts.auth.envTokenProvider,
+  onSeen: opts.auth.onSeen,
+});
 ```
 
 - [ ] **Step 6: Run the test to verify it passes**
@@ -828,6 +836,7 @@ git commit -m "feat(mcp): authenticator returns Principal + runtime provider att
 ## Task 5: Server — scope-filtered ListTools, CallTool gate, ALS audit id
 
 **Files:**
+
 - Modify: `src/mcp-tools/audit.ts`
 - Modify: `src/mcp-tools/server.ts`
 - Test: `test/mcp-audit-context.test.ts`
@@ -889,40 +898,43 @@ export const auditContext = new AsyncLocalStorage<{ consumerId: string }>();
 export function withConsumer(
   row: Record<string, unknown>,
 ): Record<string, unknown> {
-  return { ...row, mcp_consumer_id: auditContext.getStore()?.consumerId ?? null };
+  return {
+    ...row,
+    mcp_consumer_id: auditContext.getStore()?.consumerId ?? null,
+  };
 }
 ```
 
 Wrap both `appendDecision` payloads with `withConsumer(...)`. In `startMcpAudit`, change the `appendDecision({...})` call to `appendDecision(withConsumer({...}))`; do the same in `finishMcpAudit`. Concretely the `startMcpAudit` body becomes:
 
 ```ts
-  appendDecision(
-    withConsumer({
-      pass: "mcp-tool-intent",
-      decision: "mcp-tool-intent",
-      mcp_tool: ctx.toolName,
-      mcp_operation: ctx.operation,
-      mcp_correlation_id: ctx.correlationId,
-      mcp_args_summary: ctx.argsSummary,
-    }),
-  );
+appendDecision(
+  withConsumer({
+    pass: "mcp-tool-intent",
+    decision: "mcp-tool-intent",
+    mcp_tool: ctx.toolName,
+    mcp_operation: ctx.operation,
+    mcp_correlation_id: ctx.correlationId,
+    mcp_args_summary: ctx.argsSummary,
+  }),
+);
 ```
 
 and `finishMcpAudit`:
 
 ```ts
-  appendDecision(
-    withConsumer({
-      pass: "mcp-tool",
-      decision: outcome.result,
-      mcp_tool: ctx.toolName,
-      mcp_operation: ctx.operation,
-      mcp_correlation_id: ctx.correlationId,
-      mcp_args_summary: ctx.argsSummary,
-      mcp_object_id: outcome.object_id ?? null,
-      mcp_detail: outcome.detail ?? null,
-    }),
-  );
+appendDecision(
+  withConsumer({
+    pass: "mcp-tool",
+    decision: outcome.result,
+    mcp_tool: ctx.toolName,
+    mcp_operation: ctx.operation,
+    mcp_correlation_id: ctx.correlationId,
+    mcp_args_summary: ctx.argsSummary,
+    mcp_object_id: outcome.object_id ?? null,
+    mcp_detail: outcome.detail ?? null,
+  }),
+);
 ```
 
 - [ ] **Step 4: Run it to verify it passes**
@@ -1069,6 +1081,7 @@ git commit -m "feat(mcp): scope-filtered tool list + CallTool gate + consumer-id
 ## Task 6: CLI — `--provider`/`--scope` on pair, new `--attest`, enriched `--list`/`--check`
 
 **Files:**
+
 - Modify: `scripts/mcp-consumers.ts`
 - Test: covered by `test/mcp-consumers.test.ts` (the pure `attestConsumer` from Task 3) + a new `test/mcp-cli-helpers.test.ts` for scope/provider validation helpers.
 
@@ -1115,7 +1128,10 @@ Create `scripts/mcp-consumers-helpers.ts`:
 ```ts
 // Pure, testable helpers for the mcp-consumers CLI (no process.argv / exit).
 
-import { isValidScopeToken, SCOPE_OPERATIONS } from "../src/mcp-tools/permissions.js";
+import {
+  isValidScopeToken,
+  SCOPE_OPERATIONS,
+} from "../src/mcp-tools/permissions.js";
 import { getAgentBackends, isAgentBackendAuthorized } from "../src/policy.js";
 
 /** The subset of `tokens` that are not recognized scope tokens. */
@@ -1285,31 +1301,31 @@ function attest(): void {
 Replace the `list()` body's per-consumer log (lines 90-95) to show provider + scope + unattested flag:
 
 ```ts
-  for (const c of consumers) {
-    const att = c.provider
-      ? `provider=${c.provider}`
-      : "UNATTESTED(run --attest)";
-    const scope = c.scopes?.length ? c.scopes.join(",") : "full";
-    console.log(
-      `- ${c.id}  ${att}  scope=${scope}  created=${c.created_at}  ` +
-        `last_seen=${c.last_seen_at ?? "never"}  hash=${c.token_hash.slice(0, 8)}…` +
-        `${c.note ? `  note=${c.note}` : ""}`,
-    );
-  }
+for (const c of consumers) {
+  const att = c.provider
+    ? `provider=${c.provider}`
+    : "UNATTESTED(run --attest)";
+  const scope = c.scopes?.length ? c.scopes.join(",") : "full";
+  console.log(
+    `- ${c.id}  ${att}  scope=${scope}  created=${c.created_at}  ` +
+      `last_seen=${c.last_seen_at ?? "never"}  hash=${c.token_hash.slice(0, 8)}…` +
+      `${c.note ? `  note=${c.note}` : ""}`,
+  );
+}
 ```
 
 In `check()`, after the staleness output (before the closing brace of the function, after line 137), add an unattested call-out:
 
 ```ts
-  const unattested = loadConsumers()
-    .filter((c) => !c.provider)
-    .map((c) => c.id);
-  if (unattested.length) {
-    console.log(
-      `Unattested (rejected at runtime — run ` +
-        `\`mcp:consumers -- --attest <id> --provider <p>\`): ${unattested.join(", ")}`,
-    );
-  }
+const unattested = loadConsumers()
+  .filter((c) => !c.provider)
+  .map((c) => c.id);
+if (unattested.length) {
+  console.log(
+    `Unattested (rejected at runtime — run ` +
+      `\`mcp:consumers -- --attest <id> --provider <p>\`): ${unattested.join(", ")}`,
+  );
+}
 ```
 
 Finally update the command dispatch at the bottom of the file to add `--attest`:
@@ -1344,6 +1360,7 @@ git commit -m "feat(mcp): pair requires --provider, add --attest, scope flags + 
 ## Task 7: Documentation — operator-facing surfaces
 
 **Files:**
+
 - Modify: `skills/add-cuassistant/SKILL.md`
 - Modify: `src/mcp-server.md`
 
@@ -1425,29 +1442,48 @@ git commit -m "docs(mcp): document provider attestation, --attest, and capabilit
 ```bash
 npm run typecheck && npm test
 ```
+
 Expected: all tests pass.
+
+> **SEQUENCING — read first.** The running launchd server is on the OLD (pre-
+> attestation) code, so the live agents work today with no `provider`. The new
+> build enforces attestation: an unattested consumer is rejected (401). Therefore
+> **attest every live consumer BEFORE restarting onto the new build** — attest
+> writes are forward-compatible (the old code ignores the `provider` field), so
+> doing them first means there is no 401 window when the new code comes up. Also
+> prefer deploying from merged `main`, not the feature-branch working tree.
 
 - [ ] **Step 2: Inspect current consumers (find the unattested ones)**
 
-Run: `npm run mcp:consumers -- --list`
-Expected: `nanoclaw-personal` (and any others) show `UNATTESTED(run --attest)`.
+Run: `npm run mcp:consumers -- --check` (or `--list`)
+Expected: the unattested report lists every live consumer — at time of writing
+that is **`nanoclaw-personal` and `nanoclaw-pi-co`** (both show
+`UNATTESTED(run --attest)` under `--list`). Attest ALL of them in Step 3.
 
-- [ ] **Step 3: Attest the live agent in place (no token rotation, no container change)**
+- [ ] **Step 3: Attest EACH live agent in place (no token rotation, no container change)**
 
-Run: `npm run mcp:consumers -- --attest nanoclaw-personal --provider chatgpt_edu`
-Expected: prints `Attested "nanoclaw-personal": provider=chatgpt_edu, scope=full (token unchanged). Restart the server to apply.`
+```bash
+npm run mcp:consumers -- --attest nanoclaw-personal --provider chatgpt_edu
+npm run mcp:consumers -- --attest nanoclaw-pi-co     --provider chatgpt_edu
+```
 
-> Use the agent's real backend provider. If the agent runs on GPT-5.4 via the
-> Pi/OpenAI path and that is the contract-covered endpoint, `chatgpt_edu` or
-> `openai_api` per how it's billed — both are authorized. Narrow with `--scope`
-> here if desired.
+Expected per run: `Attested "<id>": provider=chatgpt_edu, scope=full (token unchanged). Takes effect on the next request — the registry is reloaded per request, so no restart is needed. (A policy change to agent_backends still requires a server restart.)`
 
-- [ ] **Step 4: If `MCP_AUTH_TOKEN` (env-token) is in use, attest it too**
+> Use each agent's real contract-covered backend provider — `chatgpt_edu` or
+> `openai_api` (both authorized). Narrow with `--scope` here if desired. Do this
+> for the env-token too via Step 4 if it's in use.
+
+- [ ] **Step 4: If `MCP_AUTH_TOKEN` (env-token) is in use, give it a provider**
 
 Add to `.env` (only if `MCP_AUTH_TOKEN` is set): `MCP_AUTH_TOKEN_PROVIDER=chatgpt_edu`
 If `MCP_AUTH_TOKEN` is unset (registry-only setup), skip this step.
 
-- [ ] **Step 5: Restart the credentialed server to apply attestation**
+- [ ] **Step 5: Deploy the new build (restart the credentialed server)**
+
+This restart is what puts the NEW (attestation-enforcing) code into service — not
+what "applies" an attestation (attestation is live per-request as soon as it's
+written). With every consumer attested in Step 3, the agents keep working across
+the restart.
 
 Run: `launchctl kickstart -k gui/$(id -u)/com.cuassistant.mcp-http`
 (or restart `npm run mcp:http` if running manually).
@@ -1455,14 +1491,17 @@ Run: `launchctl kickstart -k gui/$(id -u)/com.cuassistant.mcp-http`
 - [ ] **Step 6: Verify the registry and a live call**
 
 Run: `npm run mcp:consumers -- --list`
-Expected: `nanoclaw-personal` now shows `provider=chatgpt_edu scope=full`, no `UNATTESTED`.
+Expected: `nanoclaw-personal` and `nanoclaw-pi-co` both show
+`provider=chatgpt_edu scope=full`, no `UNATTESTED`.
 
-From the agent (or a curl handshake), confirm:
+From each agent (or a curl handshake), confirm:
+
 - ListTools returns the expected tool set (full, or only the scoped surfaces if narrowed).
-- A tool call succeeds and appends a `state/decisions.jsonl` row carrying `mcp_consumer_id":"nanoclaw-personal"`.
+- A tool call succeeds and appends a `state/decisions.jsonl` row carrying its `mcp_consumer_id`.
 
 Run (host): `tail -n 5 state/decisions.jsonl`
-Expected: recent `mcp-tool` rows include `"mcp_consumer_id":"nanoclaw-personal"`.
+Expected: recent `mcp-tool` rows include `"mcp_consumer_id":"<agent-id>"`
+(reads are not audited; stdio-path rows carry `"stdio"`).
 
 - [ ] **Step 7: Negative check — attestation kill switch**
 
@@ -1482,4 +1521,7 @@ git status   # commit only intended changes; do NOT commit .env
 - **Import extensions:** `.ts` in `test/` files, `.js` in `src/`/`scripts/` files. Mismatching these is the most likely build error.
 - **No circular imports:** `consumers.ts` stays free of `policy`/`permissions` imports (attestation lives in `server.ts`); `audit.ts` owns the ALS and is imported by `server.ts` (one direction). Keep it that way.
 - **Out of scope** (do not build): on-wire bearer injection / host broker, short-lived/OIDC tokens, container network egress lock-down. These are NanoClaw-side and documented as recommendations in `docs/security/2026-06-11-cuassistant-nanoclaw-it-review.md`.
+
+```
+
 ```

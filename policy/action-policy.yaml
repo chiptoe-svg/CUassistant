@@ -315,8 +315,10 @@ actions:
       - public_data_only
 
   # --- Google Sheets / Docs (gws — Clemson Google Workspace) ---
-  # READ ANY file (own_workspace_only). WRITE only files this agent created
-  # (own_created_file_only — checked against state/gws-created-files.json).
+  # READ any file and APPEND to any file (additive). The one write that can
+  # overwrite existing data — update-sheet-range (cell overwrite) — is restricted
+  # to files this agent created (own_created_file_only, checked against
+  # state/gws-created-files.json; npm run gws:grant adds a specific file).
   # Destructive edges (delete / share / overwrite-whole-doc) stay human_required
   # and not exposed (a later step can flip them to own-files-only).
   - id: sheets.read_values
@@ -356,8 +358,9 @@ actions:
     risk: low
     reversibility: reversible
     approval: none
+    # Append is additive (INSERT_ROWS, never overwrites) -> allowed on any file.
     constraints:
-      - own_created_file_only
+      - own_workspace_only
 
   - id: docs.read
     surface: docs
@@ -380,8 +383,9 @@ actions:
     risk: low
     reversibility: reversible
     approval: none
+    # Append adds text at the end (additive) -> allowed on any file.
     constraints:
-      - own_created_file_only
+      - own_workspace_only
 
   - id: sheets.delete_spreadsheet
     surface: sheets

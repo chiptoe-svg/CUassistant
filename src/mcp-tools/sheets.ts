@@ -88,8 +88,9 @@ const createSpreadsheetTool: McpToolDefinition = {
     name: "create-spreadsheet",
     description:
       "Create a new Google Spreadsheet with a title. Returns its " +
-      "spreadsheetId. The agent may then edit THIS sheet (and any it created); " +
-      "update/append are restricted to agent-created files.",
+      "spreadsheetId. You can append to any sheet, but cell OVERWRITES " +
+      "(update-sheet-range) are restricted to sheets this agent created — so " +
+      "create one here when you need to overwrite freely.",
     inputSchema: {
       type: "object" as const,
       properties: { title: { type: "string" } },
@@ -125,10 +126,12 @@ const updateSheetRangeTool: McpToolDefinition = {
   tool: {
     name: "update-sheet-range",
     description:
-      "Write values into a cell range (overwrites those cells only). Give " +
-      "spreadsheetId, an A1 range, and a 2-D array of values. valueInputOption " +
-      "USER_ENTERED (default) lets formula strings like '=SUM(A1:A9)' stay live; " +
-      "RAW writes them literally. Reversible via Sheet version history.",
+      "Overwrite the cells in a range. OWN FILES ONLY — only works on sheets " +
+      "this agent created (it can clobber existing data, so it's not allowed on " +
+      "your other sheets; use create-spreadsheet, or append-sheet-rows which " +
+      "works anywhere). Give spreadsheetId, an A1 range, and a 2-D array. " +
+      "valueInputOption USER_ENTERED (default) keeps formula strings like " +
+      "'=SUM(A1:A9)' live; RAW writes them literally. Reversible via history.",
     inputSchema: {
       type: "object" as const,
       properties: {

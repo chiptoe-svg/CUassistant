@@ -66,7 +66,10 @@ test("resolveCredentialedAuth accepts the env token as a consumer", () => {
 });
 
 test("createHttpHandler rejects an oversized body with 413", () => {
-  const handler = createHttpHandler("t", () => "agent");
+  const handler = createHttpHandler("t", () => ({
+    id: "agent",
+    scopes: new Set<string>(),
+  }));
   const req = new EventEmitter() as EventEmitter & {
     headers: Record<string, string>;
     method: string;

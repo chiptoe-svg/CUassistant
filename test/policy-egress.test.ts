@@ -40,10 +40,11 @@ test("egressAuthorizedIn is fail-closed: only authorized:true admits", () => {
   assert.equal(egressAuthorizedIn([], "codex_chatgpt_edu"), false);
 });
 
-test("the shipped policy authorizes Codex + local, not the OpenAI API", () => {
-  // Reflects policy/action-policy.yaml data_egress as shipped.
+test("the shipped policy authorizes Codex, OpenAI, and local backends", () => {
+  // Reflects policy/action-policy.yaml data_egress as shipped. openai_api was
+  // flipped to authorized:true once OpenAI was confirmed contract-covered.
   assert.equal(isEgressAuthorized("codex_chatgpt_edu"), true);
-  assert.equal(isEgressAuthorized("openai_api"), false);
+  assert.equal(isEgressAuthorized("openai_api"), true);
   assert.equal(isEgressAuthorized("local_omlx"), true);
   assert.equal(isEgressAuthorized("local_ollama"), true);
   assert.equal(isEgressAuthorized("not_listed"), false);

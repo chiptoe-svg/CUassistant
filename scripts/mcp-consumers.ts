@@ -113,7 +113,7 @@ function pair(): void {
     if (scopes !== undefined) existing.scopes = scopes;
     if (note !== undefined) existing.note = note;
     console.log(
-      `Rotated token for "${id}" (provider=${provider}, scope=${scopes?.join(",") ?? "full"}).`,
+      `Rotated token for "${id}" (provider=${provider}, scope=${existing.scopes?.join(",") ?? "full"}).`,
     );
   } else {
     const c: Consumer = {
@@ -195,14 +195,17 @@ function attest(): void {
   const c = list.find((x) => x.id === id);
   console.log(
     `Attested "${id}": provider=${provider}, scope=${c?.scopes?.join(",") ?? "full"} ` +
-      `(token unchanged). Restart the server to apply.`,
+      `(token unchanged). Takes effect on the next request — the registry is ` +
+      `reloaded per request, so no restart is needed. (A policy change to ` +
+      `agent_backends still requires a server restart.)`,
   );
 }
 
 function check(): void {
   const maxAgeDays = Number(arg("--max-age-days") ?? 365);
   const maxIdleDays = Number(arg("--max-idle-days") ?? 90);
-  const flagged = staleConsumers(loadConsumers(), {
+  const consumers = loadConsumers();
+  const flagged = staleConsumers(consumers, {
     nowMs: Date.now(),
     maxAgeDays,
     maxIdleDays,
@@ -212,17 +215,17 @@ function check(): void {
       `No stale consumers (age>${maxAgeDays}d or idle>${maxIdleDays}d). ` +
         `Nothing to rotate.`,
     );
-    return;
+  } else {
+    console.log("Consider rotating (warn-only — nothing is severed):");
+    for (const f of flagged) {
+      console.log(
+        `- ${f.id}: ${f.reason} (age=${f.ageDays}d, idle=${f.idleDays}d)`,
+      );
+    }
   }
-  console.log("Consider rotating (warn-only — nothing is severed):");
-  for (const f of flagged) {
-    console.log(
-      `- ${f.id}: ${f.reason} (age=${f.ageDays}d, idle=${f.idleDays}d)`,
-    );
-  }
-  const unattested = loadConsumers()
-    .filter((c) => !c.provider)
-    .map((c) => c.id);
+  // Always surface unattested consumers — they are rejected at runtime, so this
+  // must show even when nothing is stale.
+  const unattested = consumers.filter((c) => !c.provider).map((c) => c.id);
   if (unattested.length) {
     console.log(
       `Unattested (rejected at runtime — run ` +

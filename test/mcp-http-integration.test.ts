@@ -5,10 +5,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import "../src/mcp-tools/index.ts"; // side-effect: register credentialed tools
 import { createHttpHandler } from "../src/mcp-tools/server.ts";
+import { allExposedOperations } from "../src/mcp-tools/permissions.ts";
 
 test("http transport completes the MCP handshake and lists tools", async () => {
   const server = http.createServer(
-    createHttpHandler("test-credentialed", () => "test-agent"),
+    createHttpHandler("test-credentialed", () => ({
+      id: "test-agent",
+      scopes: allExposedOperations(),
+    })),
   );
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
   const addr = server.address();

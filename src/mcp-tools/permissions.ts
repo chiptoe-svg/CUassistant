@@ -283,6 +283,16 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "clemson.room_availability",
   },
+  "clemson.gc_catalog_years": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.gc_catalog_years",
+  },
+  "clemson.gc_program_plan": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.gc_program_plan",
+  },
 };
 
 export class McpPermissionDeniedError extends Error {
@@ -572,6 +582,8 @@ export const SCOPE_OPERATIONS: Record<string, string[]> = {
     "clemson.section_details",
     "clemson.instructor_classes",
     "clemson.room_availability",
+    "clemson.gc_catalog_years",
+    "clemson.gc_program_plan",
   ],
   // host.trigger_scan is human_required -> not exposed -> intentionally absent.
   "host:read": ["host.get_scan_status", "host.get_pending_actions"],

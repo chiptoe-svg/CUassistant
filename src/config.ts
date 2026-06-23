@@ -133,3 +133,14 @@ export const GC_ADVISOR_DB =
 export const MCP_CATALOG_HTTP_PORT = Number(
   process.env.MCP_CATALOG_HTTP_PORT || 8767,
 );
+
+// --- Token portal (Google OAuth2 → bearer token issuance) ---
+export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
+export const TOKEN_PORTAL_PORT = Number(
+  process.env.TOKEN_PORTAL_PORT || 8769,
+);
+// Base URL must be HTTPS for production. Defaults to localhost for dev.
+export const TOKEN_PORTAL_BASE_URL =
+  process.env.TOKEN_PORTAL_BASE_URL ||
+  `http://localhost:${process.env.TOKEN_PORTAL_PORT || 8769}`;

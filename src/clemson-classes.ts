@@ -613,7 +613,9 @@ function saveClemsonSnapshot(snap: ClemsonTermSnapshot): void {
   try {
     fs.mkdirSync(snapshotDir(), { recursive: true });
     const p = `${snapshotPath(snap.term)}.gz`;
-    fs.writeFileSync(p, serializeSnapshot(snap));
+    const tmp = `${p}.tmp`;
+    fs.writeFileSync(tmp, serializeSnapshot(snap));
+    fs.renameSync(tmp, p); // atomic: no reader ever sees a partial write
     snapshotCache.delete(p); // next read re-loads with the fresh mtime
   } catch (err) {
     log.warn("clemson snapshot write failed", {

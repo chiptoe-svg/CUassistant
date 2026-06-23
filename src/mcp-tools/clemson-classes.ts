@@ -56,7 +56,10 @@ const searchClasses: McpToolDefinition = {
       "CRN, title, credit hours, seats available/max, waitlist counts, " +
       "instructor (name + email), and meeting days/time/building/room. " +
       "Requires a term code from list-clemson-terms; narrow with subject " +
-      "(e.g. CPSC), courseNumber (e.g. 1010), and/or openOnly.",
+      "(e.g. CPSC), courseNumber (e.g. 1010), and/or openOnly. " +
+      "Served from the daily snapshot when available (fast, no Banner load); " +
+      "falls back to a live Banner query if no snapshot exists yet. " +
+      "Pass refresh:true only if you need up-to-the-minute seat counts.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -84,6 +87,12 @@ const searchClasses: McpToolDefinition = {
           type: "integer",
           description: "Page offset for paging (default 0).",
         },
+        refresh: {
+          type: "boolean",
+          description:
+            "Force a live Banner query instead of the daily snapshot " +
+            "(slower; use only when you need up-to-the-minute seat counts).",
+        },
       },
       required: ["term"],
     },
@@ -103,6 +112,7 @@ const searchClasses: McpToolDefinition = {
       openOnly: Boolean(args.openOnly),
       max: typeof args.max === "number" ? args.max : undefined,
       offset: typeof args.offset === "number" ? args.offset : undefined,
+      refresh: Boolean(args.refresh),
     });
     if (result === null) return err("Clemson class search failed.");
     return okJson(result);

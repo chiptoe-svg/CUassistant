@@ -72,11 +72,15 @@ export interface ClemsonSearchParams {
   openOnly?: boolean;
   max?: number;
   offset?: number;
+  refresh?: boolean;
 }
 
 export interface ClemsonSearchResult {
   totalCount: number;
   sections: ClemsonSection[];
+  /** ISO date of the snapshot used; null when fetched live. */
+  snapshotDate: string | null;
+  scope: "snapshot" | "live";
 }
 
 class CookieJar {
@@ -227,7 +231,7 @@ function mapSection(r: Record<string, unknown>): ClemsonSection {
 async function runSearch(
   jar: CookieJar,
   params: ClemsonSearchParams,
-): Promise<ClemsonSearchResult | null> {
+): Promise<{ totalCount: number; sections: ClemsonSection[] } | null> {
   const q = new URLSearchParams({
     txt_term: params.term,
     pageOffset: String(params.offset ?? 0),
@@ -257,13 +261,46 @@ async function runSearch(
   };
 }
 
+function filterFromSnapshot(
+  snap: ClemsonTermSnapshot,
+  params: ClemsonSearchParams,
+): ClemsonSearchResult {
+  let sections = snap.sections;
+  if (params.subject) {
+    const subj = params.subject.toUpperCase();
+    sections = sections.filter((s) => s.subjectCourse.split(" ")[0] === subj);
+  }
+  if (params.courseNumber) {
+    const cn = params.courseNumber;
+    sections = sections.filter((s) => s.subjectCourse.split(" ")[1] === cn);
+  }
+  if (params.openOnly) {
+    sections = sections.filter((s) => s.open);
+  }
+  const totalCount = sections.length;
+  const offset = params.offset ?? 0;
+  const max = Math.min(Math.max(params.max ?? 50, 1), 500);
+  return {
+    totalCount,
+    sections: sections.slice(offset, offset + max),
+    snapshotDate: snap.fetchedAt,
+    scope: "snapshot",
+  };
+}
+
 export async function searchClemsonClasses(
   params: ClemsonSearchParams,
 ): Promise<ClemsonSearchResult | null> {
+  if (!params.refresh) {
+    const snap = loadClemsonSnapshot(params.term);
+    if (snap) return filterFromSnapshot(snap, params);
+  }
   try {
     const jar = await openSession(params.term);
     if (!jar) return null;
-    return await runSearch(jar, params);
+    const result = await runSearch(jar, params);
+    if (result === null) return null;
+    return { ...result, snapshotDate: null, scope: "live" };
   } catch (err) {
     log.warn("clemson class search failed", { err: String(err) });
     return null;

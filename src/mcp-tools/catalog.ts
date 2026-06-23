@@ -23,7 +23,10 @@ export const catalogYears: McpToolDefinition = {
     }
     try {
       const years = await listGcCatalogYears();
-      return okJson({ years });
+      return okJson({
+        years,
+        _source: "Clemson University Online Catalog (gc_advisor)",
+      });
     } catch (e) {
       return err(
         `GC catalog years unavailable: ${e instanceof Error ? e.message : String(e)}`,
@@ -72,7 +75,10 @@ export const programPlan: McpToolDefinition = {
         : "Graphic Communications, BS";
     try {
       const plan = await getGcProgramPlan(year, name);
-      return okJson(plan);
+      return okJson({
+        ...(plan as object),
+        _source: `Clemson University Online Catalog, ${year} edition (gc_advisor)`,
+      });
     } catch (e) {
       return err(
         `GC program plan lookup failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -111,7 +117,10 @@ export const requirementRules: McpToolDefinition = {
     if (!year) return err("year is required");
     try {
       const rules = await getGcRequirementRules(year, "Graphic Communications, BS");
-      return okJson(rules);
+      return okJson({
+        ...(rules as object),
+        _source: `Clemson University Online Catalog, ${year} edition (gc_advisor)`,
+      });
     } catch (e) {
       return err(`GC requirement rules lookup failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -149,7 +158,10 @@ export const genEd: McpToolDefinition = {
     if (!year) return err("year is required");
     try {
       const cats = await getGcGenEd(year);
-      return okJson(cats);
+      return okJson({
+        ...(cats as object),
+        _source: `Clemson University Online Catalog, ${year} edition (gc_advisor)`,
+      });
     } catch (e) {
       return err(`GC gen-ed lookup failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -185,7 +197,10 @@ export const course: McpToolDefinition = {
     if (!code) return err("code is required");
     try {
       const c = await getGcCourse(code);
-      return okJson(c);
+      return okJson({
+        ...(c as object),
+        _source: "Clemson University Online Catalog (gc_advisor)",
+      });
     } catch (e) {
       return err(`GC course lookup failed: ${e instanceof Error ? e.message : String(e)}`);
     }

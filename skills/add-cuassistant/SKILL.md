@@ -202,12 +202,25 @@ Public (`cuassistant-public__*`) — Clemson class schedule (public Banner data)
 
 Catalog (`cuassistant-catalog__*`) — GC degree plans + graduation rules (public):
 
-- `list-gc-catalog-years` — lists available catalog years, e.g. `["2026-2027", …]`.
-  Call this first to get a valid year string.
+All responses include a `_source` field citing the Clemson University Online
+Catalog edition so agents can attribute the data correctly.
+
+- `list-gc-catalog-years` — lists available catalog years, e.g. `["2026-2027",
+  …]`. Call this first to get a valid year string.
 - `get-gc-program-plan` — full semester-by-semester degree plan for a program
   in a given catalog year: required courses, choice sets (one-of), requirement
-  slots, per-term and total credits, footnotes. Args: `year` (required, from
-  `list-gc-catalog-years`), `name` (default `"Graphic Communications, BS"`).
+  slots, per-term and total credits, footnotes. Args: `year` (required), `name`
+  (default `"Graphic Communications, BS"`).
+- `get-gc-requirement-rules` — lab science, specialty area (minor or 15-credit
+  course set), and technical requirement rules for GC BS, with explicit course
+  codes, total credits, and footnote text. Args: `year` (required).
+- `get-gc-gen-ed` — all six Clemson Gen Ed categories (Communication,
+  Mathematics, Natural Sciences with Lab, Arts and Humanities, Social Sciences,
+  Global Challenges) with minimum credits, allowed course lists, constraint
+  rules, and student learning outcomes. Args: `year` (required).
+- `get-gc-course` — title, credits, description, and prerequisites (raw text +
+  parsed course codes) for one course. Args: `code` (required, e.g. `"GC 3010"`
+  or `"MKTG 3010"`).
 
 **Note:** `cuassistant-catalog` is degree-plan/graduation-rules data from
 `gc_advisor`. It is NOT the `curriculum_developer` faculty tool (which manages

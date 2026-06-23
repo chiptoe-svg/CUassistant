@@ -16,6 +16,8 @@
     "mcp:public:http": "MCP_TRANSPORT=http tsx src/mcp-public.ts",
     "mcp:catalog": "tsx src/mcp-catalog.ts",
     "mcp:catalog:http": "MCP_TRANSPORT=http tsx src/mcp-catalog.ts",
+    "portal": "tsx src/token-portal.ts",
+    "portal:start": "TOKEN_PORTAL_BASE_URL=http://localhost:8769 tsx src/token-portal.ts",
     "mcp:pair": "tsx scripts/mcp-consumers.ts",
     "mcp:consumers": "tsx scripts/mcp-consumers.ts",
     "ms365-login": "tsx scripts/ms365-login.ts",

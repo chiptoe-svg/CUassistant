@@ -46,6 +46,8 @@
 
 import { randomUUID } from "crypto";
 import "./mcp-tools/index.js";
+import "./mcp-tools/index-public.js";
+import "./mcp-tools/index-catalog.js";
 import { startMcpServer } from "./mcp-tools/server.js";
 import { recordSeen } from "./mcp-tools/consumers.js";
 import { ApprovalGate } from "./approval/gate.js";

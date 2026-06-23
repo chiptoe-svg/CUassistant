@@ -55,6 +55,11 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "mail.fetch_body",
   },
+  "mail.get_attachment": {
+    backend: "graph",
+    status: "active",
+    policyActionId: "mail.get_attachment",
+  },
   // Read-only folder/label discovery. Dispatches by account: ms365 -> Graph,
   // g.clemson -> gws (the backend field is nominal for this dual-provider op).
   "mail.list_folders": {
@@ -572,7 +577,7 @@ export function describeMcpOperations(): Array<{
  * map never widens beyond the exposed set (enforced by expandScopes).
  */
 export const SCOPE_OPERATIONS: Record<string, string[]> = {
-  "mail:read": ["mail.list_messages", "mail.get_message", "mail.list_folders"],
+  "mail:read": ["mail.list_messages", "mail.get_message", "mail.get_attachment", "mail.list_folders"],
   "mail:write": [
     "mail.move_message",
     "mail.update_message",

@@ -52,5 +52,5 @@ test("unknown scope tokens contribute nothing (no silent widening)", () => {
     expandScopes(["mail:read", "bogus"]).has("mail.list_messages"),
     true,
   );
-  assert.equal(expandScopes(["mail:read", "bogus"]).size, 3);
+  assert.equal(expandScopes(["mail:read", "bogus"]).size, 4);
 });

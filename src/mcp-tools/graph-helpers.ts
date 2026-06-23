@@ -279,11 +279,22 @@ export async function listMailMessages(opts: {
   return (body.value ?? []).map(asMailSummary);
 }
 
-export async function getMailMessageBody(
-  id: string,
-): Promise<{ id: string; subject: string; body: string } | null> {
+export interface MailAttachmentMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+}
+
+export async function getMailMessageBody(id: string): Promise<{
+  id: string;
+  subject: string;
+  body: string;
+  hasAttachments: boolean;
+  attachments: MailAttachmentMeta[];
+} | null> {
   const r = await authedFetch(
-    `/me/messages/${id}?$select=id,subject,body,bodyPreview`,
+    `/me/messages/${id}?$select=id,subject,body,bodyPreview,hasAttachments`,
   );
   if (!r || !r.ok) return null;
   const m = (await r.json()) as {
@@ -291,11 +302,68 @@ export async function getMailMessageBody(
     subject?: string;
     body?: { content?: string };
     bodyPreview?: string;
+    hasAttachments?: boolean;
   };
+
+  let attachments: MailAttachmentMeta[] = [];
+  if (m.hasAttachments) {
+    const ar = await authedFetch(
+      `/me/messages/${id}/attachments?$select=id,name,contentType,size`,
+    );
+    if (ar?.ok) {
+      const ab = (await ar.json()) as {
+        value?: Array<{
+          id?: string;
+          name?: string;
+          contentType?: string;
+          size?: number;
+        }>;
+      };
+      attachments = (ab.value ?? []).map((a) => ({
+        id: String(a.id ?? ""),
+        name: String(a.name ?? ""),
+        contentType: String(a.contentType ?? "application/octet-stream"),
+        size: Number(a.size ?? 0),
+      }));
+    }
+  }
+
   return {
     id: m.id ?? id,
     subject: m.subject ?? "",
     body: m.body?.content ?? m.bodyPreview ?? "",
+    hasAttachments: Boolean(m.hasAttachments),
+    attachments,
+  };
+}
+
+export async function getMailAttachment(
+  messageId: string,
+  attachmentId: string,
+): Promise<{
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  contentBytes: string;
+} | null> {
+  const r = await authedFetch(
+    `/me/messages/${messageId}/attachments/${attachmentId}`,
+  );
+  if (!r || !r.ok) return null;
+  const a = (await r.json()) as {
+    id?: string;
+    name?: string;
+    contentType?: string;
+    size?: number;
+    contentBytes?: string;
+  };
+  return {
+    id: String(a.id ?? ""),
+    name: String(a.name ?? ""),
+    contentType: String(a.contentType ?? "application/octet-stream"),
+    size: Number(a.size ?? 0),
+    contentBytes: a.contentBytes ?? "",
   };
 }
 

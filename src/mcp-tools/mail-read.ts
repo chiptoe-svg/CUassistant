@@ -8,6 +8,7 @@
 import {
   listMailMessages as listMailMessagesGraph,
   getMailMessageBody,
+  getMailAttachment,
 } from "./graph-helpers.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
@@ -60,9 +61,11 @@ const getMailMessage: McpToolDefinition = {
   tool: {
     name: "get-mail-message",
     description:
-      "Fetch the body of one Outlook message by id. Read-only. Backed by " +
-      "the GCassistant Graph app. Returns the message subject and body " +
-      "content (HTML or text as stored).",
+      "Fetch the body of one Outlook message by id. Read-only. Returns " +
+      "subject, body (HTML or text), hasAttachments flag, and an attachments " +
+      "array with {id, name, contentType, size} for each attachment. To fetch " +
+      "attachment content (base64), use get-mail-attachment with the message " +
+      "id and attachment id.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -90,4 +93,45 @@ const getMailMessage: McpToolDefinition = {
   },
 };
 
-registerTools([listMailMessages, getMailMessage]);
+const getMailAttachmentTool: McpToolDefinition = {
+  operation: "mail.get_attachment",
+  tool: {
+    name: "get-mail-attachment",
+    description:
+      "Download one Outlook email attachment by message id and attachment id. " +
+      "Returns {id, name, contentType, size, contentBytes} where contentBytes " +
+      "is base64-encoded. Get attachment ids from get-mail-message.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        messageId: {
+          type: "string",
+          description: "The Outlook message id.",
+        },
+        attachmentId: {
+          type: "string",
+          description: "The attachment id (from get-mail-message attachments array).",
+        },
+      },
+      required: ["messageId", "attachmentId"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("mail.get_attachment");
+    } catch (e) {
+      return permissionErr(e);
+    }
+    const messageId = args.messageId as string | undefined;
+    const attachmentId = args.attachmentId as string | undefined;
+    if (!messageId) return err("messageId is required");
+    if (!attachmentId) return err("attachmentId is required");
+    const attachment = await getMailAttachment(messageId, attachmentId);
+    if (attachment === null) {
+      return err(`Graph returned no attachment "${attachmentId}" on message "${messageId}".`);
+    }
+    return okJson(attachment);
+  },
+};
+
+registerTools([listMailMessages, getMailMessage, getMailAttachmentTool]);

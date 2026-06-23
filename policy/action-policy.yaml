@@ -34,6 +34,14 @@ actions:
     constraints:
       - own_mailbox_only
 
+  - id: mail.get_attachment
+    surface: mail
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - own_mailbox_only
+
   - id: mail.list_folders
     surface: mail
     risk: low

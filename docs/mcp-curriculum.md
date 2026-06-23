@@ -26,6 +26,15 @@ CLI — gc_advisor remains the single source of truth.
 claude mcp add gc-curriculum -- npm --prefix /Users/admin/projects/CUassistant run -s mcp:curriculum
 ```
 
+## Auto-start (launchd)
+For the loopback-HTTP server to come up at login and stay alive (same pattern as
+the credentialed/public servers), install `launchd/com.cuassistant.mcp-curriculum-http.plist`:
+edit the `REPO_PATH` / `NPM_PATH` / `HOME_PATH` placeholders, `cp` it to
+`~/Library/LaunchAgents/`, then `launchctl load` it. It binds 127.0.0.1:8767 and
+logs to `~/Library/Logs/cuassistant.mcp-curriculum.{out,err}.log`. If gc_advisor
+isn't at the default path, set `GC_ADVISOR_PYTHON/QUERY/DB` in the plist's
+`EnvironmentVariables`. Full instructions are in the plist header.
+
 ## Future tools (deferred)
 - `get-gc-minor-requirements` (needs a gc_advisor `query.py program-rule`
   subcommand + the minors data)

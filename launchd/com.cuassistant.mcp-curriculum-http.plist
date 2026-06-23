@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CUassistant GC CURRICULUM MCP server (HTTP) service for launchd.
+
+  Runs the PUBLIC (no credentials) curriculum HTTP MCP server on
+  127.0.0.1:8767, exposing read-only Clemson Graphic Communications
+  curriculum tools (catalog years + degree plans). The data is bridged from
+  the separate gc_advisor project via its query.py CLI, so gc_advisor must be
+  reachable on the same machine/mount. No MCP_AUTH_TOKEN applies — this server
+  is loopback-open by design; all data served is public. Do NOT add a bearer.
+
+  A containerized NanoClaw agent reaches it via host.docker.internal:8767
+  with no Authorization header. The credentialed (8765) and public class-
+  schedule (8766) servers are separate processes; see
+  com.cuassistant.mcp-http.plist and com.cuassistant.mcp-public-http.plist.
+
+  All HTTP servers are loopback-only. Ports (track in ~/.dev-ports.yaml):
+  mcp_credentialed 8765, mcp_public 8766, mcp_curriculum 8767.
+
+  gc_advisor bridge paths default to /Users/admin/projects/gc_advisor. If
+  gc_advisor lives elsewhere, add GC_ADVISOR_PYTHON / GC_ADVISOR_QUERY /
+  GC_ADVISOR_DB to EnvironmentVariables below.
+
+  Setup (one time):
+    1. Edit this file: replace REPO_PATH with the absolute path to your
+       local repo, NPM_PATH with the absolute path to your npm binary
+       (run `which npm`), and HOME_PATH with $HOME.
+    2. cp launchd/com.cuassistant.mcp-curriculum-http.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.cuassistant.mcp-curriculum-http.plist
+    4. (optional) launchctl start com.cuassistant.mcp-curriculum-http  # bring up now
+    5. tail -f ~/Library/Logs/cuassistant.mcp-curriculum.out.log
+
+  The service starts automatically at login and is kept alive by launchd.
+  MCP_CURRICULUM_HTTP_PORT defaults to 8767 if not set in the environment.
+
+  To unload:
+    launchctl unload ~/Library/LaunchAgents/com.cuassistant.mcp-curriculum-http.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuassistant.mcp-curriculum-http</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>NPM_PATH</string>
+    <string>run</string>
+    <string>mcp:curriculum:http</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPO_PATH</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>HOME_PATH</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp-curriculum.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp-curriculum.err.log</string>
+</dict>
+</plist>

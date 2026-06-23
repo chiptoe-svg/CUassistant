@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CUassistant token portal service for launchd.
+
+  Runs the Google OAuth2 self-service portal on 127.0.0.1:8769.
+  Caddy must proxy HTTPS traffic to this port for external access.
+
+  Setup (one time):
+    1. Edit this file: replace NPM_PATH, REPO_PATH, HOME_PATH.
+       - NPM_PATH  -> run `which npm`
+       - REPO_PATH -> /Users/admin/projects/CUassistant
+       - HOME_PATH -> /Users/admin
+    2. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env (or EnvironmentVariables below).
+    3. cp launchd/com.cuassistant.token-portal.plist ~/Library/LaunchAgents/
+    4. launchctl load ~/Library/LaunchAgents/com.cuassistant.token-portal.plist
+    5. curl http://127.0.0.1:8769/health
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cuassistant.token-portal</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>NPM_PATH</string>
+    <string>run</string>
+    <string>portal</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>REPO_PATH</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>HOME_PATH</string>
+    <!-- TOKEN_PORTAL_BASE_URL must be your public HTTPS URL once Caddy+DNS are set up -->
+    <!-- <key>TOKEN_PORTAL_BASE_URL</key> -->
+    <!-- <string>https://portal.gcworkflow.clemson.edu</string> -->
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.token-portal.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/Library/Logs/cuassistant.token-portal.err.log</string>
+</dict>
+</plist>

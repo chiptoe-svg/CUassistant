@@ -31,7 +31,7 @@ test("listGcCatalogYears against the real gc_advisor DB", { skip: !fs.existsSync
   assert.ok(years.every((y) => /^\d{4}-\d{4}$/.test(y)));
 });
 
-import { catalogYears, programPlan } from "../src/mcp-tools/curriculum.ts";
+import { catalogYears, programPlan } from "../src/mcp-tools/catalog.ts";
 
 test("programPlan handler requires a year", async () => {
   const res = await programPlan.handler({});

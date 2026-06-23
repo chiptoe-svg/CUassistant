@@ -115,3 +115,21 @@ export const MCP_PUBLIC_HTTP_PORT = Number(
 export const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 export const MCP_AUTH_TOKEN_PROVIDER =
   process.env.MCP_AUTH_TOKEN_PROVIDER || "";
+
+// --- GC curriculum bridge (gc_advisor project, same machine) ---
+// The curriculum MCP server shells out to gc_advisor's query.py (JSON out),
+// keeping gc_advisor's CatalogAccess the single source of truth.
+export const GC_ADVISOR_PYTHON =
+  process.env.GC_ADVISOR_PYTHON ||
+  "/Users/admin/projects/gc_advisor/.venv/bin/python";
+export const GC_ADVISOR_QUERY =
+  process.env.GC_ADVISOR_QUERY ||
+  "/Users/admin/projects/gc_advisor/scripts/query.py";
+export const GC_ADVISOR_DB =
+  process.env.GC_ADVISOR_DB ||
+  "/Users/admin/projects/gc_advisor/db/gc_advisor.db";
+
+// Public GC curriculum MCP server port (loopback HTTP transport).
+export const MCP_CURRICULUM_HTTP_PORT = Number(
+  process.env.MCP_CURRICULUM_HTTP_PORT || 8767,
+);

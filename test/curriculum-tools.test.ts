@@ -30,3 +30,19 @@ test("listGcCatalogYears against the real gc_advisor DB", { skip: !fs.existsSync
   assert.ok(Array.isArray(years) && years.length > 0);
   assert.ok(years.every((y) => /^\d{4}-\d{4}$/.test(y)));
 });
+
+import { catalogYears, programPlan } from "../src/mcp-tools/curriculum.ts";
+
+test("programPlan handler requires a year", async () => {
+  const res = await programPlan.handler({});
+  assert.equal(res.isError, true);
+  assert.match((res.content[0] as { text: string }).text, /year is required/);
+});
+
+test("tool definitions carry the expected names and operations", () => {
+  assert.equal(catalogYears.tool.name, "list-gc-catalog-years");
+  assert.equal(catalogYears.operation, "clemson.gc_catalog_years");
+  assert.equal(programPlan.tool.name, "get-gc-program-plan");
+  assert.equal(programPlan.operation, "clemson.gc_program_plan");
+  assert.deepEqual(programPlan.tool.inputSchema.required, ["year"]);
+});

@@ -34,7 +34,8 @@ function escHtml(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
 }
 
 // ── /auth/login ──────────────────────────────────────────────────────────────
@@ -68,7 +69,7 @@ async function handleCallback(
   const url = new URL(req.url ?? "/", `http://localhost`);
   const error = url.searchParams.get("error");
   if (error) {
-    sendHtml(res, 400, errorPage(`Google OAuth error: ${escHtml(error)}`));
+    sendHtml(res, 400, errorPage(`Google OAuth error: ${error}`));
     return;
   }
 
@@ -136,7 +137,7 @@ async function handleCallback(
       403,
       errorPage(
         `Access restricted to g.clemson.edu accounts. ` +
-          `You signed in as ${escHtml(email || "(unknown)")}. ` +
+          `You signed in as ${email || "(unknown)"}. ` +
           `Please use your Clemson Google Workspace account (@g.clemson.edu).`,
       ),
     );
@@ -192,7 +193,7 @@ function shell(body: string): string {
 }
 
 function errorPage(msg: string): string {
-  return shell(`<h1>Error</h1><p>${msg}</p>`);
+  return shell(`<h1>Error</h1><p>${escHtml(msg)}</p>`);
 }
 
 function tokenPage(email: string, token: string): string {

@@ -25,28 +25,28 @@
     1. Edit this file: replace REPO_PATH with the absolute path to your
        local repo, NPM_PATH with the absolute path to your npm binary
        (run `which npm`), and HOME_PATH with $HOME.
-    2. cp launchd/com.cuassistant.mcp-curriculum-http.plist ~/Library/LaunchAgents/
-    3. launchctl load ~/Library/LaunchAgents/com.cuassistant.mcp-curriculum-http.plist
-    4. (optional) launchctl start com.cuassistant.mcp-curriculum-http  # bring up now
-    5. tail -f ~/Library/Logs/cuassistant.mcp-curriculum.out.log
+    2. cp launchd/com.cuassistant.mcp-catalog-http.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.cuassistant.mcp-catalog-http.plist
+    4. (optional) launchctl start com.cuassistant.mcp-catalog-http  # bring up now
+    5. tail -f ~/Library/Logs/cuassistant.mcp-catalog.out.log
 
   The service starts automatically at login and is kept alive by launchd.
-  MCP_CURRICULUM_HTTP_PORT defaults to 8767 if not set in the environment.
+  MCP_CATALOG_HTTP_PORT defaults to 8767 if not set in the environment.
 
   To unload:
-    launchctl unload ~/Library/LaunchAgents/com.cuassistant.mcp-curriculum-http.plist
+    launchctl unload ~/Library/LaunchAgents/com.cuassistant.mcp-catalog-http.plist
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.cuassistant.mcp-curriculum-http</string>
+  <string>com.cuassistant.mcp-catalog-http</string>
 
   <key>ProgramArguments</key>
   <array>
     <string>NPM_PATH</string>
     <string>run</string>
-    <string>mcp:curriculum:http</string>
+    <string>mcp:catalog:http</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -67,8 +67,8 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>HOME_PATH/Library/Logs/cuassistant.mcp-curriculum.out.log</string>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp-catalog.out.log</string>
   <key>StandardErrorPath</key>
-  <string>HOME_PATH/Library/Logs/cuassistant.mcp-curriculum.err.log</string>
+  <string>HOME_PATH/Library/Logs/cuassistant.mcp-catalog.err.log</string>
 </dict>
 </plist>

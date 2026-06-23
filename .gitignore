@@ -22,3 +22,5 @@ config/*.local.yaml
 
 # Generated review attachments
 docs/*.pdf
+.env.bak
+scripts/mcp-public-bridge.mjs

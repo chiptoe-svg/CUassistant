@@ -156,8 +156,14 @@ You have CUassistant MCP tools across two servers:
 
 Credentialed (`cuassistant-credentialed__*`) — the user's MS365 assistant:
 
-- _Mail (read)_: `list-mail-messages`, `get-mail-message`, `list-mail-folders`
-  (folder/label destinations; `account` = `ms365` or `g.clemson`).
+- _Mail (read)_: `list-mail-messages`, `get-mail-message` (`{id, account}` —
+  returns subject, body, hasAttachments flag, and `attachments: [{id, name,
+  contentType, size}]`; `account` = `ms365` (default) or `g.clemson`),
+  `get-mail-attachment` (`{messageId, attachmentId, account}` — returns
+  contentBytes in standard base64; for `g.clemson` name/contentType come from
+  the `get-mail-message` attachments array, not this call),
+  `list-mail-folders` (folder/label destinations; `account` = `ms365` or
+  `g.clemson`).
 - _Mail (write)_: `move-mail-message` (`{account, id, destination}` where
   `destination` is a folder/label path under the allowed subtree, e.g.
   `sorted/Newsletters`; works for both `ms365` and `g.clemson`),
@@ -233,7 +239,7 @@ primary-calendar-only) and the send-gate still apply. Recommended posture for
 this operator (autonomous reversible actions; sends gated out-of-band):
 
 - **Allowlist** all reads (`list-*`, `get-*`, `search-*`, `find-*`,
-  `get_scan_status`, `get_pending_actions`) **and** the reversible writes
+  `get_scan_status`, `get_pending_actions`, `get-mail-attachment`) **and** the reversible writes
   (`move-mail-message`, `update-mail-message`, `create-draft-email`,
   `create-calendar-event`, `update-calendar-event`, the `*todo*` writes).
 - **Sends** (`send-outlook-mail`, `send-gmail`): allowlisting is optional —

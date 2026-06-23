@@ -10,6 +10,10 @@ import {
   getMailMessageBody,
   getMailAttachment,
 } from "./graph-helpers.js";
+import {
+  getGmailMessage,
+  getGmailAttachment,
+} from "./gmail-folders.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -61,17 +65,22 @@ const getMailMessage: McpToolDefinition = {
   tool: {
     name: "get-mail-message",
     description:
-      "Fetch the body of one Outlook message by id. Read-only. Returns " +
-      "subject, body (HTML or text), hasAttachments flag, and an attachments " +
-      "array with {id, name, contentType, size} for each attachment. To fetch " +
-      "attachment content (base64), use get-mail-attachment with the message " +
-      "id and attachment id.",
+      "Fetch the body of one email message by id. Read-only. Returns subject, " +
+      "body (HTML or text), hasAttachments flag, and an attachments array with " +
+      "{id, name, contentType, size} for each attachment. To fetch attachment " +
+      "bytes (base64), use get-mail-attachment. account is 'ms365' (Outlook, " +
+      "default) or 'g.clemson' (Gmail via gws).",
     inputSchema: {
       type: "object" as const,
       properties: {
         id: {
           type: "string",
-          description: "The Outlook message id.",
+          description: "The message id.",
+        },
+        account: {
+          type: "string",
+          enum: ["ms365", "g.clemson"],
+          description: "Mail account. Default: 'ms365'.",
         },
       },
       required: ["id"],
@@ -85,6 +94,17 @@ const getMailMessage: McpToolDefinition = {
     }
     const id = args.id as string | undefined;
     if (!id) return err("id is required");
+    const account = (args.account as string | undefined) ?? "ms365";
+    if (account === "g.clemson") {
+      const message = getGmailMessage(id);
+      if (message === null) {
+        return err(
+          `gws failed to fetch Gmail message "${id}" — gws may be unavailable ` +
+            "or Google auth has expired.",
+        );
+      }
+      return okJson(message);
+    }
     const message = await getMailMessageBody(id);
     if (message === null) {
       return err(`Graph returned no message for id "${id}".`);
@@ -98,19 +118,26 @@ const getMailAttachmentTool: McpToolDefinition = {
   tool: {
     name: "get-mail-attachment",
     description:
-      "Download one Outlook email attachment by message id and attachment id. " +
-      "Returns {id, name, contentType, size, contentBytes} where contentBytes " +
-      "is base64-encoded. Get attachment ids from get-mail-message.",
+      "Download one email attachment by message id and attachment id. Returns " +
+      "contentBytes (standard base64). For ms365 also returns {id, name, " +
+      "contentType, size}; for g.clemson name/contentType are not returned by " +
+      "the Gmail API — read them from get-mail-message's attachments array. " +
+      "account is 'ms365' (Outlook, default) or 'g.clemson' (Gmail via gws).",
     inputSchema: {
       type: "object" as const,
       properties: {
         messageId: {
           type: "string",
-          description: "The Outlook message id.",
+          description: "The message id.",
         },
         attachmentId: {
           type: "string",
           description: "The attachment id (from get-mail-message attachments array).",
+        },
+        account: {
+          type: "string",
+          enum: ["ms365", "g.clemson"],
+          description: "Mail account. Default: 'ms365'.",
         },
       },
       required: ["messageId", "attachmentId"],
@@ -126,9 +153,22 @@ const getMailAttachmentTool: McpToolDefinition = {
     const attachmentId = args.attachmentId as string | undefined;
     if (!messageId) return err("messageId is required");
     if (!attachmentId) return err("attachmentId is required");
+    const account = (args.account as string | undefined) ?? "ms365";
+    if (account === "g.clemson") {
+      const attachment = getGmailAttachment(messageId, attachmentId);
+      if (attachment === null) {
+        return err(
+          `gws failed to fetch Gmail attachment "${attachmentId}" on message ` +
+            `"${messageId}" — gws may be unavailable or Google auth has expired.`,
+        );
+      }
+      return okJson(attachment);
+    }
     const attachment = await getMailAttachment(messageId, attachmentId);
     if (attachment === null) {
-      return err(`Graph returned no attachment "${attachmentId}" on message "${messageId}".`);
+      return err(
+        `Graph returned no attachment "${attachmentId}" on message "${messageId}".`,
+      );
     }
     return okJson(attachment);
   },

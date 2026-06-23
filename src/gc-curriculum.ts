@@ -39,3 +39,28 @@ export async function getGcProgramPlan(
   const out = await run(["program-plan", "--year", year, "--name", name]);
   return JSON.parse(out);
 }
+
+export async function getGcRequirementRules(
+  year: string,
+  name: string,
+  run: QueryRunner = defaultRunner,
+): Promise<unknown> {
+  const out = await run(["req-rules", "--year", year, "--name", name]);
+  return JSON.parse(out);
+}
+
+export async function getGcGenEd(
+  year: string,
+  run: QueryRunner = defaultRunner,
+): Promise<unknown> {
+  const out = await run(["gen-ed", "--year", year]);
+  return JSON.parse(out);
+}
+
+export async function getGcCourse(
+  code: string,
+  run: QueryRunner = defaultRunner,
+): Promise<unknown> {
+  const out = await run(["course", "--code", code]);
+  return JSON.parse(out);
+}

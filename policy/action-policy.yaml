@@ -331,6 +331,30 @@ actions:
     constraints:
       - public_data_only
 
+  - id: clemson.gc_requirement_rules
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
+  - id: clemson.gc_gen_ed
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
+  - id: clemson.gc_course
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
   # --- Google Sheets / Docs (gws — Clemson Google Workspace) ---
   # READ any file and APPEND to any file (additive). The one write that can
   # overwrite existing data — update-sheet-range (cell overwrite) — is restricted

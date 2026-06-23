@@ -1,18 +1,18 @@
 ---
 name: add-cuassistant
-description: Install CUassistant's MCP servers into a NanoClaw v2 agent group. Registers the host-side credentialed server (MS365 mail/calendar/tasks + send-via-approval-gate) over HTTP on :8765 and the public Clemson class-schedule server over HTTP on :8766, so the agent gains tools mangled as `cuassistant-credentialed__*` and `cuassistant-public__*`. Use when the user asks to install, add, wire, or enable CUassistant in NanoClaw.
+description: Install CUassistant's MCP servers into a NanoClaw v2 agent group. Registers the host-side credentialed server (MS365 mail/calendar/tasks + send-via-approval-gate) on :8765, the public Clemson class-schedule server on :8766, and the public GC catalog server (degree plans + graduation rules, via gc_advisor) on :8767. Agent gains tools mangled as `cuassistant-credentialed__*`, `cuassistant-public__*`, and `cuassistant-catalog__*`. Use when the user asks to install, add, wire, or enable CUassistant in NanoClaw.
 ---
 
 # /add-cuassistant
 
-Install CUassistant's two MCP servers into a NanoClaw v2 agent group. This is a
+Install CUassistant's three MCP servers into a NanoClaw v2 agent group. This is a
 v2-style install skill: small trunk, skill-installed extras — the NanoClaw trunk
 stays empty of CUassistant code; this skill registers already-running /
 spawnable MCP servers with the agent group.
 
 ## What this installs
 
-Two servers, split by security class. The credential never enters the container.
+Three servers, split by security class. Credentials never enter the container.
 
 - **`cuassistant-credentialed`** — registered as an **HTTP** server pointing at
   the host. Holds the MS365 token (and Gmail via `gws`); runs as a host
@@ -28,6 +28,12 @@ Two servers, split by security class. The credential never enters the container.
   because NanoClaw's Bun container has no host path, no CUassistant repo, and no
   node/tsx — so this server is served over loopback HTTP just like the
   credentialed one.
+- **`cuassistant-catalog`** — registered as an **HTTP** server pointing at the
+  host (`host.docker.internal:8767`). No credentials; public GC catalog data
+  (degree plans, graduation requirements, program rules) via the `gc_advisor`
+  project. Exposes `list-gc-catalog-years` and `get-gc-program-plan`. Must not be
+  confused with the `curriculum_developer` faculty tool — this server is
+  read-only catalog/rules data, not course-content management.
 
 NanoClaw name-mangles tools as `<serverName>__<tool>`, e.g.
 `cuassistant-credentialed__send-outlook-mail`,
@@ -41,13 +47,17 @@ Full tool inventory (exposed + the policy-gated-not-exposed set):
 1. **CUassistant is checked out and `npm install` has been run.** The repo path
    must be known. If `$CUASSISTANT_REPO` is not set in the user's shell, ask for
    the absolute path before proceeding — do not guess.
-2. **Both host MCP servers are running over HTTP.**
+2. **All three host MCP servers are running over HTTP.**
    - `npm run mcp:http` (credentialed, binds `127.0.0.1:${MCP_HTTP_PORT:-8765}`)
      — or the launchd service `launchd/com.cuassistant.mcp-http.plist`.
    - `npm run mcp:public:http` (public, binds
      `127.0.0.1:${MCP_PUBLIC_HTTP_PORT:-8766}`) — or the launchd service
      `launchd/com.cuassistant.mcp-public-http.plist`.
-     Confirm both are up before wiring the container.
+   - `npm run mcp:catalog:http` (catalog, binds `127.0.0.1:8767`) — or the
+     launchd service `launchd/com.cuassistant.mcp-catalog-http.plist`. Requires
+     the `gc_advisor` project to be checked out at
+     `/Users/admin/projects/gc_advisor` (or `GC_ADVISOR_*` env overrides set).
+     Confirm all three are up before wiring the container.
 3. **`MS365_REFRESH_TOKEN` is present in `$CUASSISTANT_REPO/.env`** (or
    vault-injected on the host). Without it the credentialed Graph tools cannot
    reach Microsoft 365.
@@ -118,7 +128,23 @@ service) before the container connects. Stdio (`npm run mcp:public`) is retained
 for local/dev use only; it cannot work inside the container because the Bun image
 has no host path, no CUassistant repo, and no node/tsx.
 
-### 3. Inject agent docs
+### 3. Register `cuassistant-catalog` (HTTP)
+
+```
+add_mcp_server({
+  name: "cuassistant-catalog",
+  url: "http://host.docker.internal:8767/"
+})
+```
+
+No `headers` block — open/loopback, public GC catalog data. The host must be
+running `npm run mcp:catalog:http` (or the `com.cuassistant.mcp-catalog-http.plist`
+launchd service) before the container connects. This server bridges to the
+`gc_advisor` project's `query.py` — if `gc_advisor` is not on the same machine,
+set `GC_ADVISOR_PYTHON`, `GC_ADVISOR_QUERY`, and `GC_ADVISOR_DB` in the host
+environment before starting the server.
+
+### 4. Inject agent docs  <!-- was step 3 -->
 
 Append the section below to the agent group's `CLAUDE.md` so the model knows the
 tool surface. Tools are name-mangled `<serverName>__<tool>`.
@@ -163,6 +189,23 @@ Public (`cuassistant-public__*`) — Clemson class schedule (public Banner data)
 - `list-clemson-terms`, `search-clemson-classes`,
   `get-clemson-section-details`, `find-clemson-instructor-classes`,
   `get-clemson-room-availability`.
+- Results include `snapshotDate` (when the daily snapshot was taken) and
+  `scope` (`"snapshot"` or `"live"`). Pass `refresh:true` to force a live
+  Banner query when up-to-the-minute seat counts matter; otherwise the
+  snapshot is used automatically (faster, no Banner load).
+
+Catalog (`cuassistant-catalog__*`) — GC degree plans + graduation rules (public):
+
+- `list-gc-catalog-years` — lists available catalog years, e.g. `["2026-2027", …]`.
+  Call this first to get a valid year string.
+- `get-gc-program-plan` — full semester-by-semester degree plan for a program
+  in a given catalog year: required courses, choice sets (one-of), requirement
+  slots, per-term and total credits, footnotes. Args: `year` (required, from
+  `list-gc-catalog-years`), `name` (default `"Graphic Communications, BS"`).
+
+**Note:** `cuassistant-catalog` is degree-plan/graduation-rules data from
+`gc_advisor`. It is NOT the `curriculum_developer` faculty tool (which manages
+course content and learning outcomes — a separate system).
 
 **Capability scopes (optional token narrowing).** A token may be limited to a set
 of surface scopes; out-of-scope tools are hidden from the agent entirely. Tokens:
@@ -182,7 +225,7 @@ Some destructive tools (task/event delete, RSVP, trigger_scan) are gated at the
 policy boundary and not exposed.
 ```
 
-### 4. Allowlist policy
+### 5. Allowlist policy
 
 Allowlisting only removes NanoClaw's in-band prompt — CUassistant's own policy
 constraints (own-mailbox, subtree-only moves, metadata-only updates, draft-only,
@@ -203,7 +246,7 @@ this operator (autonomous reversible actions; sends gated out-of-band):
 
 Run `/fewer-permission-prompts` to apply.
 
-### 5. Apply
+### 6. Apply
 
 After the two `add_mcp_server` calls and the CLAUDE.md edit are in place,
 request a rebuild so the per-group container picks up the new config:
@@ -216,7 +259,7 @@ request_rebuild({ reason: "wire CUassistant MCP servers" })
 restart is needed. `request_rebuild` is the unified term; the host decides
 whether a rebuild or a plain restart applies.)
 
-### 6. Smoke test
+### 7. Smoke test
 
 After the container restarts, verify each server with a read tool that has no
 side effects:
@@ -224,15 +267,19 @@ side effects:
 ```
 cuassistant-public__list-clemson-terms()
 cuassistant-credentialed__list-todo-task-lists()
+cuassistant-catalog__list-gc-catalog-years()
 ```
 
-The public call needs no credential but does require the host `mcp:public:http` process to be running. The credentialed call
-exercises the HTTP reach to the host server, this agent's bearer token, and the
-MS365 token. If the credentialed call returns an auth error (401), confirm the
-host server is running (`npm run mcp:http`), that you minted a token for this
-agent (`npm run mcp:consumers -- --list`), and that `CUASSISTANT_MCP_TOKEN`
-resolves in the container to that token. If it returns an empty list, the MS365
-token may be missing or expired in the host `.env`.
+The public and catalog calls need no credential but do require the respective
+host HTTP processes to be running. The credentialed call exercises the HTTP reach
+to the host server, this agent's bearer token, and the MS365 token. If the
+credentialed call returns an auth error (401), confirm the host server is running
+(`npm run mcp:http`), that you minted a token for this agent
+(`npm run mcp:consumers -- --list`), and that `CUASSISTANT_MCP_TOKEN` resolves in
+the container to that token. If it returns an empty list, the MS365 token may be
+missing or expired in the host `.env`. If the catalog call fails, confirm
+`npm run mcp:catalog:http` is running and that `gc_advisor` is present at
+`/Users/admin/projects/gc_advisor` (or `GC_ADVISOR_*` overrides are set).
 
 ## What this skill does **not** do
 

@@ -4,7 +4,9 @@ Implements Tasks 1–4 of the plan at
 `nanoclaw_personal/docs/superpowers/plans/2026-06-28-email-triage-cuagent-pattern.md`.
 Task 5 (Linda's `email-taskfinder` SKILL.md, in the nanoclaw repo) is out of scope here.
 
-**Nothing has been committed.** All changes are in the working tree for human review.
+**Committed:** `cb5e7ef` — includes security fixes 2 & 3 below.
+**MCP service restarted:** `com.cuassistant.mcp-http` reloaded via launchctl.
+**Linda's consumer provisioned:** see "Consumer provisioning" section below.
 
 ## What was added
 
@@ -74,6 +76,55 @@ Optional: `advance_watermark` (default true), `failed_candidates[]` (each
 Always releases the lock; watermark advance is suppressed when `dry_run` or
 `advance_watermark: false`.
 
+## Security fixes applied before commit
+
+### Fix 2 — `model_used` was hardcoded `"linda/openai"` in `decisions.jsonl`
+
+`logTriageDecisionHandler` had `model_used: "linda/openai"` as a literal string,
+giving false assurance in the audit log regardless of which authenticated consumer
+actually made the call. Fixed by:
+
+- Extending `auditContext` (ALS in `audit.ts`) to carry `provider?: string`
+  alongside `consumerId`.
+- Threading `principal.provider` into the `auditContext.run()` call in `buildServer`
+  (`server.ts`).
+- Adding `currentProvider()` export to `audit.ts`; `logTriageDecisionHandler` now
+  calls it instead of the hardcoded string. Falls back to `"unknown"` when called
+  outside an ALS context (e.g. unit tests).
+
+### Fix 3 — `log_triage_decision` didn't validate `email_id` against scan candidates
+
+The tool only checked that `scan_run_id` matched the active scan — it accepted any
+`email_id`, allowing spurious entries in the append-only `decisions.jsonl`. Fixed
+by adding a lookup of `email_id + account` against `activeScan.candidates` before
+writing (matching the pattern `complete_scan` already used for `failed_candidates`).
+
+Test updated: the fixture `candidates: []` was populated with the test candidate,
+and `model_used` assertion changed from `"linda/openai"` to `"unknown"` (no ALS
+context in unit tests).
+
+## Consumer provisioning
+
+Linda's MCP consumer was created on 2026-06-28:
+
+```
+ID:       linda
+Provider: openai_api
+Scope:    host:triage, mail:read, tasks:write
+Note:     Linda email-triage agent
+```
+
+Token was printed once during `npm run mcp:pair`. Inject it into Linda's container
+env as `CUASSISTANT_MCP_TOKEN` via the OneCLI vault. The token hash is stored in
+`state/mcp-consumers.json`; revoke with
+`npm run mcp:consumers -- --revoke linda` if needed.
+
+Linda's visible tool set with this scope:
+- `host:triage` → `get_triage_candidates`, `log_triage_decision`, `complete_scan`
+- `mail:read` → `list-mail-messages`, `get-mail-message`, `get-mail-attachment`,
+  `list-mail-folders`
+- `tasks:write` → `create-todo-task`, `update-todo-task` (+ the read-only task tools)
+
 ## Deviations from the plan
 
 1. **Test fixture fix (`routeEmails` test).** The plan's fixture used
@@ -119,40 +170,19 @@ matchers, loaders, state helpers, and types — all present with matching signat
 - `test/mcp-email-triage-state.test.ts` (new) — handler/state tests
 - `docs/email-triage-handoff.md` (new) — this file
 
-## Remaining manual steps (for the human)
+## Remaining steps
 
-1. **Import wiring** — already done (`src/mcp-tools/index.ts` imports
-   `./email-triage.js`). No further wiring needed.
+1. **Inject Linda's token** into her container env as `CUASSISTANT_MCP_TOKEN` via
+   the OneCLI vault (token was printed once during pairing above — store it now if
+   not already done).
 
-2. **Restart the CUassistant service** so the running MCP server picks up the new
-   tools. Was intentionally NOT done here. Build first, then restart however the
-   service is managed (launchd / pm2 / node), e.g.:
+2. **Register the MCP server for Linda's agent group** in NanoClaw:
    ```bash
-   cd /Users/admin/projects/CUassistant && npm run build && \
-     launchctl kickstart -k "gui/$(id -u)/<cuassistant-launchd-label>"
+   ncl groups config add-mcp-server --id linda \
+     --name cuassistant-credentialed \
+     --url http://host.docker.internal:8765/ \
+     --headers '{"Authorization":"Bearer ${CUASSISTANT_MCP_TOKEN}"}'
    ```
 
-3. **Grant Linda's MCP consumer the `host:triage` scope.** The three tools are
-   only visible to a consumer whose scope set includes `host:triage`. Either pair
-   a fresh token with the scope, or attest an existing consumer to add it:
-   ```bash
-   # New token (printed ONCE — copy into Linda's container env):
-   npm run mcp:pair -- --id <linda-agent-id> --provider <provider> \
-     --scope host:triage[,host:read,mail:read,tasks:write,...]
-
-   # Or add the scope to an existing consumer in place (token unchanged):
-   npm run mcp:consumers -- --attest <linda-agent-id> --provider <provider> \
-     --scope host:triage[,...existing scopes...]
-   ```
-   Note: `--scope` REPLACES the consumer's scope set, so include all scopes Linda
-   needs (she also needs `mail:read` for `get-mail-message` and `tasks:write` for
-   `create-todo-task`). `--provider` must be an authorized backend in
-   `policy/action-policy.yaml` (`data_egress.agent_backends`). `npm run mcp:consumers -- --list`
-   shows current consumers and scopes.
-
-4. **Install Linda's `email-taskfinder` skill** (Task 5, separate nanoclaw repo) —
+3. **Install Linda's `email-taskfinder` skill** (Task 5, separate nanoclaw repo) —
    not part of this work.
-
-## Nothing was committed
-
-All changes are unstaged/staged in the working tree only. Review and commit yourself.

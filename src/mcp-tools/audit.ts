@@ -11,8 +11,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { appendDecision } from "../state.js";
 
-/** Request-scoped store for the authenticated consumer id (set in buildServer). */
-export const auditContext = new AsyncLocalStorage<{ consumerId: string }>();
+/** Request-scoped store for the authenticated consumer id and provider (set in buildServer). */
+export const auditContext = new AsyncLocalStorage<{
+  consumerId: string;
+  provider?: string;
+}>();
 
 /** Attach the current ALS consumer id (or null) to an audit row. */
 export function withConsumer(
@@ -22,6 +25,11 @@ export function withConsumer(
     ...row,
     mcp_consumer_id: auditContext.getStore()?.consumerId ?? null,
   };
+}
+
+/** The authenticated consumer's declared provider for the current request, or null. */
+export function currentProvider(): string | null {
+  return auditContext.getStore()?.provider ?? null;
 }
 
 export interface McpAuditContext {

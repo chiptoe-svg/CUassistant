@@ -185,6 +185,21 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "host.get_pending_actions",
   },
+  "host.get_triage_candidates": {
+    backend: "host-scan",
+    status: "active",
+    policyActionId: "host.get_triage_candidates",
+  },
+  "host.log_triage_decision": {
+    backend: "host-state",
+    status: "active",
+    policyActionId: "host.log_triage_decision",
+  },
+  "host.complete_scan": {
+    backend: "host-scan",
+    status: "active",
+    policyActionId: "host.complete_scan",
+  },
   "mail.send_with_approval": {
     backend: "host-state",
     status: "active",
@@ -610,6 +625,11 @@ export const SCOPE_OPERATIONS: Record<string, string[]> = {
   ],
   // host.trigger_scan is human_required -> not exposed -> intentionally absent.
   "host:read": ["host.get_scan_status", "host.get_pending_actions"],
+  "host:triage": [
+    "host.get_triage_candidates",
+    "host.log_triage_decision",
+    "host.complete_scan",
+  ],
 };
 
 /** Whether `token` is a recognized scope token. */

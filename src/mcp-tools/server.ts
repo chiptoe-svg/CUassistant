@@ -215,7 +215,10 @@ function buildServer(name: string, principal?: Principal): Server {
         isError: true,
       };
     }
-    return auditContext.run({ consumerId }, () => tool.handler(args ?? {}));
+    return auditContext.run(
+      { consumerId, provider: principal?.provider },
+      () => tool.handler(args ?? {}),
+    );
   });
   return server;
 }

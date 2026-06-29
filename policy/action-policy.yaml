@@ -173,6 +173,30 @@ actions:
     constraints:
       - local_state_only
 
+  - id: host.get_triage_candidates
+    surface: host_scan
+    risk: low_medium
+    reversibility: creates_downstream_tasks_via_agent
+    approval: none
+    constraints:
+      - local_state_only
+
+  - id: host.log_triage_decision
+    surface: host_state
+    risk: low
+    reversibility: reversible
+    approval: none
+    constraints:
+      - local_state_only
+
+  - id: host.complete_scan
+    surface: host_scan
+    risk: low_medium
+    reversibility: creates_downstream_tasks_via_agent
+    approval: none
+    constraints:
+      - local_state_only
+
   - id: calendar.create_personal_event
     surface: calendar
     risk: low_medium

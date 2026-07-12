@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import {
   GC_ADVISOR_PYTHON,
   GC_ADVISOR_QUERY,
+  GC_ADVISOR_AUDIT,
   GC_ADVISOR_DB,
 } from "./config.js";
 
@@ -23,6 +24,25 @@ const defaultRunner: QueryRunner = async (args) => {
   );
   return stdout;
 };
+
+/** Runs the audit CLI with JSON piped to stdin (payloads are too large for argv). */
+function runAuditWithStdin(stdin: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      GC_ADVISOR_PYTHON,
+      [GC_ADVISOR_AUDIT, "--db", GC_ADVISOR_DB],
+      { maxBuffer: 8 * 1024 * 1024, timeout: 30_000 },
+      (err, stdout) => (err ? reject(err) : resolve(stdout)),
+    );
+    child.stdin?.write(stdin);
+    child.stdin?.end();
+  });
+}
+
+export async function auditGcProgress(progress: unknown): Promise<unknown> {
+  const out = await runAuditWithStdin(JSON.stringify(progress));
+  return JSON.parse(out);
+}
 
 export async function listGcCatalogYears(
   run: QueryRunner = defaultRunner,

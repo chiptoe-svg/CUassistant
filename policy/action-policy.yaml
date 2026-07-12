@@ -387,6 +387,19 @@ actions:
     constraints:
       - public_data_only
 
+  # Deterministic degree audit on a sanitized gc-progress-v1 record.
+  # Input is sanitized-by-construction: course codes + terms + credits only;
+  # no grades, no student identity, no FERPA content. Runs on-host (execFile
+  # to audit.py in gc_advisor), no external network call. Treated as external_read
+  # because it consumes catalog data via the gc_advisor DB.
+  - id: clemson.gc_audit_progress
+    surface: external_read
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - public_data_only
+
   # --- Google Sheets / Docs (gws — Clemson Google Workspace) ---
   # READ any file and APPEND to any file (additive). The one write that can
   # overwrite existing data — update-sheet-range (cell overwrite) — is restricted

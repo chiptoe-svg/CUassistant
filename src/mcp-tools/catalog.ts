@@ -1,6 +1,6 @@
 // Public GC curriculum tools — backed by the gc_advisor project's query.py CLI
 // (see src/gc-curriculum.ts). Read-only, public catalog data, no credentials.
-import { getGcProgramPlan, listGcCatalogYears, getGcRequirementRules, getGcGenEd, getGcCourse } from "../gc-curriculum.js";
+import { getGcProgramPlan, listGcCatalogYears, getGcRequirementRules, getGcGenEd, getGcCourse, auditGcProgress } from "../gc-curriculum.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -207,4 +207,42 @@ export const course: McpToolDefinition = {
   },
 };
 
-registerTools([catalogYears, programPlan, requirementRules, genEd, course]);
+export const auditProgress: McpToolDefinition = {
+  operation: "clemson.gc_audit_progress",
+  tool: {
+    name: "audit-gc-progress",
+    description:
+      "Run a deterministic GC BS degree audit on a sanitized gc-progress-v1 " +
+      "record (passed course codes + terms + credits, in-progress, declared " +
+      "minor — NO grades or identity; produced by the GC Advisor clean flow). " +
+      "Returns requirements met/remaining, gen-ed progress, credits left, and " +
+      "prereq-eligible next courses. Use the results to advise; never compute " +
+      "the audit yourself.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        progress: {
+          type: "object",
+          description: "gc-progress-v1 JSON object (from the GC Advisor page's cleaned output).",
+        },
+      },
+      required: ["progress"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("clemson.gc_audit_progress");
+    } catch (e) {
+      return permissionErr(e);
+    }
+    if (!args.progress || typeof args.progress !== "object")
+      return err("progress (gc-progress-v1 object) is required");
+    try {
+      return okJson(await auditGcProgress(args.progress));
+    } catch (e) {
+      return err(`GC audit failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  },
+};
+
+registerTools([catalogYears, programPlan, requirementRules, genEd, course, auditProgress]);

@@ -125,6 +125,9 @@ export const GC_ADVISOR_PYTHON =
 export const GC_ADVISOR_QUERY =
   process.env.GC_ADVISOR_QUERY ||
   "/Users/admin/projects/gc_advisor/scripts/query.py";
+export const GC_ADVISOR_AUDIT =
+  process.env.GC_ADVISOR_AUDIT ||
+  "/Users/admin/projects/gc_advisor/scripts/audit.py";
 export const GC_ADVISOR_DB =
   process.env.GC_ADVISOR_DB ||
   "/Users/admin/projects/gc_advisor/db/gc_advisor.db";

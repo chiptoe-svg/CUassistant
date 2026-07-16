@@ -303,6 +303,21 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "clemson.room_availability",
   },
+  "clemson.check_schedule_conflicts": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.check_schedule_conflicts",
+  },
+  "clemson.find_conflict_free_schedule": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.find_conflict_free_schedule",
+  },
+  "clemson.find_eligible_sections": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.find_eligible_sections",
+  },
   "clemson.gc_catalog_years": {
     backend: "external-http",
     status: "active",
@@ -622,12 +637,15 @@ export const SCOPE_OPERATIONS: Record<string, string[]> = {
     "clemson.section_details",
     "clemson.instructor_classes",
     "clemson.room_availability",
+    "clemson.check_schedule_conflicts",
+    "clemson.find_conflict_free_schedule",
     "clemson.gc_catalog_years",
     "clemson.gc_program_plan",
     "clemson.gc_requirement_rules",
     "clemson.gc_gen_ed",
     "clemson.gc_course",
     "clemson.gc_audit_progress",
+    "clemson.find_eligible_sections",
   ],
   // host.trigger_scan is human_required -> not exposed -> intentionally absent.
   "host:read": ["host.get_scan_status", "host.get_pending_actions"],

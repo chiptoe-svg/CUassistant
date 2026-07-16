@@ -557,16 +557,15 @@ async function fetchSectionsPaged(
   return null;
 }
 
-// --- Per-term snapshots (disk) ---
+// --- Per-term snapshots (SQLite) ---
 //
 // A full-term scan is ~20 requests and Banner rate-limits bursts, so the live
 // (registering) terms are scanned once a day by a separate job and written
-// gzip-compressed to state/clemson/<term>.json.gz (JSON-of-records compresses
-// ~20x — repeated keys + low-cardinality values). Queries read the snapshot and
-// stamp results with its date. Reads are memoized in-process keyed by file
-// mtime, so the ~6.5MB term parses once and is reused across requests until the
-// daily job rewrites the file. Snapshots are per term — Banner binds one term
-// per session. Past "(View Only)" terms never change, so they need no refresh.
+// to state/clemson/<term>.db (SQLite, atomic temp-file + rename). Queries open
+// the DB read-only, run SQL with subject/courseNumber/openOnly filters, and
+// stamp results with the DB's fetched_at timestamp. Snapshots are per term —
+// Banner binds one term per session. Past "(View Only)" terms never change,
+// so they need no refresh.
 
 export interface ClemsonTermSnapshot {
   term: string;

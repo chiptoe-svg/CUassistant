@@ -13,8 +13,6 @@
 // A fresh session is opened per search so searches never need an inter-query
 // reset.
 
-import zlib from "zlib";
-
 import { log } from "./log.js";
 import {
   openScheduleDb,
@@ -576,18 +574,6 @@ export interface ClemsonTermSnapshot {
   fetchedAt: string; // ISO 8601
   sectionCount: number;
   sections: ClemsonSection[];
-}
-
-/** Serialize a snapshot to a gzipped JSON buffer. */
-export function serializeSnapshot(snap: ClemsonTermSnapshot): Buffer {
-  return zlib.gzipSync(Buffer.from(JSON.stringify(snap), "utf-8"));
-}
-
-/** Parse a snapshot buffer — gzip (magic 1f 8b) or legacy plain JSON. */
-export function deserializeSnapshot(buf: Buffer): ClemsonTermSnapshot {
-  const isGzip = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
-  const json = (isGzip ? zlib.gunzipSync(buf) : buf).toString("utf-8");
-  return JSON.parse(json) as ClemsonTermSnapshot;
 }
 
 // Scan a term's full section list and persist it. Returns null if the scan did

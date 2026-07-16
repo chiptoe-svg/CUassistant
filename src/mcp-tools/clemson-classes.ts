@@ -114,7 +114,10 @@ const searchClasses: McpToolDefinition = {
       offset: typeof args.offset === "number" ? args.offset : undefined,
       refresh: Boolean(args.refresh),
     });
-    if (result === null) return err("Clemson class search failed.");
+    if (result === null)
+      return err(
+        "Clemson class search unavailable — Banner did not return data after retries. Try again shortly.",
+      );
     return okJson(result);
   },
 };

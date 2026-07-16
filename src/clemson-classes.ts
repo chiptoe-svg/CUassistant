@@ -255,6 +255,12 @@ async function runSearch(
   } catch {
     return null;
   }
+  log.debug("banner searchResults", {
+    term: params.term,
+    subject: params.subject ?? null,
+    httpStatus: r.status,
+    totalCount: data.totalCount ?? 0,
+  });
   return {
     totalCount: data.totalCount ?? 0,
     sections: arr(data.data).map(mapSection),
@@ -295,16 +301,44 @@ export async function searchClemsonClasses(
     const snap = loadClemsonSnapshot(params.term);
     if (snap) return filterFromSnapshot(snap, params);
   }
-  try {
-    const jar = await openSession(params.term);
-    if (!jar) return null;
-    const result = await runSearch(jar, params);
-    if (result === null) return null;
-    return { ...result, snapshotDate: null, scope: "live" };
-  } catch (err) {
-    log.warn("clemson class search failed", { err: String(err) });
-    return null;
+  // No snapshot: fall back to a live Banner query with cold-session retry.
+  // Banner returns totalCount:0 when the term didn't bind to the session
+  // (same cold-session behaviour as fetchSectionsPaged). Retry with a fresh
+  // session rather than returning an empty list the caller might trust as fact.
+  const LIVE_ATTEMPTS = 3;
+  for (let attempt = 0; attempt < LIVE_ATTEMPTS; attempt++) {
+    try {
+      const jar = await openSession(params.term);
+      if (!jar) {
+        await sleep(400);
+        continue;
+      }
+      const result = await runSearch(jar, params);
+      if (result === null) {
+        await sleep(400);
+        continue;
+      }
+      if (result.totalCount === 0 && result.sections.length === 0) {
+        log.warn("clemson search: empty live result — possible cold session", {
+          term: params.term,
+          subject: params.subject ?? null,
+          attempt,
+        });
+        if (attempt < LIVE_ATTEMPTS - 1) {
+          await sleep(400);
+          continue;
+        }
+        // All retries exhausted with 0: return null so the MCP returns an
+        // explicit error rather than an empty list the caller might treat as fact.
+        return null;
+      }
+      return { ...result, snapshotDate: null, scope: "live" };
+    } catch (e) {
+      log.warn("clemson class search failed", { err: String(e) });
+      if (attempt < LIVE_ATTEMPTS - 1) await sleep(400);
+    }
   }
+  return null;
 }
 
 // --- Per-section detail (description, prereqs, coreqs, restrictions, books) ---

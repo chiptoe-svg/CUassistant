@@ -13,12 +13,15 @@
 // A fresh session is opened per search so searches never need an inter-query
 // reset.
 
-import fs from "fs";
-import path from "path";
 import zlib from "zlib";
 
-import { STATE_DIR } from "./config.js";
 import { log } from "./log.js";
+import {
+  openScheduleDb,
+  queryScheduleDb,
+  writeScheduleDb,
+  loadAllSectionsFromDb,
+} from "./clemson-schedule-db.js";
 
 const SSB = "https://regssb.sis.clemson.edu/StudentRegistrationSsb/ssb";
 
@@ -267,39 +270,19 @@ async function runSearch(
   };
 }
 
-function filterFromSnapshot(
-  snap: ClemsonTermSnapshot,
-  params: ClemsonSearchParams,
-): ClemsonSearchResult {
-  let sections = snap.sections;
-  if (params.subject) {
-    const subj = params.subject.toUpperCase();
-    sections = sections.filter((s) => s.subjectCourse.split(" ")[0] === subj);
-  }
-  if (params.courseNumber) {
-    const cn = params.courseNumber;
-    sections = sections.filter((s) => s.subjectCourse.split(" ")[1] === cn);
-  }
-  if (params.openOnly) {
-    sections = sections.filter((s) => s.open);
-  }
-  const totalCount = sections.length;
-  const offset = params.offset ?? 0;
-  const max = Math.min(Math.max(params.max ?? 50, 1), 500);
-  return {
-    totalCount,
-    sections: sections.slice(offset, offset + max),
-    snapshotDate: snap.fetchedAt,
-    scope: "snapshot",
-  };
-}
 
 export async function searchClemsonClasses(
   params: ClemsonSearchParams,
 ): Promise<ClemsonSearchResult | null> {
   if (!params.refresh) {
-    const snap = loadClemsonSnapshot(params.term);
-    if (snap) return filterFromSnapshot(snap, params);
+    const db = openScheduleDb(params.term);
+    if (db) {
+      try {
+        return queryScheduleDb(db, params);
+      } finally {
+        db.close();
+      }
+    }
   }
   // No snapshot: fall back to a live Banner query with cold-session retry.
   // Banner returns totalCount:0 when the term didn't bind to the session
@@ -595,13 +578,6 @@ export interface ClemsonTermSnapshot {
   sections: ClemsonSection[];
 }
 
-function snapshotDir(): string {
-  return path.join(STATE_DIR, "clemson");
-}
-function snapshotPath(term: string): string {
-  return path.join(snapshotDir(), `${term}.json`);
-}
-
 /** Serialize a snapshot to a gzipped JSON buffer. */
 export function serializeSnapshot(snap: ClemsonTermSnapshot): Buffer {
   return zlib.gzipSync(Buffer.from(JSON.stringify(snap), "utf-8"));
@@ -612,51 +588,6 @@ export function deserializeSnapshot(buf: Buffer): ClemsonTermSnapshot {
   const isGzip = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
   const json = (isGzip ? zlib.gunzipSync(buf) : buf).toString("utf-8");
   return JSON.parse(json) as ClemsonTermSnapshot;
-}
-
-// Parsed-snapshot cache, keyed by file path, invalidated by mtime change.
-const snapshotCache = new Map<
-  string,
-  { mtimeMs: number; snap: ClemsonTermSnapshot }
->();
-
-export function loadClemsonSnapshot(term: string): ClemsonTermSnapshot | null {
-  // Prefer the gzipped file; fall back to a legacy uncompressed .json.
-  for (const p of [`${snapshotPath(term)}.gz`, snapshotPath(term)]) {
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(p);
-    } catch {
-      continue; // not this format; try the next
-    }
-    const cached = snapshotCache.get(p);
-    if (cached && cached.mtimeMs === st.mtimeMs) return cached.snap;
-    try {
-      const snap = deserializeSnapshot(fs.readFileSync(p));
-      snapshotCache.set(p, { mtimeMs: st.mtimeMs, snap });
-      return snap;
-    } catch (err) {
-      log.warn("clemson snapshot read failed", { term, err: String(err) });
-      return null;
-    }
-  }
-  return null;
-}
-
-function saveClemsonSnapshot(snap: ClemsonTermSnapshot): void {
-  try {
-    fs.mkdirSync(snapshotDir(), { recursive: true });
-    const p = `${snapshotPath(snap.term)}.gz`;
-    const tmp = `${p}.tmp`;
-    fs.writeFileSync(tmp, serializeSnapshot(snap));
-    fs.renameSync(tmp, p); // atomic: no reader ever sees a partial write
-    snapshotCache.delete(p); // next read re-loads with the fresh mtime
-  } catch (err) {
-    log.warn("clemson snapshot write failed", {
-      term: snap.term,
-      err: String(err),
-    });
-  }
 }
 
 // Scan a term's full section list and persist it. Returns null if the scan did
@@ -675,7 +606,7 @@ export async function refreshClemsonSnapshot(
     sectionCount: fetched.sections.length,
     sections: fetched.sections,
   };
-  saveClemsonSnapshot(snap);
+  writeScheduleDb(snap);
   return snap;
 }
 
@@ -748,14 +679,19 @@ async function getTermSections(
     // refresh failed — fall through to any existing snapshot / live scan.
   }
 
-  const existing = loadClemsonSnapshot(resolved.code);
-  if (existing) {
-    return {
-      ...base,
-      sections: existing.sections,
-      snapshotDate: existing.fetchedAt,
-      scope: "snapshot",
-    };
+  const existingDb = openScheduleDb(resolved.code);
+  if (existingDb) {
+    try {
+      const { sections, meta } = loadAllSectionsFromDb(existingDb, resolved.code);
+      return {
+        ...base,
+        sections,
+        snapshotDate: meta.fetchedAt,
+        scope: "snapshot",
+      };
+    } finally {
+      existingDb.close();
+    }
   }
 
   // Cold: no snapshot on disk.
@@ -783,7 +719,7 @@ async function getTermSections(
       sectionCount: full.sections.length,
       sections: full.sections,
     };
-    saveClemsonSnapshot(snap);
+    writeScheduleDb(snap);
     return {
       ...base,
       sections: full.sections,

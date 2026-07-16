@@ -353,7 +353,7 @@ function buildSections(
           endTime: minsToHHMM(mg.endMin),
           building: mg.building,
           room: mg.room,
-          startDate: null,
+          startDate: null, // not stored in DB — Banner value available on live results only
           endDate: null,
           type: mg.type,
         }))

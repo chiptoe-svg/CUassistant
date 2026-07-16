@@ -2,3 +2,4 @@
 // Public GC curriculum barrel — no credentials. Imported by the
 // cuassistant-catalog entry point (src/mcp-curriculum.ts).
 import "./catalog.js";
+import "./clemson-advising.js";

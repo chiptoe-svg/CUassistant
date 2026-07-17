@@ -200,6 +200,16 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "host.complete_scan",
   },
+  "host.list_skills": {
+    backend: "host-state",
+    status: "active",
+    policyActionId: "host.list_skills",
+  },
+  "host.get_skill_docs": {
+    backend: "host-state",
+    status: "active",
+    policyActionId: "host.get_skill_docs",
+  },
   "mail.send_with_approval": {
     backend: "host-state",
     status: "active",
@@ -648,7 +658,12 @@ export const SCOPE_OPERATIONS: Record<string, string[]> = {
     "clemson.find_eligible_sections",
   ],
   // host.trigger_scan is human_required -> not exposed -> intentionally absent.
-  "host:read": ["host.get_scan_status", "host.get_pending_actions"],
+  "host:read": [
+    "host.get_scan_status",
+    "host.get_pending_actions",
+    "host.list_skills",
+    "host.get_skill_docs",
+  ],
   "host:triage": [
     "host.get_triage_candidates",
     "host.log_triage_decision",

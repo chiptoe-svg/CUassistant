@@ -32,6 +32,17 @@ test("clemson tools pass the policy gate", () => {
   );
 });
 
+test("skill docs tools are exposed and pass the policy gate", () => {
+  assert.equal(isMcpOperationExposed("host.list_skills"), true);
+  assert.equal(isMcpOperationExposed("host.get_skill_docs"), true);
+  assert.doesNotThrow(() => assertMcpOperation("host.list_skills"));
+  assert.doesNotThrow(() =>
+    assertMcpOperation("host.get_skill_docs", {
+      input: { name: "clemson-schedule-advising" },
+    }),
+  );
+});
+
 test("schedule conflict tools pass the policy gate", () => {
   assert.doesNotThrow(() =>
     assertMcpOperation("clemson.check_schedule_conflicts", {

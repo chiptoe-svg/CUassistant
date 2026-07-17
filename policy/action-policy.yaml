@@ -197,6 +197,22 @@ actions:
     constraints:
       - local_state_only
 
+  - id: host.list_skills
+    surface: host_state
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - local_state_only
+
+  - id: host.get_skill_docs
+    surface: host_state
+    risk: low
+    reversibility: read_only
+    approval: none
+    constraints:
+      - local_state_only
+
   - id: calendar.create_personal_event
     surface: calendar
     risk: low_medium

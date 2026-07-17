@@ -3,3 +3,4 @@
 // cuassistant-public entry point (src/mcp-public.ts, created in a later task).
 import "./clemson-classes.js";
 import "./clemson-schedule.js";
+import "./skills.js";

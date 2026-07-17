@@ -23,6 +23,7 @@
     "ms365-login": "tsx scripts/ms365-login.ts",
     "provider-smoke": "tsx scripts/provider-smoke.ts",
     "clemson:refresh": "tsx scripts/clemson-refresh.ts",
+    "clemson:convert": "tsx scripts/clemson-convert-snapshots.ts",
     "audit:verify": "tsx scripts/verify-audit.ts",
     "gws:grant": "tsx scripts/gws-grant.ts",
     "tasks:cleanup-noise": "tsx scripts/cleanup-task-noise.ts",

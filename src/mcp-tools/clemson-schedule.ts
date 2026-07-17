@@ -2,6 +2,7 @@
 // Deterministic schedule-conflict tools backed by the per-term SQLite snapshot.
 import {
   openScheduleDb,
+  getScheduleDbMeta,
   getMeetingsForCrns,
   findConflicts,
   type ConflictPair,
@@ -56,6 +57,7 @@ const checkConflicts: McpToolDefinition = {
       );
       return okJson({
         term,
+        snapshot_date: getScheduleDbMeta(db).fetchedAt,
         crns_checked: crns,
         conflict_free: crns.filter((c) => !conflictingCrns.has(c)),
         conflicts,
@@ -142,6 +144,7 @@ const findConflictFree: McpToolDefinition = {
 
       return okJson({
         term,
+        snapshot_date: getScheduleDbMeta(db).fetchedAt,
         fixed_crns: fixedCrns,
         candidates: results,
         conflict_free: results.filter((r) => r.conflict_free).map((r) => r.crn),

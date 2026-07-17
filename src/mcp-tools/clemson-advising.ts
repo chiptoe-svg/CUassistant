@@ -66,6 +66,13 @@ function minsToHHMM(m: number): string {
   );
 }
 
+// gc_advisor stores course codes with a space ("GC 3010"); Banner's schedule DB
+// stores subject_course spaceless ("GC3010"). Normalize both sides to spaceless
+// upper-case before any cross-source comparison, or every join silently misses.
+function normCode(code: string): string {
+  return code.replace(/\s+/g, "").toUpperCase();
+}
+
 function getLatestProgramId(
   db: Database.Database,
   programName: string,
@@ -120,7 +127,8 @@ function checkPrereqEligible(
   if (!Array.isArray(codes) || codes.length === 0) return true;
   // prereq_parsed is a flat list of codes; ALL must be completed.
   // (Simplification — raw_text may have OR logic; agent can read prereq_text for full rule.)
-  return codes.every((c) => completedCourses.has(c));
+  // completedCourses is already normalized (spaceless upper); normalize each code too.
+  return codes.every((c) => completedCourses.has(normCode(c)));
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +242,7 @@ const findEligibleSections: McpToolDefinition = {
            WHERE term = ? AND subject_course IN (${phs})
            ORDER BY subject_course, section`,
         )
-        .all(term, ...rule.explicit_courses) as SectionRow[];
+        .all(term, ...rule.explicit_courses.map(normCode)) as SectionRow[];
 
       if (sectionRows.length === 0) {
         return okJson({
@@ -264,15 +272,18 @@ const findEligibleSections: McpToolDefinition = {
         )
         .all(term, ...crns) as InstructorRow[];
 
+      // subject_course is spaceless ("GC3010"); catalog.course.code is spaced
+      // ("GC 3010"). Compare space-insensitively and key the map spaceless so the
+      // per-section lookup below (keyed on subject_course) hits.
       const subjectCourses = [...new Set(sectionRows.map((r) => r.subject_course))];
       const scPhs = subjectCourses.map(() => "?").join(",");
       const courseRows = schedDb
         .prepare(
           `SELECT code, prereq_text, prereq_parsed
-           FROM catalog.course WHERE code IN (${scPhs})`,
+           FROM catalog.course WHERE REPLACE(code, ' ', '') IN (${scPhs})`,
         )
         .all(...subjectCourses) as CourseRow[];
-      const courseMap = new Map(courseRows.map((c) => [c.code, c]));
+      const courseMap = new Map(courseRows.map((c) => [normCode(c.code), c]));
 
       type MGroup = {
         startMin: number; endMin: number;
@@ -300,11 +311,11 @@ const findEligibleSections: McpToolDefinition = {
         instMap.get(i.crn)!.push({ name: i.name, email: i.email, primary: i.primary_i === 1 });
       }
 
-      const completedSet = new Set(completedCoursesArr);
+      const completedSet = new Set(completedCoursesArr.map(normCode));
       const meta = getScheduleDbMeta(schedDb);
 
       const sections = sectionRows.map((row) => {
-        const courseInfo = courseMap.get(row.subject_course);
+        const courseInfo = courseMap.get(normCode(row.subject_course));
         const prereqEligible = checkPrereqEligible(
           courseInfo?.prereq_parsed ?? null,
           completedSet,

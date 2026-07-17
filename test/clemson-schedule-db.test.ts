@@ -22,7 +22,10 @@ const SNAP: ClemsonTermSnapshot = {
       term: "202608",
       termDescription: "Fall 2026",
       crn: "80001",
-      subjectCourse: "GC 3010",
+      // Banner stores subject_course spaceless ("GC3010") — fixtures must match
+      // real data, not "GC 3010" (that spaced assumption is exactly what hid the
+      // subject-filter bug).
+      subjectCourse: "GC3010",
       section: "001",
       title: "Graphic Comm Studio",
       campus: "Main",
@@ -45,7 +48,7 @@ const SNAP: ClemsonTermSnapshot = {
       term: "202608",
       termDescription: "Fall 2026",
       crn: "80002",
-      subjectCourse: "GC 3020",
+      subjectCourse: "GC3020",
       section: "001",
       title: "Print Technology",
       campus: "Main",

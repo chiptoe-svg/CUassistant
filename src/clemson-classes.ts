@@ -548,7 +548,9 @@ async function fetchSectionsPaged(
       await sleep(200);
     }
     if (cold || (failed && out.length === 0)) {
-      await sleep(400);
+      // Linear backoff: a cold session often clears on a later try, and backing
+      // off gives Banner room to recover instead of hammering it fresh-session.
+      await sleep(400 * (attempt + 1));
       continue;
     }
     // Partial failure mid-scan: return what we have, marked incomplete.
@@ -582,7 +584,10 @@ export async function refreshClemsonSnapshot(
 ): Promise<ClemsonTermSnapshot | null> {
   const resolved = await resolveTerm(term);
   if (!resolved) return null;
-  const fetched = await fetchSectionsPaged(resolved.code, undefined, undefined);
+  // The daily refresh runs unattended; a cold-session miss leaves the term with
+  // no .db until tomorrow (forcing tools onto the slow live-scan fallback), so
+  // spend more attempts here than an interactive query would.
+  const fetched = await fetchSectionsPaged(resolved.code, undefined, undefined, 8);
   if (fetched === null || !fetched.complete) return null;
   const snap: ClemsonTermSnapshot = {
     term: resolved.code,

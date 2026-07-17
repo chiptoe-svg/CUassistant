@@ -393,13 +393,20 @@ export function queryScheduleDb(
   const conditions: string[] = ["term = ?"];
   const bindings: unknown[] = [params.term];
 
-  if (params.subject) {
+  // subject_course is stored in Banner's spaceless form ("GC1010"), so filters
+  // must match that — not "GC 1010". Subject is anchored to the alpha→digit
+  // boundary via GLOB so "AS" does not also match "ASTR…" (real prefix clashes
+  // exist: AS/ASTR, CH/CHE, ED/EDL, …).
+  const subject = params.subject?.toUpperCase();
+  if (subject && params.courseNumber) {
+    conditions.push("subject_course = ?");
+    bindings.push(`${subject}${params.courseNumber}`);
+  } else if (subject) {
+    conditions.push("subject_course GLOB ?");
+    bindings.push(`${subject}[0-9]*`);
+  } else if (params.courseNumber) {
     conditions.push("subject_course LIKE ?");
-    bindings.push(`${params.subject.toUpperCase()} %`);
-  }
-  if (params.courseNumber) {
-    conditions.push("subject_course LIKE ?");
-    bindings.push(`% ${params.courseNumber}`);
+    bindings.push(`%${params.courseNumber}`);
   }
   if (params.openOnly) conditions.push("open = 1");
 

@@ -194,11 +194,17 @@ Public (`cuassistant-public__*`) — Clemson class schedule (public Banner data)
 
 - `list-clemson-terms`, `search-clemson-classes`,
   `get-clemson-section-details`, `find-clemson-instructor-classes`,
-  `get-clemson-room-availability`.
+  `get-clemson-room-availability`, `check-schedule-conflicts`,
+  `find-conflict-free-schedule`.
 - Results include `snapshotDate` (when the daily snapshot was taken) and
   `scope` (`"snapshot"` or `"live"`). Pass `refresh:true` to force a live
   Banner query when up-to-the-minute seat counts matter; otherwise the
   snapshot is used automatically (faster, no Banner load).
+- `check-schedule-conflicts { term, crns[] }` — given a list of CRNs, returns
+  which pairs time-conflict and a `conflict_free` list of safe CRNs.
+- `find-conflict-free-schedule { term, fixed_crns[], candidate_crns[] }` — finds
+  which candidates can be added to a locked schedule without conflicts; per-
+  candidate conflict detail included.
 
 Catalog (`cuassistant-catalog__*`) — GC degree plans + graduation rules (public):
 
@@ -221,6 +227,18 @@ Catalog edition so agents can attribute the data correctly.
 - `get-gc-course` — title, credits, description, and prerequisites (raw text +
   parsed course codes) for one course. Args: `code` (required, e.g. `"GC 3010"`
   or `"MKTG 3010"`).
+- `get-gc-audit-progress` — deterministic degree audit against a sanitized
+  progress record (course codes + terms + credits, no grades, no identity).
+  Returns satisfied, partial, and open requirement slots. Args:
+  `completed_courses: [{code, term, credits}]`, optional `year`, `program_name`.
+- `find-eligible-sections` — advising join: finds Banner sections in a term that
+  fulfill a specific GC requirement slot AND pass prereq-eligibility for the
+  student. JOINs the per-term Banner snapshot with gc_advisor.db in a single
+  SQL query. Args: `term`, `slot_type` (from `get-gc-requirement-rules`),
+  `completed_courses: string[]`, optional `program_name`. Returns sections with
+  `prereq_eligible`, meeting times, seats, and instructor. **Prereq check is
+  AND-logic only** — OR prereqs may produce false negatives; show `prereq_text`
+  for student to verify.
 
 **Note:** `cuassistant-catalog` is degree-plan/graduation-rules data from
 `gc_advisor`. It is NOT the `curriculum_developer` faculty tool (which manages

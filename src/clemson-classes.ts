@@ -126,24 +126,38 @@ export async function listClemsonTerms(
 }
 
 async function openSession(term: string): Promise<CookieJar | null> {
-  const jar = new CookieJar();
-  // redirect: "manual" is required — the JSESSIONID is set on the 302, and
-  // fetch only exposes Set-Cookie from the response it stops on.
-  const r1 = await fetch(`${SSB}/classSearch/classSearch`, {
-    redirect: "manual",
-  });
-  jar.capture(r1);
-  const r2 = await fetch(`${SSB}/term/search?mode=search`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Cookie: jar.header(),
-    },
-    body: `term=${encodeURIComponent(term)}`,
-    redirect: "manual",
-  });
-  jar.capture(r2);
-  return jar;
+  // The term bind (step 2) sometimes doesn't take on a fresh session, and the
+  // caller then searches an unbound term — indistinguishable from a cold session
+  // (page 0 returns totalCount=0). Retry the bind on a fresh session when it
+  // returns a clear HTTP error, and let a good bind settle before the first
+  // search. Cheap, and never worse than the previous single-shot bind.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const jar = new CookieJar();
+    // redirect: "manual" is required — the JSESSIONID is set on the 302, and
+    // fetch only exposes Set-Cookie from the response it stops on.
+    const r1 = await fetch(`${SSB}/classSearch/classSearch`, {
+      redirect: "manual",
+    });
+    jar.capture(r1);
+    const r2 = await fetch(`${SSB}/term/search?mode=search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: jar.header(),
+      },
+      body: `term=${encodeURIComponent(term)}`,
+      redirect: "manual",
+    });
+    jar.capture(r2);
+    // status < 400 covers the normal 2xx / 3xx (redirect:manual) bind responses;
+    // only a 4xx/5xx is a clear bind failure worth a fresh-session retry.
+    if (r2.status < 400) {
+      await sleep(250); // let the bind settle before the first searchResults call
+      return jar;
+    }
+    await sleep(300 * (attempt + 1));
+  }
+  return null;
 }
 
 const DAY_KEYS: ReadonlyArray<readonly [string, string]> = [

@@ -227,7 +227,7 @@ Catalog edition so agents can attribute the data correctly.
 - `get-gc-course` — title, credits, description, and prerequisites (raw text +
   parsed course codes) for one course. Args: `code` (required, e.g. `"GC 3010"`
   or `"MKTG 3010"`).
-- `get-gc-audit-progress` — deterministic degree audit against a sanitized
+- `audit-gc-progress` — deterministic degree audit against a sanitized
   progress record (course codes + terms + credits, no grades, no identity).
   Returns satisfied, partial, and open requirement slots. Args:
   `completed_courses: [{code, term, credits}]`, optional `year`, `program_name`.

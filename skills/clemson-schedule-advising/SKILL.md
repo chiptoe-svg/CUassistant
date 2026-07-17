@@ -342,7 +342,7 @@ Returns:
 
 ---
 
-### `get-gc-audit-progress`
+### `audit-gc-progress`
 Deterministic degree audit on a sanitized progress record. Returns which
 requirements are satisfied, which are partially complete, and which are open.
 
@@ -466,7 +466,7 @@ course appears in `completed_courses`. See **Known limitations** below.
 ```
 1. list-gc-catalog-years → year
 2. get-gc-program-plan { year } → full plan, identify open slots
-3. get-gc-audit-progress { completed_courses: [...] } → which slots are open
+3. audit-gc-progress { completed_courses: [...] } → which slots are open
 4. get-gc-requirement-rules { year } → for specialty/technical slots: explicit_courses
 5. list-clemson-terms → next term code
 6. find-eligible-sections for each open requirement slot

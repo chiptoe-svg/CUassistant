@@ -74,6 +74,46 @@ whether they hold credentials — not by vendor domain.
   `npm run mcp:public:http` (public, 8766) — or load their respective launchd
   plists.
 
+## Deploying tool or policy changes — RESTART REQUIRED
+
+**The servers load their tool registry and policy ONCE at process start.** They
+run as long-lived launchd daemons (`tsx` against source), so editing the code is
+NOT enough — a running daemon keeps serving the OLD build indefinitely and fails
+**silently** (the new tool just never appears in `tools/list`). This is part of
+shipping ANY new MCP functionality: after the change lands, restart the affected
+service and verify.
+
+Restart maps to what you changed:
+
+| You edited | Affects tools on | Restart this launchd job |
+|---|---|---|
+| `src/mcp-tools/clemson-*.ts`, `skills.ts`, `index-public.ts` | public 8766 | `com.cuassistant.mcp-public-http` |
+| `src/mcp-tools/catalog.ts`, `clemson-advising.ts`, `index-catalog.ts` | catalog 8767 | `com.cuassistant.mcp-catalog-http` |
+| mail/calendar/tasks/gws tools, `index-*.ts` (credentialed) | credentialed 8765 | `com.cuassistant.mcp-http` |
+| `policy/action-policy.yaml`, `permissions.ts` | whichever server serves the op | the matching job(s) above |
+
+Restart (KeepAlive jobs — `kickstart -k` kills and respawns):
+
+```
+launchctl kickstart -k gui/$(id -u)/com.cuassistant.mcp-public-http
+launchctl kickstart -k gui/$(id -u)/com.cuassistant.mcp-catalog-http
+# credentialed: com.cuassistant.mcp-http
+```
+
+The `com.cuassistant.mcp-public-bridge` forwarder (gateway → `127.0.0.1`) is a
+transparent TCP pipe and does **not** need restarting for tool changes.
+
+Verify the new tools are actually live (not just that the process restarted):
+
+```
+# minimal MCP client — lists tools the server currently serves
+node -e 'import("@modelcontextprotocol/sdk/client/index.js").then(async ({Client})=>{const {StreamableHTTPClientTransport}=await import("@modelcontextprotocol/sdk/client/streamableHttp.js");const c=new Client({name:"probe",version:"0"},{capabilities:{}});await c.connect(new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8766/")));console.log((await c.listTools()).tools.map(t=>t.name).sort());await c.close();})'
+```
+
+Point it at `:8767` for catalog / `:8765` for credentialed. Confirm the tool you
+added is in the list. A stale daemon is the first thing to suspect when an agent
+reports a tool "doesn't exist" that you know is committed.
+
 ## Provider attestation + capability scopes
 
 Each credentialed consumer is paired with an attested model-backend **provider**

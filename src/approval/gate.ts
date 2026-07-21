@@ -1,6 +1,7 @@
 import { hashArtifact, externalRecipients } from "./freeze.js";
 import type {
   ApprovalChannel,
+  ApprovalStore,
   AuditSink,
   Clock,
   GateConfig,
@@ -28,6 +29,7 @@ interface Ports {
   clock: Clock;
   idGen: IdGen;
   audit?: AuditSink;
+  store?: ApprovalStore;
 }
 
 const HOUR_MS = 3_600_000;
@@ -39,7 +41,17 @@ export class ApprovalGate {
   constructor(
     private readonly ports: Ports,
     private readonly config: GateConfig,
-  ) {}
+  ) {
+    // Hydrate from the store so a restart doesn't void in-flight approvals.
+    // better-sqlite3 is synchronous, so this is safe in a constructor.
+    for (const req of this.ports.store?.loadAll() ?? []) {
+      this.pending.set(req.request_id, req);
+    }
+    const now = this.ports.clock.now();
+    this.submitTimes = this.ports.store?.loadSubmitTimes(now - HOUR_MS) ?? [];
+    // Anything whose TTL elapsed while the process was down is expired now.
+    this.sweepExpired();
+  }
 
   // The gate posts to the channel and the channel's receiver calls back into
   // the gate — a cycle. Construct the gate with a no-op channel, build the real
@@ -78,7 +90,9 @@ export class ApprovalGate {
       expires_at: now + this.config.ttlMs,
     };
     this.pending.set(request_id, req);
+    this.ports.store?.upsert(req);
     this.submitTimes.push(now);
+    this.ports.store?.recordSubmitTime(now);
     this.ports.audit?.record(req);
 
     const externals = externalRecipients(artifact, this.config.internalDomains);
@@ -87,6 +101,7 @@ export class ApprovalGate {
     } catch (e) {
       req.status = "failed";
       req.error = `notify_failed: ${String(e)}`;
+      this.ports.store?.upsert(req);
       this.ports.audit?.record(req);
       return { request_id, status: "failed" };
     }
@@ -130,6 +145,7 @@ export class ApprovalGate {
       req.status = "failed";
       req.error = String(e);
     }
+    this.ports.store?.upsert(req);
     this.ports.audit?.record(req);
   }
 
@@ -148,6 +164,7 @@ export class ApprovalGate {
     if (!req || req.status !== "pending") return;
     req.status = "rejected";
     if (feedback) req.feedback = feedback;
+    this.ports.store?.upsert(req);
     this.ports.audit?.record(req);
   }
 
@@ -156,6 +173,7 @@ export class ApprovalGate {
     for (const req of this.pending.values()) {
       if (req.status === "pending" && now >= req.expires_at) {
         req.status = "expired";
+        this.ports.store?.upsert(req);
         this.ports.audit?.record(req);
       }
     }

@@ -66,3 +66,20 @@ export interface AuditSink {
   /** Records a security event (e.g. an approval tap from an unauthorized user). */
   recordSecurity?(event: SecurityEvent): void;
 }
+
+/**
+ * Durable backing for gate state. Synchronous by contract: `getStatus()` and
+ * `reject()` are sync, and an async store would change their signatures.
+ */
+export interface ApprovalStore {
+  /** All persisted sends, for hydrating a fresh gate at construction. */
+  loadAll(): PendingSend[];
+  /** Insert or replace one send after any state transition. */
+  upsert(req: PendingSend): void;
+  /** Submit timestamps at or after `sinceMs`, for the hourly rate limiter. */
+  loadSubmitTimes(sinceMs: number): number[];
+  recordSubmitTime(ts: number): void;
+  /** Epoch ms of the last watchdog-triggered exit, or null if never. */
+  getLastWatchdogExit(): number | null;
+  recordWatchdogExit(ts: number): void;
+}

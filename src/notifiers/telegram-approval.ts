@@ -75,6 +75,29 @@ export function shouldWarnReceiverDown(
   );
 }
 
+/**
+ * Emits the RECEIVER DOWN line when warranted and returns the (possibly
+ * updated) lastWarn timestamp. Shared by the transport-failure (catch) path
+ * and the HTTP-failure path so the staleness check isn't duplicated —
+ * neither path updates `lastSuccess` on failure, so this is the only place
+ * that decides whether to shout.
+ */
+export function maybeWarnReceiverDown(
+  now: number,
+  lastSuccess: number,
+  lastWarn: number,
+): number {
+  if (!shouldWarnReceiverDown(now - lastSuccess, now - lastWarn)) {
+    return lastWarn;
+  }
+  const mins = Math.round((now - lastSuccess) / 60_000);
+  process.stderr.write(
+    `[telegram-approval] RECEIVER DOWN for ${mins}m — ` +
+      `approvals cannot be actioned\n`,
+  );
+  return now;
+}
+
 export function formatApprovalMessage(
   req: PendingSend,
   externals: string[],
@@ -192,6 +215,25 @@ async function pollLoop(
         // than wedging the loop. 25s long-poll + 10s slack.
         signal: AbortSignal.timeout(35_000),
       });
+
+      if (!r.ok) {
+        // The fetch layer works — this is an application-level failure (a
+        // revoked/invalid bot token returning 401, for example) that a
+        // restart cannot fix. Do NOT feed consecutiveErrors or the watchdog
+        // with it. It is also not success: leave lastSuccess untouched so
+        // the receiver-down warning can still fire for a silently dead
+        // receiver.
+        process.stderr.write(
+          `[telegram-approval] getUpdates HTTP ${r.status} — not a ` +
+            `transport failure, watchdog state unchanged\n`,
+        );
+        lastWarn = maybeWarnReceiverDown(Date.now(), lastSuccess, lastWarn);
+        await new Promise((res) =>
+          setTimeout(res, nextBackoffMs(consecutiveErrors)),
+        );
+        continue;
+      }
+
       const data = (await r.json()) as {
         result?: Array<{
           update_id: number;
@@ -207,8 +249,8 @@ async function pollLoop(
           };
         }>;
       };
-      // A successful getUpdates means the fetch layer is healthy — clear the
-      // watchdog counter.
+      // A 2xx getUpdates means the fetch layer AND auth are healthy — clear
+      // the watchdog counter.
       consecutiveErrors = 0;
       lastSuccess = Date.now();
       for (const u of data.result ?? []) {
@@ -252,14 +294,7 @@ async function pollLoop(
         `[telegram-approval] poll error (${consecutiveErrors}): ${String(e)}\n`,
       );
 
-      if (shouldWarnReceiverDown(now - lastSuccess, now - lastWarn)) {
-        lastWarn = now;
-        const mins = Math.round((now - lastSuccess) / 60_000);
-        process.stderr.write(
-          `[telegram-approval] RECEIVER DOWN for ${mins}m — ` +
-            `approvals cannot be actioned\n`,
-        );
-      }
+      lastWarn = maybeWarnReceiverDown(now, lastSuccess, lastWarn);
 
       if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
         // Probe OUTSIDE fetch. If this said "unreachable" because fetch is

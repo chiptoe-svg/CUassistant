@@ -7,6 +7,7 @@ import {
   MAX_CONSECUTIVE_POLL_ERRORS,
   RECEIVER_DOWN_WARN_MS,
   WATCHDOG_COOLDOWN_MS,
+  maybeWarnReceiverDown,
   nextBackoffMs,
   shouldRestartAfterPollErrors,
   shouldWarnReceiverDown,
@@ -56,6 +57,68 @@ test("receiver-down warning fires when stale and not recently warned", () => {
   );
   assert.equal(shouldWarnReceiverDown(1_000, 10 * RECEIVER_DOWN_WARN_MS), false);
   assert.equal(shouldWarnReceiverDown(RECEIVER_DOWN_WARN_MS + 1, 1_000), false);
+});
+
+test("maybeWarnReceiverDown fires and advances lastWarn when stale and not recently warned", () => {
+  const lastSuccess = 0;
+  const now = RECEIVER_DOWN_WARN_MS + 1;
+  const lastWarn = 0; // "recent" relative to lastSuccess, but stale relative to now
+  const next = maybeWarnReceiverDown(now, lastSuccess, lastWarn);
+  assert.equal(next, now, "warn fired, so lastWarn advances to now");
+});
+
+test("maybeWarnReceiverDown is a no-op (returns lastWarn unchanged) when gated", () => {
+  const lastSuccess = 0;
+  // Not stale yet.
+  assert.equal(
+    maybeWarnReceiverDown(1_000, lastSuccess, 0),
+    0,
+    "below RECEIVER_DOWN_WARN_MS since lastSuccess — no warn",
+  );
+  // Stale, but we already warned recently.
+  const now = RECEIVER_DOWN_WARN_MS + 1;
+  const lastWarn = now - 1_000;
+  assert.equal(
+    maybeWarnReceiverDown(now, lastSuccess, lastWarn),
+    lastWarn,
+    "warned recently — gated, lastWarn untouched",
+  );
+});
+
+test("an HTTP-level failure (never incrementing consecutiveErrors) can never trigger the watchdog", () => {
+  // This is the crux of the fix: the HTTP-failure path in pollLoop leaves
+  // consecutiveErrors at whatever it was (never increments it), so no
+  // matter how "healthy" the network probe reports or how long since the
+  // last exit, shouldRestartAfterPollErrors must stay false at 0 errors.
+  assert.equal(shouldRestartAfterPollErrors(0, true, null), false);
+  assert.equal(
+    shouldRestartAfterPollErrors(0, true, WATCHDOG_COOLDOWN_MS + 1),
+    false,
+  );
+});
+
+test("HTTP-failure staleness is expressible through shouldWarnReceiverDown: repeated 401s eventually trip RECEIVER DOWN even though consecutiveErrors never moves", () => {
+  // Simulates pollLoop's HTTP-failure branch: lastSuccess is frozen (never
+  // updated on !r.ok) while time passes across repeated auth failures.
+  const lastSuccess = 0;
+  let lastWarn = 0;
+
+  // Shortly after the last real success — not stale yet.
+  assert.equal(shouldWarnReceiverDown(60_000 - lastSuccess, 60_000 - lastWarn), false);
+
+  // Enough silent HTTP failures accumulate that we cross the staleness
+  // threshold: the warning must be able to fire even though this path
+  // never touches consecutiveErrors.
+  const now = RECEIVER_DOWN_WARN_MS + 1;
+  assert.equal(shouldWarnReceiverDown(now - lastSuccess, now - lastWarn), true);
+  lastWarn = now;
+
+  // Immediately after warning, a subsequent 401 must not re-warn.
+  const soonAfter = now + 1_000;
+  assert.equal(
+    shouldWarnReceiverDown(soonAfter - lastSuccess, soonAfter - lastWarn),
+    false,
+  );
 });
 
 test("the watchdog reads its cooldown from the store, surviving restarts", () => {

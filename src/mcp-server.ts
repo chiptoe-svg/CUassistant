@@ -86,7 +86,18 @@ function initApprovalGate(): void {
   }
   const sender = makeSender({ gmail: gwsSend, ms365: ms365Send });
   const noop: ApprovalChannel = { async post() {} };
-  const approvalStore = openApprovalStore(approvalDbPath());
+  const dbPath = approvalDbPath();
+  let approvalStore: ReturnType<typeof openApprovalStore> | undefined;
+  try {
+    approvalStore = openApprovalStore(dbPath);
+  } catch (err) {
+    process.stderr.write(
+      `[cuassistant-mcp] FAILED to open approval store at "${dbPath}": ${String(err)}. ` +
+        "Continuing WITHOUT persistence — approvals will not survive a restart, " +
+        "and the watchdog cooldown will not persist.\n",
+    );
+    approvalStore = undefined;
+  }
   const gate = new ApprovalGate(
     {
       sender,

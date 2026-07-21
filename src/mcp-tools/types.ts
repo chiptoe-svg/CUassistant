@@ -15,9 +15,13 @@ export function ok(text: string): CallToolResult {
   return { content: [{ type: "text" as const, text }] };
 }
 
+// Minified deliberately: tool results are read by models, not humans, and the
+// 2-space indent this used to emit cost ~36% of every response in whitespace.
+// Large results (a 50-section class search) were pushing agent requests over
+// the context limit. Use a JSON formatter if you need to read one by eye.
 export function okJson(data: unknown): CallToolResult {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(data) }],
   };
 }
 

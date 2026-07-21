@@ -431,10 +431,20 @@ function undef<T>(v: T | null): T | undefined {
   return v === null ? undefined : v;
 }
 
+// NOTE: optional fields must be assigned CONDITIONALLY, not written into an
+// object literal as `sent_message_id: undef(...)`. A literal leaves the key
+// present with value `undefined`, which is NOT the same as an absent key:
+// `assert.deepEqual` under node:assert/strict compares own keys, so a
+// round-tripped row would fail against a fixture that omits them. See
+// rowToPendingSend below.
+
 export function openApprovalStore(dbPath: string): ApprovalStore {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  // Closes the launchd restart-overlap window where old and new processes
+  // briefly coexist and both hold the handle.
+  db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA);
 
   const upsertStmt = db.prepare(`
@@ -462,20 +472,29 @@ export function openApprovalStore(dbPath: string): ApprovalStore {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `);
 
+  function rowToPendingSend(r: SendRow): PendingSend {
+    const req: PendingSend = {
+      request_id: r.request_id,
+      artifact: JSON.parse(r.artifact),
+      content_hash: r.content_hash,
+      proposer: r.proposer,
+      status: r.status as SendStatus,
+      created_at: r.created_at,
+      expires_at: r.expires_at,
+    };
+    // Assign only when present, so an absent value stays an absent KEY.
+    const sentMessageId = undef(r.sent_message_id);
+    if (sentMessageId !== undefined) req.sent_message_id = sentMessageId;
+    const error = undef(r.error);
+    if (error !== undefined) req.error = error;
+    const feedback = undef(r.feedback);
+    if (feedback !== undefined) req.feedback = feedback;
+    return req;
+  }
+
   return {
     loadAll(): PendingSend[] {
-      return (allStmt.all() as SendRow[]).map((r) => ({
-        request_id: r.request_id,
-        artifact: JSON.parse(r.artifact),
-        content_hash: r.content_hash,
-        proposer: r.proposer,
-        status: r.status as SendStatus,
-        created_at: r.created_at,
-        expires_at: r.expires_at,
-        sent_message_id: undef(r.sent_message_id),
-        error: undef(r.error),
-        feedback: undef(r.feedback),
-      }));
+      return (allStmt.all() as SendRow[]).map(rowToPendingSend);
     },
     upsert(req: PendingSend): void {
       upsertStmt.run({
@@ -1113,3 +1132,52 @@ restarting.
 - The probe must never be routed through `fetch`. This is the single assumption
   the whole design rests on: if `fetch` and raw TCP fail together, the probe
   reads "outage" and the watchdog stays quiet.
+
+---
+
+## Outcome (executed 2026-07-20 → 2026-07-21)
+
+Executed via subagent-driven development. Merged to `main` at `7e37870`;
+`com.cuassistant.mcp-http` restarted and verified (tool list identical across
+the restart, auth gate still returning 401). 175 tests pass, typecheck clean.
+
+**Where the plan was wrong, and what the reviews caught.** Recorded because a
+plan that hides its own defects is worse than no plan:
+
+1. **Task 2's `loadAll` was buggy as written** — optional fields assigned in an
+   object literal leave the key present with `undefined`, failing
+   `deepStrictEqual` against a fixture that omits them. Corrected above.
+2. **Persistence introduced a double-send window.** `approve()` awaited
+   `sender.send()` before persisting `status = "sent"`; a crash in that window
+   left the record `pending` with live Telegram buttons, so a second tap
+   re-sent the email. The in-memory gate could not do this — the restart simply
+   erased the record. Fixed by persisting a `sending` state before the await and
+   resolving it to `failed` (delivery unknown, verify manually) on hydration.
+   `SendStatus` gained `"sending"`; the plan above does not mention it.
+3. **Degrading to `store: undefined` silently restored the churn bug.** With no
+   store, `getLastWatchdogExit()` returned `null`, the cooldown always passed,
+   and the watchdog could exit on every threshold hit — and the realistic store
+   failure (unwritable `state/`) persists across restarts. Now: no store means
+   the watchdog never exits at all.
+4. **The `!r.ok` path never backed off** — `nextBackoffMs` was fed a counter
+   pinned at 0, so a persistent 401/429 polled every 3s indefinitely. A separate
+   `httpFailures` counter now feeds backoff only, never the watchdog.
+5. **Two more throw-escapes closed:** store writes inside `approve`/`reject`,
+   and the audit sink's `appendFileSync`, could both throw out of the gate into
+   the poll loop's catch — letting a broken disk drive a watchdog exit. Both now
+   swallow-and-shout. Store calls inside the watchdog branch were also unguarded,
+   where a throw would have rejected `pollLoop`'s promise and silently killed the
+   receiver.
+
+**Deliberately not done:** honoring `Retry-After` on 429s. It needs its own
+bound — a hostile `Retry-After: 86400` would park the receiver for a day.
+
+**Deferred Minors:** test-hygiene patterns in `telegram-poll-watchdog.test.ts`,
+`channel.post` still untestable through the `fetchImpl` seam, `pending_sends`
+never pruned (bounded by the rate limiter, so slow).
+
+**Process note:** the daemon self-restarted mid-execution at 03:46:57 and ran
+`111edf3` — the store wiring, before fixes 2-4 above — live for ~56 minutes
+before the deliberate deploy. No harm found in the logs, but the lesson is to
+re-check the daemon PID after any task that exercises the real server, not just
+at deploy time.

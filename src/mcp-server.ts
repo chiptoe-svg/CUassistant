@@ -58,6 +58,7 @@ import { startTelegramApproval } from "./notifiers/telegram-approval.js";
 import type { ApprovalChannel } from "./approval/types.js";
 import { __setGate } from "./mcp-tools/mail-send.js";
 import { makeGateAuditSink } from "./approval/audit-sink.js";
+import { approvalDbPath, openApprovalStore } from "./approval/store.js";
 import {
   SEND_APPROVAL_TTL_MS,
   SEND_APPROVAL_MAX_OUTSTANDING,
@@ -85,6 +86,7 @@ function initApprovalGate(): void {
   }
   const sender = makeSender({ gmail: gwsSend, ms365: ms365Send });
   const noop: ApprovalChannel = { async post() {} };
+  const approvalStore = openApprovalStore(approvalDbPath());
   const gate = new ApprovalGate(
     {
       sender,
@@ -92,6 +94,7 @@ function initApprovalGate(): void {
       clock: { now: () => Date.now() },
       idGen: { generate: () => randomUUID() },
       audit: makeGateAuditSink(),
+      store: approvalStore,
     },
     {
       ttlMs: SEND_APPROVAL_TTL_MS,
@@ -108,6 +111,7 @@ function initApprovalGate(): void {
       internalDomains: SEND_INTERNAL_DOMAINS,
     },
     gate,
+    { store: approvalStore },
   );
   gate.setChannel(channel);
   __setGate(gate);

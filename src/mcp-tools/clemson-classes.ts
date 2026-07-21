@@ -10,10 +10,67 @@ import {
   getClemsonSectionDetails,
   listClemsonTerms,
   searchClemsonClasses,
+  type ClemsonSearchResult,
 } from "../clemson-classes.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
+
+// A 50-section search used to serialize to ~12k tokens, which alone could push
+// an agent request over a 64k context window. The reductions below are all
+// lossless — nothing an agent can act on is dropped:
+//
+//   * `term` / `termDescription` are identical on every row (Banner binds one
+//     term per query), so they move to the envelope.
+//   * `waitCount` / `waitCapacity` are omitted when zero. Absent means zero;
+//     they are NOT hoisted, because `waitCapacity` genuinely varies per row
+//     (172 of 10,726 Fall 2026 sections carry a nonzero waitlist capacity) and
+//     hoisting a single value would silently misreport those.
+//   * null fields and empty arrays are omitted — absent already means "none".
+//
+// Deliberately NOT omitted: `seatsAvailable: 0`. Zero seats means the section
+// is FULL, which is the single most decision-relevant value in the payload;
+// omitting it would make "full" indistinguishable from "not reported".
+const OMIT_WHEN_ZERO = new Set(["waitCount", "waitCapacity"]);
+
+function stripEmpty<T extends object>(obj: T): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(
+      ([k, v]) =>
+        v !== null &&
+        !(Array.isArray(v) && v.length === 0) &&
+        !(v === 0 && OMIT_WHEN_ZERO.has(k)),
+    ),
+  );
+}
+
+// Wire shape for search results: hoists the row-constant term fields, drops
+// empties, and tells the agent when it is looking at a truncated list.
+export function compactSearchResult(
+  result: ClemsonSearchResult,
+): Record<string, unknown> {
+  const first = result.sections[0];
+  const out: Record<string, unknown> = {
+    totalCount: result.totalCount,
+    snapshotDate: result.snapshotDate,
+    scope: result.scope,
+  };
+  if (first) {
+    out.term = first.term;
+    out.termDescription = first.termDescription;
+  }
+  if (result.sections.length < result.totalCount) {
+    out.truncated = true;
+    out.hint =
+      `Showing ${result.sections.length} of ${result.totalCount} sections. ` +
+      "Narrow with courseNumber or openOnly, or page with offset — " +
+      "re-running the same search returns the same rows.";
+  }
+  out.sections = result.sections.map(({ term, termDescription, ...rest }) =>
+    stripEmpty({ ...rest, meetings: rest.meetings.map(stripEmpty) }),
+  );
+  return out;
+}
 
 const listTerms: McpToolDefinition = {
   operation: "clemson.list_terms",
@@ -59,7 +116,13 @@ const searchClasses: McpToolDefinition = {
       "(e.g. CPSC), courseNumber (e.g. 1010), and/or openOnly. " +
       "Served from the daily snapshot when available (fast, no Banner load); " +
       "falls back to a live Banner query if no snapshot exists yet. " +
-      "Pass refresh:true only if you need up-to-the-minute seat counts.",
+      "Pass refresh:true only if you need up-to-the-minute seat counts. " +
+      "Response is compact: term/termDescription appear once on the envelope, " +
+      "not per section, and fields that are null, empty, or a zero waitlist " +
+      "count are omitted — an absent field means none/zero. seatsAvailable is " +
+      "always present, and seatsAvailable:0 means the section is full. When " +
+      "the result is truncated the envelope carries truncated:true plus a " +
+      "hint; narrow the query or page with offset rather than repeating it.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -118,7 +181,7 @@ const searchClasses: McpToolDefinition = {
       return err(
         "Clemson class search unavailable — Banner did not return data after retries. Try again shortly.",
       );
-    return okJson(result);
+    return okJson(compactSearchResult(result));
   },
 };
 

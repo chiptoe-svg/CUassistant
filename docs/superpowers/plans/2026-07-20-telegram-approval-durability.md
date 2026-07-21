@@ -1025,22 +1025,17 @@ Add `store: approvalStore,` to the `Ports` object literal (next to `audit: makeG
 Run: `npm test && npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 4: Verify the DB is created and hydrates on a real start**
+> **Note:** an earlier draft ran `npm run mcp:http` here to confirm the DB is
+> created. Port 8765 is held by the live `com.cuassistant.mcp-http` daemon, so a
+> second instance fails with `EADDRINUSE`. DB creation is verified in Task 7
+> instead, after the daemon restart — a more realistic exercise anyway.
 
-```bash
-rm -f state/approvals.db
-timeout 15 npm run mcp:http 2>&1 | head -20
-ls -la state/approvals.db
-```
-
-Expected: the server prints its `cuassistant-credentialed http on 127.0.0.1:8765` banner, and `state/approvals.db` exists afterward.
-
-- [ ] **Step 5: Confirm it is not tracked by git**
+- [ ] **Step 4: Confirm it is not tracked by git**
 
 Run: `git check-ignore -v state/approvals.db`
 Expected: `.gitignore:8:state/	state/approvals.db`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/mcp-server.ts

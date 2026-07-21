@@ -242,6 +242,75 @@ test("unauthorized approve/reject taps are audited as security events", async ()
   assert.equal(gate.getStatus(request_id)?.status, "pending");
 });
 
+test("a throwing audit sink does not propagate out of approve/reject and both still complete", async () => {
+  // Same failure class persist() was built to absorb, but via the audit
+  // channel: appendDecision() does fs.appendFileSync on the same disk as
+  // approvals.db, so ENOSPC/EROFS there must not escape approve()/reject()
+  // and be mistaken for a transport error by the Telegram poll loop.
+  const f = fakes();
+  const gate = new ApprovalGate(
+    {
+      ...f,
+      audit: {
+        record: () => {
+          throw new Error("ENOSPC: no space left on device");
+        },
+      },
+    },
+    cfg,
+  );
+  const a = await gate.submit(artifact, "agent-1");
+  const b = await gate.submit(artifact, "agent-1");
+
+  await assert.doesNotReject(() => gate.approve(a.request_id, "user-1"));
+  assert.doesNotThrow(() => gate.reject(b.request_id, "user-1", "no"));
+
+  // The gate's own state transitions still completed despite the audit sink
+  // throwing on every call.
+  assert.equal(gate.getStatus(a.request_id)?.status, "sent");
+  assert.equal(gate.getStatus(b.request_id)?.status, "rejected");
+  assert.equal(f.sent.length, 1, "the send itself still happened");
+});
+
+test("a throwing recordSecurity does not propagate, and the loud failure log names the lost event", async () => {
+  const f = fakes();
+  const capture = { lines: [] as string[] };
+  const orig = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: unknown) => {
+    capture.lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+
+  try {
+    const gate = new ApprovalGate(
+      {
+        ...f,
+        audit: {
+          record: () => {},
+          recordSecurity: () => {
+            throw new Error("EROFS: read-only file system");
+          },
+        },
+      },
+      cfg,
+    );
+    const { request_id } = await gate.submit(artifact, "a");
+
+    await assert.doesNotReject(() => gate.approve(request_id, "intruder"));
+    assert.doesNotThrow(() => gate.reject(request_id, "intruder", "no"));
+  } finally {
+    process.stderr.write = orig;
+  }
+
+  assert.equal(f.sent.length, 0, "the intruder's tap still did nothing");
+  assert.ok(
+    capture.lines.some(
+      (l) => l.includes("SECURITY AUDIT WRITE FAILED") && l.includes("EROFS"),
+    ),
+    "a lost security event must be logged loudly, naming what failed",
+  );
+});
+
 test("gate audits a terminal row on reject and on expiry", async () => {
   const rejected: Array<{ status: string }> = [];
   const f1 = fakes();

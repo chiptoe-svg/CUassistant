@@ -517,6 +517,82 @@ test("with NO store the watchdog never exits, even with the network healthy and 
   );
 });
 
+test("a store whose getLastWatchdogExit() throws must not exit and must not kill the loop", async () => {
+  // SQLITE_BUSY / disk failure reading the cooldown must be treated the same
+  // as "no store": the cooldown in condition (3) can't be confirmed, so the
+  // safe behavior is to never exit. Before the fix, this throw rejects
+  // pollLoop's promise; since pollLoop is invoked as `void pollLoop(...)`,
+  // that rejection is unhandled and the receiver dies silently with no
+  // further fetch calls and no process.exit.
+  mock.timers.enable({ apis: ["Date", "setTimeout"] });
+
+  const reachability: Reachability = {
+    async check() {
+      // Healthy — this is the condition that WOULD authorize an exit if the
+      // read failure were not guarded.
+      return true;
+    },
+  };
+  let watchdogExits = 0;
+  const store: ApprovalStore = {
+    ...makeNoopStore(() => watchdogExits++),
+    getLastWatchdogExit: () => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    },
+  };
+
+  const THROWS = MAX_CONSECUTIVE_POLL_ERRORS + 3;
+  let calls = 0;
+  const fetchImpl: FetchImpl = (async () => {
+    calls++;
+    if (calls <= THROWS) throw new Error("transport blip");
+    return parked();
+  }) as FetchImpl;
+
+  const exit = captureExit();
+  const capture = captureStderr();
+  let unhandledRejections = 0;
+  const onUnhandled = () => unhandledRejections++;
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    startTelegramApproval(telegramCfg, makeGate(), {
+      reachability,
+      store,
+      fetchImpl,
+    });
+    for (let i = 0; i < THROWS + 1; i++) {
+      await tick(BACKOFF_CAP_MS);
+    }
+    // Give any unhandled rejection a chance to be reported before asserting.
+    await new Promise((res) => setImmediate(res));
+  } finally {
+    capture.restore();
+    exit.restore();
+    process.off("unhandledRejection", onUnhandled);
+    mock.timers.reset();
+  }
+
+  assert.ok(
+    calls > THROWS,
+    "the loop must still be running and polling after the read failure — it was not killed",
+  );
+  assert.equal(
+    exit.count,
+    0,
+    "a cooldown that cannot be confirmed must never authorize an exit",
+  );
+  assert.equal(watchdogExits, 0, "no exit was recorded either");
+  assert.equal(
+    unhandledRejections,
+    0,
+    "the store read failure must not escape as an unhandled rejection",
+  );
+  assert.ok(
+    capture.lines.some((l) => l.includes("STORE READ FAILED")),
+    "the read failure must be logged loudly",
+  );
+});
+
 test("repeated !r.ok responses back off with a GROWING delay, not a fixed base", async () => {
   // A persistent 401/429 polled every 3s forever is ~28k requests/day. The
   // HTTP-failure path needs its own counter feeding nextBackoffMs.

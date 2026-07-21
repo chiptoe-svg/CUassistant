@@ -182,7 +182,18 @@ export function startTelegramApproval(
     },
   };
 
-  void pollLoop(api, cfg, gate, reachability, deps.store, fetchImpl);
+  void pollLoop(api, cfg, gate, reachability, deps.store, fetchImpl).catch(
+    (e: unknown) => {
+      // pollLoop is fire-and-forget (`void`-invoked); if a rejection ever
+      // escapes it — e.g. a future edit reintroduces an unguarded throwing
+      // call — Node would otherwise drop it as an unhandled rejection and
+      // the receiver would go silently, permanently dead with no signal.
+      process.stderr.write(
+        `[telegram-approval] pollLoop crashed and is NOT running any more: ` +
+          `${String(e)} — approvals will no longer be received\n`,
+      );
+    },
+  );
   return channel;
 }
 
@@ -368,15 +379,47 @@ async function pollLoop(
             );
           }
         } else {
-          const lastExit = store.getLastWatchdogExit();
+          // A store READ failure (SQLITE_BUSY, disk failure) means the
+          // cooldown in condition (3) cannot be confirmed either way. That is
+          // exactly the situation the `store === undefined` branch above
+          // exists for, so a failed read reaches the same conclusion: never
+          // exit. Without this guard the throw would reject pollLoop's
+          // promise and silently kill the receiver — the exact failure class
+          // this branch exists to eliminate.
+          let lastExit: number | null = null;
+          let cooldownConfirmable = true;
+          try {
+            lastExit = store.getLastWatchdogExit();
+          } catch (e) {
+            cooldownConfirmable = false;
+            process.stderr.write(
+              `[telegram-approval] STORE READ FAILED for watchdog cooldown: ` +
+                `${String(e)} — cannot confirm the once-per-hour restart ` +
+                `limit, so NOT exiting\n`,
+            );
+          }
           const since = lastExit === null ? null : now - lastExit;
-          if (shouldRestartAfterPollErrors(consecutiveErrors, healthy, since)) {
+          if (
+            cooldownConfirmable &&
+            shouldRestartAfterPollErrors(consecutiveErrors, healthy, since)
+          ) {
             process.stderr.write(
               `[telegram-approval] ${consecutiveErrors} consecutive poll errors ` +
                 `with the network reachable — exiting so launchd restarts the ` +
                 `process (clears a stuck fetch state).\n`,
             );
-            store.recordWatchdogExit(now);
+            // A write failure here must not block the already-decided exit,
+            // and must not throw and kill the loop instead of exiting
+            // cleanly — just shout and proceed.
+            try {
+              store.recordWatchdogExit(now);
+            } catch (e) {
+              process.stderr.write(
+                `[telegram-approval] STORE WRITE FAILED recording watchdog ` +
+                  `exit: ${String(e)} — the once-per-hour limit will not be ` +
+                  `enforceable next time; exiting anyway\n`,
+              );
+            }
             process.exit(1);
           }
         }

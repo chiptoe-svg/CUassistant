@@ -7,6 +7,7 @@ import type {
   GateConfig,
   IdGen,
   PendingSend,
+  SecurityEvent,
   SendArtifact,
   Sender,
   SendStatus,
@@ -65,7 +66,7 @@ export class ApprovalGate {
         req.status = "failed";
         req.error = UNKNOWN_DELIVERY_ERROR;
         this.persist(req);
-        this.ports.audit?.record(req);
+        this.auditRecord(req);
       }
     }
     const now = this.ports.clock.now();
@@ -84,6 +85,13 @@ export class ApprovalGate {
    * would make a broken disk look like a broken network and could trigger a
    * restart that cannot possibly help. The in-memory state stays authoritative
    * for this process; only restart-durability is lost, so we shout and carry on.
+   *
+   * `auditRecord`/`auditSecurity` below apply the identical treatment to the
+   * audit sink, which writes to the same disk (see `appendDecision` in
+   * `state.ts`) and can fail for the same reasons. Together these three
+   * helpers are what make it true that the gate's public methods never throw
+   * for durability reasons — only for genuine operational failures (rate
+   * limit, unknown request, sender rejection).
    */
   private persist(req: PendingSend): void {
     try {
@@ -93,6 +101,44 @@ export class ApprovalGate {
         `[approval-gate] STORE WRITE FAILED for ${req.request_id} ` +
           `(status=${req.status}): ${String(e)} — in-memory state is intact ` +
           `but this transition will NOT survive a restart\n`,
+      );
+    }
+  }
+
+  /**
+   * Records one audit row, absorbing sink failures — same rationale as
+   * `persist()`. `AuditSink.record` (via `appendDecision` in `state.ts`) does
+   * `fs.appendFileSync` on the same disk as `approvals.db`; on ENOSPC / EROFS
+   * / EACCES it throws, and letting that escape `approve()`/`reject()` would
+   * be exactly the transport-vs-durability confusion `persist()` exists to
+   * prevent, just via a second channel.
+   */
+  private auditRecord(req: PendingSend): void {
+    try {
+      this.ports.audit?.record(req);
+    } catch (e) {
+      process.stderr.write(
+        `[approval-gate] AUDIT WRITE FAILED for ${req.request_id} ` +
+          `(status=${req.status}): ${String(e)} — this state transition was ` +
+          `NOT recorded in the audit log\n`,
+      );
+    }
+  }
+
+  /**
+   * Records a security event, absorbing sink failures the same way as
+   * `auditRecord`. A write failure here must never become a silent way to
+   * suppress a security record, so the log line is loud and states exactly
+   * what kind of event was lost.
+   */
+  private auditSecurity(event: SecurityEvent): void {
+    try {
+      this.ports.audit?.recordSecurity?.(event);
+    } catch (e) {
+      process.stderr.write(
+        `[approval-gate] SECURITY AUDIT WRITE FAILED for ${event.request_id} ` +
+          `(kind=${event.kind}, action=${event.action}, user_id=${event.user_id}): ` +
+          `${String(e)} — this security event was NOT recorded\n`,
       );
     }
   }
@@ -144,7 +190,7 @@ export class ApprovalGate {
           `${String(e)} — the hourly rate limit will not survive a restart\n`,
       );
     }
-    this.ports.audit?.record(req);
+    this.auditRecord(req);
 
     const externals = externalRecipients(artifact, this.config.internalDomains);
     try {
@@ -153,7 +199,7 @@ export class ApprovalGate {
       req.status = "failed";
       req.error = `notify_failed: ${String(e)}`;
       this.persist(req);
-      this.ports.audit?.record(req);
+      this.auditRecord(req);
       return { request_id, status: "failed" };
     }
     return { request_id, status: "pending" };
@@ -178,7 +224,7 @@ export class ApprovalGate {
   async approve(request_id: string, userId: string): Promise<void> {
     this.sweepExpired();
     if (userId !== this.config.authorizedUserId) {
-      this.ports.audit?.recordSecurity?.({
+      this.auditSecurity({
         kind: "unauthorized_approval_attempt",
         request_id,
         user_id: userId,
@@ -205,13 +251,13 @@ export class ApprovalGate {
       req.error = String(e);
     }
     this.persist(req);
-    this.ports.audit?.record(req);
+    this.auditRecord(req);
   }
 
   reject(request_id: string, userId: string, feedback?: string): void {
     this.sweepExpired();
     if (userId !== this.config.authorizedUserId) {
-      this.ports.audit?.recordSecurity?.({
+      this.auditSecurity({
         kind: "unauthorized_approval_attempt",
         request_id,
         user_id: userId,
@@ -224,7 +270,7 @@ export class ApprovalGate {
     req.status = "rejected";
     if (feedback) req.feedback = feedback;
     this.persist(req);
-    this.ports.audit?.record(req);
+    this.auditRecord(req);
   }
 
   private sweepExpired(): void {
@@ -233,7 +279,7 @@ export class ApprovalGate {
       if (req.status === "pending" && now >= req.expires_at) {
         req.status = "expired";
         this.persist(req);
-        this.ports.audit?.record(req);
+        this.auditRecord(req);
       }
     }
   }

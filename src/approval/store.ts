@@ -59,6 +59,9 @@ export function openApprovalStore(dbPath: string): ApprovalStore {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  // Single writer today, but a launchd restart briefly overlaps the outgoing
+  // and incoming process; wait for the lock instead of throwing SQLITE_BUSY.
+  db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA);
 
   const upsertStmt = db.prepare(`

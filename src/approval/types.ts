@@ -1,5 +1,18 @@
 export type SendAccount = "ms365" | "gmail";
-export type SendStatus = "pending" | "sent" | "rejected" | "expired" | "failed";
+/**
+ * `sending` is the in-flight window between "the human approved" and "the
+ * provider answered". It is persisted BEFORE the send so a crash mid-send is
+ * distinguishable from a send that never started — without it, hydration would
+ * restore a half-sent request as `pending` and a second button tap would
+ * deliver the email twice.
+ */
+export type SendStatus =
+  | "pending"
+  | "sending"
+  | "sent"
+  | "rejected"
+  | "expired"
+  | "failed";
 
 export interface SendArtifact {
   account: SendAccount;

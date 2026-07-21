@@ -18,7 +18,7 @@ export interface SubmitResult {
 }
 
 export type StatusView =
-  | { status: "pending" | "expired" }
+  | { status: "pending" | "sending" | "expired" }
   | { status: "sent"; sent_message_id?: string }
   | { status: "rejected"; feedback?: string }
   | { status: "failed"; error?: string };
@@ -34,6 +34,18 @@ interface Ports {
 
 const HOUR_MS = 3_600_000;
 
+/**
+ * Recorded on a request found in `sending` at hydration: the process died
+ * between "handed to the provider" and "provider answered", so whether the mail
+ * actually went out is genuinely unknown. Resolving it to `failed` is the only
+ * safe terminal state — auto-resending risks a duplicate to a real recipient,
+ * and marking it `sent` would claim delivery we never observed.
+ */
+export const UNKNOWN_DELIVERY_ERROR =
+  "delivery status unknown: the process exited while this send was in flight. " +
+  "Verify with the mail provider whether the message was delivered before " +
+  "resending — do NOT resend blindly.";
+
 export class ApprovalGate {
   private readonly pending = new Map<string, PendingSend>();
   private submitTimes: number[] = [];
@@ -46,11 +58,43 @@ export class ApprovalGate {
     // better-sqlite3 is synchronous, so this is safe in a constructor.
     for (const req of this.ports.store?.loadAll() ?? []) {
       this.pending.set(req.request_id, req);
+      // A record still in `sending` means the previous process died mid-send.
+      // Resolve it to a terminal `failed` with an explicit unknown-delivery
+      // note so it can never be silently re-approved or auto-resent.
+      if (req.status === "sending") {
+        req.status = "failed";
+        req.error = UNKNOWN_DELIVERY_ERROR;
+        this.persist(req);
+        this.ports.audit?.record(req);
+      }
     }
     const now = this.ports.clock.now();
     this.submitTimes = this.ports.store?.loadSubmitTimes(now - HOUR_MS) ?? [];
     // Anything whose TTL elapsed while the process was down is expired now.
     this.sweepExpired();
+  }
+
+  /**
+   * Persists one record, absorbing store failures.
+   *
+   * A durability failure (disk full, SQLITE_BUSY) is NOT an operational
+   * failure of the gate and must not surface to the caller: `approve` is
+   * awaited by the Telegram poll loop, whose catch block counts *transport*
+   * errors and feeds the restart watchdog. Letting a DB error out of the gate
+   * would make a broken disk look like a broken network and could trigger a
+   * restart that cannot possibly help. The in-memory state stays authoritative
+   * for this process; only restart-durability is lost, so we shout and carry on.
+   */
+  private persist(req: PendingSend): void {
+    try {
+      this.ports.store?.upsert(req);
+    } catch (e) {
+      process.stderr.write(
+        `[approval-gate] STORE WRITE FAILED for ${req.request_id} ` +
+          `(status=${req.status}): ${String(e)} — in-memory state is intact ` +
+          `but this transition will NOT survive a restart\n`,
+      );
+    }
   }
 
   // The gate posts to the channel and the channel's receiver calls back into
@@ -90,9 +134,16 @@ export class ApprovalGate {
       expires_at: now + this.config.ttlMs,
     };
     this.pending.set(request_id, req);
-    this.ports.store?.upsert(req);
+    this.persist(req);
     this.submitTimes.push(now);
-    this.ports.store?.recordSubmitTime(now);
+    try {
+      this.ports.store?.recordSubmitTime(now);
+    } catch (e) {
+      process.stderr.write(
+        `[approval-gate] STORE WRITE FAILED recording submit time: ` +
+          `${String(e)} — the hourly rate limit will not survive a restart\n`,
+      );
+    }
     this.ports.audit?.record(req);
 
     const externals = externalRecipients(artifact, this.config.internalDomains);
@@ -101,7 +152,7 @@ export class ApprovalGate {
     } catch (e) {
       req.status = "failed";
       req.error = `notify_failed: ${String(e)}`;
-      this.ports.store?.upsert(req);
+      this.persist(req);
       this.ports.audit?.record(req);
       return { request_id, status: "failed" };
     }
@@ -136,7 +187,15 @@ export class ApprovalGate {
       return;
     }
     const req = this.pending.get(request_id);
+    // Exactly `pending` — anything else (including `sending`, i.e. a send
+    // already in flight or one this process inherited) is not re-approvable.
     if (!req || req.status !== "pending") return;
+    // Persist `sending` BEFORE the await. If the process dies inside the send
+    // window, hydration finds `sending` (not `pending`) and resolves it to
+    // failed/unknown instead of restoring live Approve buttons that would send
+    // the same email a second time.
+    req.status = "sending";
+    this.persist(req);
     try {
       const res = await this.ports.sender.send(req.artifact);
       req.status = "sent";
@@ -145,7 +204,7 @@ export class ApprovalGate {
       req.status = "failed";
       req.error = String(e);
     }
-    this.ports.store?.upsert(req);
+    this.persist(req);
     this.ports.audit?.record(req);
   }
 
@@ -164,7 +223,7 @@ export class ApprovalGate {
     if (!req || req.status !== "pending") return;
     req.status = "rejected";
     if (feedback) req.feedback = feedback;
-    this.ports.store?.upsert(req);
+    this.persist(req);
     this.ports.audit?.record(req);
   }
 
@@ -173,7 +232,7 @@ export class ApprovalGate {
     for (const req of this.pending.values()) {
       if (req.status === "pending" && now >= req.expires_at) {
         req.status = "expired";
-        this.ports.store?.upsert(req);
+        this.persist(req);
         this.ports.audit?.record(req);
       }
     }

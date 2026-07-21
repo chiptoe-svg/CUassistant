@@ -78,8 +78,9 @@ export const getSendStatus: McpToolDefinition = {
   tool: {
     name: "get-send-status",
     description:
-      "Check the status of a send request by request_id: pending | sent | " +
-      "rejected (with feedback) | expired | failed.",
+      "Check the status of a send request by request_id: pending | sending " +
+      "(approved, delivery in flight) | sent | rejected (with feedback) | " +
+      "expired | failed.",
     inputSchema: {
       type: "object" as const,
       properties: { request_id: { type: "string" } },

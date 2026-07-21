@@ -107,10 +107,108 @@ test("a send that expired while the process was down hydrates as expired", async
   assert.equal(second.sent.length, 0, "an expired request must not send");
 });
 
+test("approve persists `sending` BEFORE awaiting the sender", async () => {
+  // The crash window: if the process dies between "handed to the provider" and
+  // "provider answered", the DB must NOT still say `pending` — a pending row
+  // hydrates with live Approve buttons and a second tap re-sends the email.
+  const store = memStore();
+  let statusDuringSend: string | undefined;
+  const sender: Sender = {
+    async send(): Promise<SentResult> {
+      statusDuringSend = store.rows.get("req1")?.status;
+      return { id: "m1" };
+    },
+  };
+  const gate = new ApprovalGate(
+    {
+      sender,
+      channel: { async post() {} } as ApprovalChannel,
+      clock: { now: () => 1_000_000 },
+      idGen: { generate: () => "req1" },
+      store,
+    },
+    cfg,
+  );
+  const { request_id } = await gate.submit(artifact, "agent-1");
+  await gate.approve(request_id, "user-1");
+
+  assert.equal(
+    statusDuringSend,
+    "sending",
+    "the in-flight state must already be durable while the send is running",
+  );
+  assert.equal(gate.getStatus(request_id)?.status, "sent");
+});
+
+test("a send interrupted mid-flight hydrates to failed/unknown and never resends", async () => {
+  const store = memStore();
+  const t = { now: 1_000_000 };
+  const first = ports(store, t);
+  const gate1 = new ApprovalGate(first.ports, cfg);
+  const { request_id } = await gate1.submit(artifact, "agent-1");
+
+  // Simulate a crash inside approve()'s send window: the durable record is
+  // `sending`, and delivery genuinely never got confirmed either way.
+  const row = store.rows.get(request_id);
+  assert.ok(row);
+  store.rows.set(request_id, { ...row, status: "sending" });
+
+  const second = ports(store, t);
+  const gate2 = new ApprovalGate(second.ports, cfg);
+
+  const view = gate2.getStatus(request_id);
+  assert.equal(view?.status, "failed", "must not hydrate as pending or sent");
+  assert.match(
+    (view as { error?: string }).error ?? "",
+    /unknown/i,
+    "the error must say delivery status is unknown and needs manual verification",
+  );
+  assert.equal(
+    second.sent.length,
+    0,
+    "hydration must never auto-resend an interrupted send",
+  );
+  assert.equal(store.rows.get(request_id)?.status, "failed");
+
+  // And the resolution is terminal: a stale button tap cannot revive it.
+  await gate2.approve(request_id, "user-1");
+  assert.equal(second.sent.length, 0, "a second tap must not re-send");
+  assert.equal(gate2.getStatus(request_id)?.status, "failed");
+});
+
 test("a gate with no store still works (store is optional)", async () => {
   const { ports: p } = ports(undefined as unknown as ApprovalStore);
   const noStore = { ...p, store: undefined };
   const gate = new ApprovalGate(noStore, cfg);
   const { status } = await gate.submit(artifact, "agent-1");
   assert.equal(status, "pending");
+});
+
+test("a store write failure does not propagate out of approve/reject", async () => {
+  // A DB failure (disk full, SQLITE_BUSY) is a durability failure, not a
+  // transport failure. If it escaped the gate it would land in the Telegram
+  // poll loop's catch, inflate consecutiveErrors, and can drive a watchdog
+  // restart that cannot possibly fix a broken disk.
+  const store = memStore();
+  const t = { now: 1_000_000 };
+  const first = ports(store, t);
+  const gate = new ApprovalGate(first.ports, cfg);
+  const a = await gate.submit(artifact, "agent-1");
+  const b = await gate.submit(artifact, "agent-1");
+
+  const orig = store.upsert;
+  store.upsert = () => {
+    throw new Error("SQLITE_BUSY: database is locked");
+  };
+  try {
+    await gate.approve(a.request_id, "user-1");
+    gate.reject(b.request_id, "user-1", "no thanks");
+  } finally {
+    store.upsert = orig;
+  }
+
+  // In-memory state stays authoritative even though nothing was persisted.
+  assert.equal(gate.getStatus(a.request_id)?.status, "sent");
+  assert.equal(gate.getStatus(b.request_id)?.status, "rejected");
+  assert.equal(first.sent.length, 1, "the send itself still happened");
 });

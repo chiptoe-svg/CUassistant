@@ -533,12 +533,19 @@ async function fetchSectionsPaged(
   for (let attempt = 0; attempt < attempts; attempt++) {
     const jar = await openSession(term);
     if (!jar) {
+      log.warn("clemson scan: session open failed", {
+        term,
+        subject,
+        attempt: attempt + 1,
+        attempts,
+      });
       await sleep(400);
       continue;
     }
     const out: ClemsonSection[] = [];
     let failed = false;
     let cold = false;
+    let totalCount = 0;
     for (let page = 0; page < MAX_PAGES; page++) {
       const res = await runSearch(jar, {
         term,
@@ -555,6 +562,7 @@ async function fetchSectionsPaged(
         cold = true;
         break;
       }
+      totalCount = res.totalCount;
       out.push(...res.sections);
       if (out.length >= res.totalCount || res.sections.length === 0) {
         return { sections: out, complete: true };
@@ -562,14 +570,34 @@ async function fetchSectionsPaged(
       await sleep(200);
     }
     if (cold || (failed && out.length === 0)) {
+      log.warn("clemson scan: attempt failed before any page landed", {
+        term,
+        subject,
+        attempt: attempt + 1,
+        attempts,
+        reason: cold ? "cold-session" : "first-page-failed",
+      });
       // Linear backoff: a cold session often clears on a later try, and backing
       // off gives Banner room to recover instead of hammering it fresh-session.
       await sleep(400 * (attempt + 1));
       continue;
     }
     // Partial failure mid-scan: return what we have, marked incomplete.
+    // NB: this returns immediately — the retry loop above is never re-entered,
+    // so a mid-scan failure costs the whole scan with no second try.
+    log.warn("clemson scan: incomplete, not retried", {
+      term,
+      subject,
+      attempt: attempt + 1,
+      attempts,
+      reason: failed ? "mid-scan-request-failed" : "max-pages-exhausted",
+      sections: out.length,
+      totalCount,
+      pages: Math.ceil(out.length / PAGE_SIZE),
+    });
     return { sections: out, complete: false };
   }
+  log.warn("clemson scan: all attempts exhausted", { term, subject, attempts });
   return null;
 }
 
@@ -597,12 +625,29 @@ export async function refreshClemsonSnapshot(
   term: string,
 ): Promise<ClemsonTermSnapshot | null> {
   const resolved = await resolveTerm(term);
-  if (!resolved) return null;
+  if (!resolved) {
+    log.warn("clemson refresh failed: term did not resolve", { term });
+    return null;
+  }
   // The daily refresh runs unattended; a cold-session miss leaves the term with
   // no .db until tomorrow (forcing tools onto the slow live-scan fallback), so
   // spend more attempts here than an interactive query would.
   const fetched = await fetchSectionsPaged(resolved.code, undefined, undefined, 8);
-  if (fetched === null || !fetched.complete) return null;
+  if (fetched === null) {
+    log.warn("clemson refresh failed: snapshot left unchanged", {
+      term: resolved.code,
+      reason: "all-attempts-failed",
+    });
+    return null;
+  }
+  if (!fetched.complete) {
+    log.warn("clemson refresh failed: snapshot left unchanged", {
+      term: resolved.code,
+      reason: "partial-scan-discarded",
+      sections: fetched.sections.length,
+    });
+    return null;
+  }
   const snap: ClemsonTermSnapshot = {
     term: resolved.code,
     termDescription: resolved.description,

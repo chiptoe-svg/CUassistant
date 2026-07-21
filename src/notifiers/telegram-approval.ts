@@ -131,10 +131,17 @@ interface TelegramConfig {
  * inline-button taps to gate.approve / gate.reject. Only host code holds the
  * bot token; the agent has no path here.
  */
+/** The subset of the global `fetch` signature the poll loop relies on. */
+export type FetchImpl = typeof fetch;
+
 export function startTelegramApproval(
   cfg: TelegramConfig,
   gate: ApprovalGate,
-  deps: { reachability?: Reachability; store?: ApprovalStore } = {},
+  deps: {
+    reachability?: Reachability;
+    store?: ApprovalStore;
+    fetchImpl?: FetchImpl;
+  } = {},
 ): ApprovalChannel {
   const reachability =
     deps.reachability ??
@@ -143,6 +150,7 @@ export function startTelegramApproval(
       TELEGRAM_PROBE_PORT,
       PROBE_TIMEOUT_MS,
     );
+  const fetchImpl = deps.fetchImpl ?? fetch;
   const api = (method: string) =>
     `https://api.telegram.org/bot${cfg.botToken}/${method}`;
 
@@ -170,7 +178,7 @@ export function startTelegramApproval(
     },
   };
 
-  void pollLoop(api, cfg, gate, reachability, deps.store);
+  void pollLoop(api, cfg, gate, reachability, deps.store, fetchImpl);
   return channel;
 }
 
@@ -196,6 +204,7 @@ async function pollLoop(
   gate: ApprovalGate,
   reachability: Reachability,
   store: ApprovalStore | undefined,
+  fetchImpl: FetchImpl,
 ): Promise<void> {
   let offset = 0;
   let consecutiveErrors = 0;
@@ -203,7 +212,7 @@ async function pollLoop(
   let lastWarn = Date.now();
   for (;;) {
     try {
-      const r = await fetch(api("getUpdates"), {
+      const r = await fetchImpl(api("getUpdates"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -223,9 +232,24 @@ async function pollLoop(
         // with it. It is also not success: leave lastSuccess untouched so
         // the receiver-down warning can still fire for a silently dead
         // receiver.
+        //
+        // Drain the body ourselves — under undici an unread response body
+        // defers socket release to GC — and surface Telegram's `description`
+        // field when present, since that's what distinguishes a revoked
+        // token from a rate limit. The body isn't guaranteed to be JSON, so
+        // the parse is guarded.
+        const bodyText = await r.text();
+        let description: string | undefined;
+        try {
+          const parsed = JSON.parse(bodyText) as { description?: string };
+          description = parsed.description;
+        } catch {
+          // Non-JSON body — log without a description rather than throw.
+        }
         process.stderr.write(
-          `[telegram-approval] getUpdates HTTP ${r.status} — not a ` +
-            `transport failure, watchdog state unchanged\n`,
+          `[telegram-approval] getUpdates HTTP ${r.status}` +
+            (description ? ` (${description})` : "") +
+            ` — not a transport failure, watchdog state unchanged\n`,
         );
         lastWarn = maybeWarnReceiverDown(Date.now(), lastSuccess, lastWarn);
         await new Promise((res) =>
@@ -268,7 +292,7 @@ async function pollLoop(
         const status = gate.getStatus(requestId)?.status;
         const resolved = Boolean(status) && status !== "pending";
         const label = approvalOutcomeLabel(status);
-        await fetch(api("answerCallbackQuery"), {
+        await fetchImpl(api("answerCallbackQuery"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callback_query_id: cq.id, text: label }),
@@ -276,7 +300,7 @@ async function pollLoop(
         if (resolved && cq.message) {
           // editMessageText without reply_markup removes the inline keyboard,
           // so the decision can't be tapped again.
-          await fetch(api("editMessageText"), {
+          await fetchImpl(api("editMessageText"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

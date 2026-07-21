@@ -42,9 +42,13 @@ export const RECEIVER_DOWN_WARN_MS = 300_000;
  *   3. we have not already exited inside the cooldown window
  *
  * (3) is the safety net and does not depend on (2) being correct: worst case
- * is one restart per hour.
+ * is one restart per hour. Because (3) is load-bearing, the caller must not
+ * invoke this at all when there is no store to record exits in — with no
+ * cooldown to enforce, the correct behavior is to never exit. See pollLoop.
  *
  * @param msSinceLastExit null when no watchdog exit has ever been recorded.
+ *   Only ever null for a store that has genuinely never recorded an exit —
+ *   never as a stand-in for "no store".
  */
 export function shouldRestartAfterPollErrors(
   consecutiveErrors: number,
@@ -126,14 +130,14 @@ interface TelegramConfig {
   internalDomains: string[];
 }
 
+/** The subset of the global `fetch` signature the poll loop relies on. */
+export type FetchImpl = typeof fetch;
+
 /**
  * Builds the ApprovalChannel and starts a long-poll receiver that routes
  * inline-button taps to gate.approve / gate.reject. Only host code holds the
  * bot token; the agent has no path here.
  */
-/** The subset of the global `fetch` signature the poll loop relies on. */
-export type FetchImpl = typeof fetch;
-
 export function startTelegramApproval(
   cfg: TelegramConfig,
   gate: ApprovalGate,
@@ -165,7 +169,7 @@ export function startTelegramApproval(
           ],
         ],
       };
-      const r = await fetch(api("sendMessage"), {
+      const r = await fetchImpl(api("sendMessage"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -187,6 +191,10 @@ export function approvalOutcomeLabel(status: string | undefined): string {
   switch (status) {
     case "sent":
       return "✅ Approved — sent";
+    case "sending":
+      // In-flight. Treated as resolved by the caller so the buttons are
+      // stripped — the decision is made and must not be tappable again.
+      return "📤 Approved — sending…";
     case "failed":
       return "⚠️ Approved — send failed";
     case "rejected":
@@ -208,8 +216,23 @@ async function pollLoop(
 ): Promise<void> {
   let offset = 0;
   let consecutiveErrors = 0;
+  // Separate from consecutiveErrors: counts !r.ok responses so that path gets
+  // real backoff. It deliberately does NOT feed the watchdog — see the !r.ok
+  // branch below.
+  let httpFailures = 0;
   let lastSuccess = Date.now();
   let lastWarn = Date.now();
+
+  if (!store) {
+    // FIX 2: stated once, loudly, at startup rather than being an emergent
+    // property of a null default deep inside the watchdog branch.
+    process.stderr.write(
+      `[telegram-approval] watchdog restart DISABLED — no approval store, so ` +
+        `the once-per-hour restart rate limit cannot be enforced. The loop ` +
+        `will back off and warn instead of exiting.\n`,
+    );
+  }
+
   for (;;) {
     try {
       const r = await fetchImpl(api("getUpdates"), {
@@ -233,11 +256,16 @@ async function pollLoop(
         // the receiver-down warning can still fire for a silently dead
         // receiver.
         //
+        // It DOES need its own backoff, though: httpFailures drives the sleep
+        // so a persistent 401/429 decays to one poll per minute instead of
+        // hammering Telegram every 3s forever.
+        //
         // Drain the body ourselves — under undici an unread response body
         // defers socket release to GC — and surface Telegram's `description`
         // field when present, since that's what distinguishes a revoked
         // token from a rate limit. The body isn't guaranteed to be JSON, so
         // the parse is guarded.
+        httpFailures++;
         const bodyText = await r.text();
         let description: string | undefined;
         try {
@@ -253,7 +281,7 @@ async function pollLoop(
         );
         lastWarn = maybeWarnReceiverDown(Date.now(), lastSuccess, lastWarn);
         await new Promise((res) =>
-          setTimeout(res, nextBackoffMs(consecutiveErrors)),
+          setTimeout(res, nextBackoffMs(httpFailures)),
         );
         continue;
       }
@@ -274,8 +302,9 @@ async function pollLoop(
         }>;
       };
       // A 2xx getUpdates means the fetch layer AND auth are healthy — clear
-      // the watchdog counter.
+      // the watchdog counter and the HTTP-failure backoff counter.
       consecutiveErrors = 0;
+      httpFailures = 0;
       lastSuccess = Date.now();
       for (const u of data.result ?? []) {
         offset = u.update_id + 1;
@@ -324,16 +353,32 @@ async function pollLoop(
         // Probe OUTSIDE fetch. If this said "unreachable" because fetch is
         // wedged, the watchdog would never fire in the case it exists for.
         const healthy = await reachability.check();
-        const lastExit = store?.getLastWatchdogExit() ?? null;
-        const since = lastExit === null ? null : now - lastExit;
-        if (shouldRestartAfterPollErrors(consecutiveErrors, healthy, since)) {
-          process.stderr.write(
-            `[telegram-approval] ${consecutiveErrors} consecutive poll errors ` +
-              `with the network reachable — exiting so launchd restarts the ` +
-              `process (clears a stuck fetch state).\n`,
-          );
-          store?.recordWatchdogExit(now);
-          process.exit(1);
+        if (store === undefined) {
+          // No persistence => the once-per-hour cooldown cannot be recorded or
+          // read, so condition (3) is unenforceable. The realistic cause (an
+          // unwritable state dir) persists across restarts, so exiting here
+          // would restore the unbounded restart churn this branch removed.
+          // Without the safety net we simply never exit.
+          if (healthy) {
+            process.stderr.write(
+              `[telegram-approval] ${consecutiveErrors} consecutive poll ` +
+                `errors with the network reachable, but the watchdog is ` +
+                `disabled (no approval store — restart rate limit cannot be ` +
+                `enforced); backing off instead of exiting\n`,
+            );
+          }
+        } else {
+          const lastExit = store.getLastWatchdogExit();
+          const since = lastExit === null ? null : now - lastExit;
+          if (shouldRestartAfterPollErrors(consecutiveErrors, healthy, since)) {
+            process.stderr.write(
+              `[telegram-approval] ${consecutiveErrors} consecutive poll errors ` +
+                `with the network reachable — exiting so launchd restarts the ` +
+                `process (clears a stuck fetch state).\n`,
+            );
+            store.recordWatchdogExit(now);
+            process.exit(1);
+          }
         }
         if (!healthy) {
           process.stderr.write(

@@ -64,10 +64,16 @@ test("backoff doubles from the base and saturates at the cap", () => {
 
 test("receiver-down warning fires when stale and not recently warned", () => {
   assert.equal(
-    shouldWarnReceiverDown(RECEIVER_DOWN_WARN_MS + 1, RECEIVER_DOWN_WARN_MS + 1),
+    shouldWarnReceiverDown(
+      RECEIVER_DOWN_WARN_MS + 1,
+      RECEIVER_DOWN_WARN_MS + 1,
+    ),
     true,
   );
-  assert.equal(shouldWarnReceiverDown(1_000, 10 * RECEIVER_DOWN_WARN_MS), false);
+  assert.equal(
+    shouldWarnReceiverDown(1_000, 10 * RECEIVER_DOWN_WARN_MS),
+    false,
+  );
   assert.equal(shouldWarnReceiverDown(RECEIVER_DOWN_WARN_MS + 1, 1_000), false);
 });
 
@@ -206,6 +212,25 @@ function captureStderr(): { lines: string[]; restore: () => void } {
   };
 }
 
+/**
+ * Replaces process.exit for the duration of a test. A real exit(1) inside the
+ * poll loop would silently truncate the whole suite, so no test may let one
+ * run — including tests whose entire point is that an exit must NOT happen
+ * (those must stay safe even when the fix under test is reverted).
+ */
+function captureExit(): { count: number; restore: () => void } {
+  const state = { count: 0, restore: () => {} };
+  const orig = process.exit;
+  process.exit = ((): never => {
+    state.count++;
+    return undefined as never;
+  }) as typeof process.exit;
+  state.restore = () => {
+    process.exit = orig;
+  };
+  return state;
+}
+
 /** Advance mocked Date/setTimeout by ms and let the resulting microtasks drain. */
 async function tick(ms: number): Promise<void> {
   mock.timers.tick(ms);
@@ -219,7 +244,9 @@ test("!r.ok responses never feed the watchdog: many consecutive HTTP failures ne
   const reachability: Reachability = {
     async check() {
       reachabilityChecks++;
-      return true;
+      // Unhealthy regardless: a safety net so this test can never reach
+      // process.exit even if the behavior under test were broken.
+      return false;
     },
   };
   let watchdogExits = 0;
@@ -230,7 +257,10 @@ test("!r.ok responses never feed the watchdog: many consecutive HTTP failures ne
   const fetchImpl: FetchImpl = (async () => {
     calls++;
     if (calls <= FAIL_COUNT) {
-      return fakeFailResponse(401, JSON.stringify({ description: "Unauthorized" }));
+      return fakeFailResponse(
+        401,
+        JSON.stringify({ description: "Unauthorized" }),
+      );
     }
     return parked();
   }) as FetchImpl;
@@ -242,17 +272,21 @@ test("!r.ok responses never feed the watchdog: many consecutive HTTP failures ne
       store,
       fetchImpl,
     });
-    // consecutiveErrors stays 0 throughout this branch, so every backoff is
-    // nextBackoffMs(0) === BACKOFF_BASE_MS.
+    // This branch now backs off on its own httpFailures counter, so the delay
+    // grows; BACKOFF_CAP_MS covers the worst case for any single iteration.
     for (let i = 0; i < FAIL_COUNT + 1; i++) {
-      await tick(BACKOFF_BASE_MS);
+      await tick(BACKOFF_CAP_MS);
     }
   } finally {
     capture.restore();
     mock.timers.reset();
   }
 
-  assert.equal(calls, FAIL_COUNT + 1, "sanity: the loop actually ran through every failure");
+  assert.equal(
+    calls,
+    FAIL_COUNT + 1,
+    "sanity: the loop actually ran through every failure",
+  );
   assert.equal(
     reachabilityChecks,
     0,
@@ -264,11 +298,19 @@ test("!r.ok responses never feed the watchdog: many consecutive HTTP failures ne
 test("!r.ok responses never refresh lastSuccess: staleness keeps accruing until RECEIVER DOWN fires", async () => {
   mock.timers.enable({ apis: ["Date", "setTimeout"] });
 
-  const reachability: Reachability = { async check() { return true; } };
+  // Unhealthy: a safety net so this test can never reach process.exit.
+  const reachability: Reachability = {
+    async check() {
+      return false;
+    },
+  };
   const store = makeNoopStore();
 
   const fetchImpl: FetchImpl = (async () =>
-    fakeFailResponse(401, JSON.stringify({ description: "Unauthorized" }))) as FetchImpl;
+    fakeFailResponse(
+      401,
+      JSON.stringify({ description: "Unauthorized" }),
+    )) as FetchImpl;
 
   const capture = captureStderr();
   try {
@@ -277,9 +319,11 @@ test("!r.ok responses never refresh lastSuccess: staleness keeps accruing until 
       store,
       fetchImpl,
     });
-    const iterations = Math.ceil(RECEIVER_DOWN_WARN_MS / BACKOFF_BASE_MS) + 2;
+    // Backoff on this path grows to BACKOFF_CAP_MS, so advance a full cap per
+    // iteration and run enough iterations to cross the staleness window.
+    const iterations = Math.ceil(RECEIVER_DOWN_WARN_MS / BACKOFF_CAP_MS) + 4;
     for (let i = 0; i < iterations; i++) {
-      await tick(BACKOFF_BASE_MS);
+      await tick(BACKOFF_CAP_MS);
     }
   } finally {
     capture.restore();
@@ -339,7 +383,11 @@ test("a successful response resets consecutiveErrors, so it does not carry over 
     mock.timers.reset();
   }
 
-  assert.equal(calls, PRE_RESET_THROWS + 1 + POST_RESET_THROWS + 1, "sanity: every fetch was consumed");
+  assert.equal(
+    calls,
+    PRE_RESET_THROWS + 1 + POST_RESET_THROWS + 1,
+    "sanity: every fetch was consumed",
+  );
   assert.equal(
     reachabilityChecks,
     0,
@@ -350,7 +398,12 @@ test("a successful response resets consecutiveErrors, so it does not carry over 
 test("the !r.ok branch drains the body, surfaces Telegram's description, and tolerates a non-JSON body", async () => {
   mock.timers.enable({ apis: ["Date", "setTimeout"] });
 
-  const reachability: Reachability = { async check() { return true; } };
+  // Unhealthy: a safety net so this test can never reach process.exit.
+  const reachability: Reachability = {
+    async check() {
+      return false;
+    },
+  };
   const store = makeNoopStore();
 
   let calls = 0;
@@ -365,7 +418,11 @@ test("the !r.ok branch drains the body, surfaces Telegram's description, and tol
       );
     }
     if (calls === 2) {
-      return fakeFailResponse(429, "<html>rate limited</html>", () => textReads++);
+      return fakeFailResponse(
+        429,
+        "<html>rate limited</html>",
+        () => textReads++,
+      );
     }
     return parked();
   }) as FetchImpl;
@@ -377,20 +434,194 @@ test("the !r.ok branch drains the body, surfaces Telegram's description, and tol
       store,
       fetchImpl,
     });
-    await tick(BACKOFF_BASE_MS);
-    await tick(BACKOFF_BASE_MS);
+    await tick(BACKOFF_CAP_MS);
+    await tick(BACKOFF_CAP_MS);
   } finally {
     capture.restore();
     mock.timers.reset();
   }
 
-  assert.equal(textReads, 2, "the body must be drained (read) on every !r.ok response");
+  assert.equal(
+    textReads,
+    2,
+    "the body must be drained (read) on every !r.ok response",
+  );
   assert.ok(
-    capture.lines.some((l) => l.includes("HTTP 401") && l.includes("Unauthorized")),
+    capture.lines.some(
+      (l) => l.includes("HTTP 401") && l.includes("Unauthorized"),
+    ),
     "a JSON body's description must be surfaced in the log line",
   );
   assert.ok(
-    capture.lines.some((l) => l.includes("HTTP 429") && !l.includes("undefined")),
+    capture.lines.some(
+      (l) => l.includes("HTTP 429") && !l.includes("undefined"),
+    ),
     "a non-JSON body must not throw and must still log a clean line without a bogus description",
+  );
+});
+
+test("with NO store the watchdog never exits, even with the network healthy and the threshold exceeded", async () => {
+  // Degraded mode (unwritable state dir): there is no place to record a
+  // watchdog exit, so the once-per-hour restart rate limit is unenforceable.
+  // The safe behavior is to never exit at all — otherwise this path silently
+  // restores the unbounded restart churn the branch exists to remove.
+  mock.timers.enable({ apis: ["Date", "setTimeout"] });
+
+  let reachabilityChecks = 0;
+  const reachability: Reachability = {
+    async check() {
+      reachabilityChecks++;
+      // Healthy — this is the condition that WOULD authorize an exit if the
+      // missing store were treated as "never exited before".
+      return true;
+    },
+  };
+
+  const THROWS = MAX_CONSECUTIVE_POLL_ERRORS + 3;
+  let calls = 0;
+  const fetchImpl: FetchImpl = (async () => {
+    calls++;
+    if (calls <= THROWS) throw new Error("transport blip");
+    return parked();
+  }) as FetchImpl;
+
+  const exit = captureExit();
+  const capture = captureStderr();
+  try {
+    startTelegramApproval(telegramCfg, makeGate(), {
+      reachability,
+      // store deliberately omitted — this IS the degraded mode.
+      fetchImpl,
+    });
+    for (let i = 0; i < THROWS + 1; i++) {
+      await tick(BACKOFF_CAP_MS);
+    }
+  } finally {
+    capture.restore();
+    exit.restore();
+    mock.timers.reset();
+  }
+
+  assert.ok(
+    reachabilityChecks > 0,
+    "sanity: the error threshold was actually crossed and the watchdog block ran",
+  );
+  assert.equal(
+    exit.count,
+    0,
+    "with no store there is no enforceable restart rate limit, so the watchdog must never exit",
+  );
+  assert.ok(
+    capture.lines.some((l) => l.includes("watchdog restart DISABLED")),
+    "the disabled watchdog must be stated once at startup, not left implicit",
+  );
+});
+
+test("repeated !r.ok responses back off with a GROWING delay, not a fixed base", async () => {
+  // A persistent 401/429 polled every 3s forever is ~28k requests/day. The
+  // HTTP-failure path needs its own counter feeding nextBackoffMs.
+  mock.timers.enable({ apis: ["Date", "setTimeout"] });
+
+  const reachability: Reachability = {
+    async check() {
+      return false;
+    },
+  };
+  const store = makeNoopStore();
+
+  let calls = 0;
+  const fetchImpl: FetchImpl = (async () => {
+    calls++;
+    return fakeFailResponse(
+      429,
+      JSON.stringify({ description: "Too Many Requests" }),
+    );
+  }) as FetchImpl;
+
+  const exit = captureExit();
+  const capture = captureStderr();
+  try {
+    startTelegramApproval(telegramCfg, makeGate(), {
+      reachability,
+      store,
+      fetchImpl,
+    });
+    await new Promise((res) => setImmediate(res));
+    assert.equal(calls, 1, "sanity: the first poll ran");
+
+    // 1st backoff is nextBackoffMs(1) === BACKOFF_BASE_MS.
+    await tick(BACKOFF_BASE_MS);
+    assert.equal(
+      calls,
+      2,
+      "the first retry comes after exactly the base delay",
+    );
+
+    // 2nd backoff must be nextBackoffMs(2) === 2 * base. One base is not enough.
+    await tick(BACKOFF_BASE_MS);
+    assert.equal(
+      calls,
+      2,
+      "the second backoff must EXCEED the base — a fixed 3s retry is the bug",
+    );
+    await tick(BACKOFF_BASE_MS);
+    assert.equal(calls, 3, "…and it elapses at 2x the base");
+  } finally {
+    capture.restore();
+    exit.restore();
+    mock.timers.reset();
+  }
+});
+
+test("channel.post goes through the injected fetchImpl seam", async () => {
+  mock.timers.enable({ apis: ["Date", "setTimeout"] });
+
+  const reachability: Reachability = {
+    async check() {
+      return false;
+    },
+  };
+  const urls: string[] = [];
+  const fetchImpl: FetchImpl = (async (url: unknown) => {
+    const u = String(url);
+    urls.push(u);
+    if (u.includes("getUpdates")) return parked();
+    return fakeOkResponse([]);
+  }) as FetchImpl;
+
+  const exit = captureExit();
+  const capture = captureStderr();
+  try {
+    const channel = startTelegramApproval(telegramCfg, makeGate(), {
+      reachability,
+      store: makeNoopStore(),
+      fetchImpl,
+    });
+    await channel.post(
+      {
+        request_id: "req1",
+        artifact: {
+          account: "ms365",
+          to: ["someone@example.com"],
+          subject: "hi",
+          body: "body",
+        },
+        content_hash: "h",
+        proposer: "agent-1",
+        status: "pending",
+        created_at: 0,
+        expires_at: 1,
+      },
+      [],
+    );
+  } finally {
+    capture.restore();
+    exit.restore();
+    mock.timers.reset();
+  }
+
+  assert.ok(
+    urls.some((u) => u.includes("sendMessage")),
+    "post() must use the injected fetch, not global fetch — otherwise it is untestable through the seam",
   );
 });

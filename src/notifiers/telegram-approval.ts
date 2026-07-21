@@ -1,24 +1,78 @@
 import { ApprovalGate } from "../approval/gate.js";
-import type { ApprovalChannel, PendingSend } from "../approval/types.js";
+import type {
+  ApprovalChannel,
+  ApprovalStore,
+  PendingSend,
+} from "../approval/types.js";
+import {
+  PROBE_TIMEOUT_MS,
+  TELEGRAM_PROBE_HOST,
+  TELEGRAM_PROBE_PORT,
+  makeTcpReachability,
+  type Reachability,
+} from "./reachability.js";
 
 const BODY_LIMIT = 1500;
 
 /**
- * Consecutive getUpdates failures after which the poll loop exits so launchd's
- * keepalive restarts the process. The poll loop retries the SAME fetch on each
- * error; if the process's fetch layer is wedged (stale DNS/connections after a
- * sleep/wake or network change), it never self-heals. A fresh process does.
- * 10 errors at a 3s backoff is ~30s+ of solid failure, so a transient blip
- * won't trip it.
+ * Consecutive getUpdates failures required before the watchdog will consider
+ * restarting. Reaching this alone is NOT sufficient — see
+ * shouldRestartAfterPollErrors.
  */
 export const MAX_CONSECUTIVE_POLL_ERRORS = 10;
 
-/** Whether the poll loop has hit enough consecutive errors to warrant a restart. */
+/** Minimum gap between watchdog exits. Bounds churn even if the probe is wrong. */
+export const WATCHDOG_COOLDOWN_MS = 3_600_000;
+
+export const BACKOFF_BASE_MS = 3_000;
+export const BACKOFF_CAP_MS = 60_000;
+
+/** How stale lastSuccessfulPoll must be before we shout, and the repeat gap. */
+export const RECEIVER_DOWN_WARN_MS = 300_000;
+
+/**
+ * Whether to exit so launchd restarts the process.
+ *
+ * A restart only helps when the network is fine and THIS process is broken.
+ * During an outage a restart cannot help, and exiting on every outage is what
+ * produced 13 restarts in 9 minutes. All three conditions must hold:
+ *
+ *   1. enough consecutive errors
+ *   2. the network is verifiably reachable (probed OUTSIDE fetch)
+ *   3. we have not already exited inside the cooldown window
+ *
+ * (3) is the safety net and does not depend on (2) being correct: worst case
+ * is one restart per hour.
+ *
+ * @param msSinceLastExit null when no watchdog exit has ever been recorded.
+ */
 export function shouldRestartAfterPollErrors(
   consecutiveErrors: number,
+  networkHealthy: boolean,
+  msSinceLastExit: number | null,
   threshold: number = MAX_CONSECUTIVE_POLL_ERRORS,
+  cooldownMs: number = WATCHDOG_COOLDOWN_MS,
 ): boolean {
-  return consecutiveErrors >= threshold;
+  if (consecutiveErrors < threshold) return false;
+  if (!networkHealthy) return false;
+  return msSinceLastExit === null || msSinceLastExit >= cooldownMs;
+}
+
+/** Exponential backoff: base, doubling, capped. Caller resets on success. */
+export function nextBackoffMs(consecutiveErrors: number): number {
+  const n = Math.max(1, consecutiveErrors);
+  return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** (n - 1));
+}
+
+/** Whether to emit the loud receiver-down line (stale, and not just warned). */
+export function shouldWarnReceiverDown(
+  msSinceLastSuccess: number,
+  msSinceLastWarn: number,
+): boolean {
+  return (
+    msSinceLastSuccess >= RECEIVER_DOWN_WARN_MS &&
+    msSinceLastWarn >= RECEIVER_DOWN_WARN_MS
+  );
 }
 
 export function formatApprovalMessage(
@@ -57,7 +111,15 @@ interface TelegramConfig {
 export function startTelegramApproval(
   cfg: TelegramConfig,
   gate: ApprovalGate,
+  deps: { reachability?: Reachability; store?: ApprovalStore } = {},
 ): ApprovalChannel {
+  const reachability =
+    deps.reachability ??
+    makeTcpReachability(
+      TELEGRAM_PROBE_HOST,
+      TELEGRAM_PROBE_PORT,
+      PROBE_TIMEOUT_MS,
+    );
   const api = (method: string) =>
     `https://api.telegram.org/bot${cfg.botToken}/${method}`;
 
@@ -85,7 +147,7 @@ export function startTelegramApproval(
     },
   };
 
-  void pollLoop(api, cfg, gate);
+  void pollLoop(api, cfg, gate, reachability, deps.store);
   return channel;
 }
 
@@ -109,9 +171,13 @@ async function pollLoop(
   api: (m: string) => string,
   cfg: TelegramConfig,
   gate: ApprovalGate,
+  reachability: Reachability,
+  store: ApprovalStore | undefined,
 ): Promise<void> {
   let offset = 0;
   let consecutiveErrors = 0;
+  let lastSuccess = Date.now();
+  let lastWarn = Date.now();
   for (;;) {
     try {
       const r = await fetch(api("getUpdates"), {
@@ -122,6 +188,9 @@ async function pollLoop(
           timeout: 25,
           allowed_updates: ["callback_query"],
         }),
+        // A hung connection is dropped and retried on a fresh socket rather
+        // than wedging the loop. 25s long-poll + 10s slack.
+        signal: AbortSignal.timeout(35_000),
       });
       const data = (await r.json()) as {
         result?: Array<{
@@ -141,6 +210,7 @@ async function pollLoop(
       // A successful getUpdates means the fetch layer is healthy — clear the
       // watchdog counter.
       consecutiveErrors = 0;
+      lastSuccess = Date.now();
       for (const u of data.result ?? []) {
         offset = u.update_id + 1;
         const cq = u.callback_query;
@@ -177,17 +247,46 @@ async function pollLoop(
       }
     } catch (e) {
       consecutiveErrors++;
+      const now = Date.now();
       process.stderr.write(
         `[telegram-approval] poll error (${consecutiveErrors}): ${String(e)}\n`,
       );
-      if (shouldRestartAfterPollErrors(consecutiveErrors)) {
+
+      if (shouldWarnReceiverDown(now - lastSuccess, now - lastWarn)) {
+        lastWarn = now;
+        const mins = Math.round((now - lastSuccess) / 60_000);
         process.stderr.write(
-          `[telegram-approval] ${consecutiveErrors} consecutive poll errors — ` +
-            `exiting so launchd restarts the process (clears a stuck fetch state).\n`,
+          `[telegram-approval] RECEIVER DOWN for ${mins}m — ` +
+            `approvals cannot be actioned\n`,
         );
-        process.exit(1);
       }
-      await new Promise((res) => setTimeout(res, 3000));
+
+      if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+        // Probe OUTSIDE fetch. If this said "unreachable" because fetch is
+        // wedged, the watchdog would never fire in the case it exists for.
+        const healthy = await reachability.check();
+        const lastExit = store?.getLastWatchdogExit() ?? null;
+        const since = lastExit === null ? null : now - lastExit;
+        if (shouldRestartAfterPollErrors(consecutiveErrors, healthy, since)) {
+          process.stderr.write(
+            `[telegram-approval] ${consecutiveErrors} consecutive poll errors ` +
+              `with the network reachable — exiting so launchd restarts the ` +
+              `process (clears a stuck fetch state).\n`,
+          );
+          store?.recordWatchdogExit(now);
+          process.exit(1);
+        }
+        if (!healthy) {
+          process.stderr.write(
+            `[telegram-approval] network unreachable — NOT restarting ` +
+              `(a restart cannot fix an outage); backing off\n`,
+          );
+        }
+      }
+
+      await new Promise((res) =>
+        setTimeout(res, nextBackoffMs(consecutiveErrors)),
+      );
     }
   }
 }

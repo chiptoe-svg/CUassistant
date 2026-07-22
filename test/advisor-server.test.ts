@@ -252,3 +252,66 @@ test("an in-flight turn can be stopped through /stop", async () => {
   stoppable.close();
   void cookie;
 });
+
+// The document is served by the HOST from validated data the agent supplied
+// through propose_schedule — the agent never renders it and never writes it.
+test("/export/schedule serves a document only after one has been proposed", async () => {
+  const cookie = cookieFrom(await login());
+  const before = await fetch(`${base}/export/schedule`, { headers: { cookie } });
+  assert.equal(before.status, 404, "no schedule proposed yet");
+
+  const withSchedule = createAdvisorServer({
+    runTurn: async (session) => {
+      session.lastSchedule = {
+        term: "202608",
+        notes: null,
+        sections: [
+          {
+            crn: "80833",
+            subjectCourse: "GC4060",
+            section: "001",
+            title: "Advanced Packaging",
+            creditHours: 3,
+            days: "TR",
+            beginTime: "1100",
+            endTime: "1150",
+            building: "Godfrey Hall",
+            room: "201",
+          },
+        ],
+      };
+      return { text: "proposed", toolCalls: 1, outcome: "complete" as const };
+    },
+  });
+  await new Promise<void>((r) => withSchedule.listen(0, "127.0.0.1", r));
+  const p = (withSchedule.address() as AddressInfo).port;
+  const c = cookieFrom(
+    await fetch(`http://127.0.0.1:${p}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "test-password" }).toString(),
+      redirect: "manual",
+    }),
+  );
+
+  const chat = await fetch(`http://127.0.0.1:${p}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: c },
+    body: JSON.stringify({ message: "make me a schedule" }),
+  });
+  const body = (await chat.json()) as { schedule?: boolean };
+  assert.equal(body.schedule, true, "the UI needs to know a document exists");
+
+  const doc = await fetch(`http://127.0.0.1:${p}/export/schedule`, {
+    headers: { cookie: c },
+  });
+  assert.equal(doc.status, 200);
+  assert.match(doc.headers.get("content-type") ?? "", /text\/html/);
+  assert.match(await doc.text(), /GC4060/);
+  withSchedule.close();
+});
+
+test("an unauthenticated GET /export/schedule is rejected", async () => {
+  const res = await fetch(`${base}/export/schedule`);
+  assert.equal(res.status, 401);
+});

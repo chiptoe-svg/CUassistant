@@ -21,6 +21,7 @@ import path from "node:path";
 
 import { ADVISOR_SESSION_TTL_MS } from "./config.js";
 import { log } from "./log.js";
+import type { ProposedSchedule } from "./advisor-artifacts.js";
 
 export interface TurnRecord {
   role: "advisor" | "agent";
@@ -35,6 +36,14 @@ export interface AdvisorSession {
   workDir: string;
   piSessionRoot: string;
   history: TurnRecord[];
+  /**
+   * The most recent schedule the agent proposed through propose_schedule, if
+   * any. It lives on the session rather than in a module-level map so it is
+   * disposed with everything else on clear or expiry — a proposed schedule
+   * describes a specific student's term and must not outlive the session that
+   * produced it.
+   */
+  lastSchedule?: ProposedSchedule;
   lastTouched: number;
 }
 

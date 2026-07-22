@@ -42,6 +42,7 @@ import {
   type AdvisorTurnResult,
 } from "./advisor-agent.js";
 import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
+import { renderSchedule } from "./advisor-artifacts.js";
 
 const MAX_BODY_BYTES = 5_000_000;
 
@@ -195,6 +196,10 @@ export function createAdvisorServer(
           text: withOutcomeNote(result),
           toolCalls: result.toolCalls,
           outcome: result.outcome,
+          // Whether a document exists to download, not the document itself.
+          // Prose stays the default; the button only lights up once the agent
+          // has actually called propose_schedule.
+          schedule: Boolean(session.lastSchedule),
         });
       }
 
@@ -227,6 +232,22 @@ export function createAdvisorServer(
           bytes: Number(req.headers["content-length"] ?? 0),
         });
         return json(res, 200, { stored: name });
+      }
+
+      // The host renders the document, never the agent. The agent's
+      // propose_schedule call only supplied the data, and it was validated
+      // before it was stored — nothing unvalidated can reach this template.
+      if (method === "GET" && url.pathname === "/export/schedule") {
+        if (!session.lastSchedule) {
+          return json(res, 404, { error: "no schedule has been proposed yet" });
+        }
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          // inline, not attachment: the point of the document is that the
+          // advisor can look at it and press print.
+          "Content-Disposition": 'inline; filename="proposed-schedule.html"',
+        });
+        return res.end(renderSchedule(session.lastSchedule));
       }
 
       if (method === "GET" && url.pathname === "/export") {

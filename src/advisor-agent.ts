@@ -9,8 +9,9 @@
 // passes createFetchTool(), createWebSearchTool(), and createCodingTools(); all
 // three are omitted here. "Answers come from the MCP tools or not at all" is
 // therefore structural - the agent has no other capability to reach for -
-// rather than a flag telling it not to. (Task 6 adds exactly one host tool,
-// propose_schedule.)
+// rather than a flag telling it not to. The one exception is propose_schedule,
+// the single host tool: it reaches nothing and writes nothing, it hands
+// validated structured data back to the host for rendering.
 //
 // The bridge is built ONCE at startup and shared. Building it per request would
 // pay listTools() latency every turn and churn connections against the MCP
@@ -45,6 +46,7 @@ import {
 import { log } from "./log.js";
 import { isEgressAuthorized } from "./policy.js";
 import { createAdvisorMcpBridge } from "./advisor-mcp.js";
+import { createProposeScheduleTool } from "./advisor-artifacts.js";
 import type { AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
@@ -222,7 +224,14 @@ async function runWithProvider(
     env,
     session: piSession,
     model: target.model,
-    tools: bridge!.tools,
+    // bridge.tools plus EXACTLY ONE host tool. propose_schedule writes
+    // nothing — it hands validated structured data back to the host, which
+    // renders the document. Nothing else joins this array; "answers come from
+    // the MCP tools or not at all" stays structural.
+    //
+    // Built per turn because it closes over the session it writes the proposed
+    // schedule onto.
+    tools: [...bridge!.tools, createProposeScheduleTool(session)],
     systemPrompt: loadSystemPrompt(),
     streamOptions: { cacheRetention: "short" },
     getApiKeyAndHeaders: async () => ({ apiKey: target.apiKey }),
@@ -336,6 +345,11 @@ async function runAttempt(
   signal?: AbortSignal,
 ): Promise<AdvisorTurnResult> {
   const attemptRoot = mkdtempSync(path.join(tmpdir(), "advisor-pi-try-"));
+  // Any schedule proposed during a discarded attempt is discarded with it, for
+  // the same reason the JSONL is: a failed or cancelled attempt must leave no
+  // trace, and a stale document offered for download is worse than none.
+  const scheduleBefore = session.lastSchedule;
+  let committed = false;
   try {
     await cp(session.piSessionRoot, attemptRoot, { recursive: true });
     const result = await runWithProvider(
@@ -350,9 +364,11 @@ async function runAttempt(
     if (result.outcome !== "aborted") {
       await rm(session.piSessionRoot, { recursive: true, force: true });
       await cp(attemptRoot, session.piSessionRoot, { recursive: true });
+      committed = true;
     }
     return result;
   } finally {
+    if (!committed) session.lastSchedule = scheduleBefore;
     await rm(attemptRoot, { recursive: true, force: true });
   }
 }

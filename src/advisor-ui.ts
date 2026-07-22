@@ -72,6 +72,7 @@ when you move to another student.</p>
   <button id="stop" type="button" disabled>Stop</button>
   <button id="clear" type="button">Clear session</button>
   <button id="export" type="button">Export transcript</button>
+  <button id="schedule" type="button" hidden>Open proposed schedule</button>
 </form>
 
 <script>
@@ -106,6 +107,9 @@ $("composer").addEventListener("submit", async (e) => {
     // An aborted turn is a partial answer, not a finished one (Task 3). It
     // gets a distinct label and status so it is never mistaken for a
     // completed response.
+    // Prose is the default. The document button appears only after the agent
+    // has actually called propose_schedule and the host validated it.
+    if (data.schedule) $("schedule").hidden = false;
     if (data.outcome === "aborted") {
       addAnswer("Advisor chat \\u2014 stopped", data.text);
       status.textContent = "Stopped.";
@@ -137,11 +141,16 @@ $("stop").addEventListener("click", async () => {
 $("clear").addEventListener("click", async () => {
   await fetch("/clear", { method: "POST" });
   answers.replaceChildren();
+  $("schedule").hidden = true;   // the old session's document is gone with it
   status.textContent = "Session cleared.";
   $("message").focus();
 });
 
 $("export").addEventListener("click", () => { location.href = "/export"; });
+
+$("schedule").addEventListener("click", () => {
+  window.open("/export/schedule", "_blank", "noopener");
+});
 </script>`,
   );
 }

@@ -13,6 +13,7 @@ interface FakeElement {
   textContent: string;
   className: string;
   disabled: boolean;
+  hidden: boolean;
   children: FakeElement[];
   listeners: Record<string, (...args: unknown[]) => unknown>;
   append(...nodes: FakeElement[]): void;
@@ -28,6 +29,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     textContent: "",
     className: "",
     disabled: false,
+    hidden: false,
     children: [],
     listeners: {},
     append(...nodes) {
@@ -61,6 +63,7 @@ async function runChatSubmit(responseBody: unknown) {
     stop: makeElement({ disabled: true }),
     clear: makeElement(),
     export: makeElement(),
+    schedule: makeElement({ hidden: true }),
   };
 
   const fetchCalls: Array<[string, unknown]> = [];
@@ -176,4 +179,15 @@ test("an aborted turn is not rendered as a complete answer", async () => {
     "Response ready.",
     "the status region must not announce a stopped turn as a ready response",
   );
+});
+
+// Prose is the default. The document button is revealed only when the turn
+// reported that the agent actually called propose_schedule and the host
+// validated the result — never on an ordinary answer.
+test("the schedule button stays hidden until a schedule has been proposed", async () => {
+  const plain = await runChatSubmit({ text: "Room capacity is 30." });
+  assert.equal(plain.elements.schedule!.hidden, true);
+
+  const proposed = await runChatSubmit({ text: "Proposed.", schedule: true });
+  assert.equal(proposed.elements.schedule!.hidden, false);
 });

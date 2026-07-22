@@ -460,10 +460,13 @@ test("the round cap bounds the loop when the model names a tool that does not ex
 
 test("the round cap bounds the loop when the model sends schema-invalid arguments", async () => {
   // agent-loop.js:406-412 — validateToolArguments throws, caught into
-  // kind:"immediate". `text` is required and a number is not a string.
+  // kind:"immediate". The required `text` property is MISSING: a wrong-typed
+  // value would not do, because pi-ai runs Value.Convert first
+  // (utils/validation.js:255) and a number coerces to a string, i.e. validates
+  // cleanly and never reaches the immediate path this test exists to cover.
   const provider = await startFakeProvider({
     toolCallsBeforeAnswer: 100,
-    toolArguments: '{"text": 12345}',
+    toolArguments: "{}",
   });
   const session = fakeSession();
   setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
@@ -813,4 +816,80 @@ test("the egress gate accepts the declared spark host", () => {
 // The shipped default must pass its own gate, host check included.
 test("the shipped chain passes the host check with the shipped base URL", () => {
   assert.doesNotThrow(() => assertAdvisorChainAuthorized(["spark", "openai"]));
+});
+
+// Captured LIVE from the spark endpoint on 2026-07-22 while it was in the
+// degraded state. The model varies the wrapper it invents from generation to
+// generation, so a detector matching only `<tool_call>` missed real cases —
+// two of these six. Pinning the real shapes keeps that from regressing.
+const LIVE_MALFORMED = [
+  '\n\n<tool_call>\n{"name": "cu_public__search-clemson-classes", "parameters": {"term": "202608"}}\n',
+  '\n\n<tool_call>\n{"type": "function", "name": "cu_public__list-clemson-terms", "parameters": {"max": 10}}\n</tool_call>',
+  '\n\n<parameter name="cu_public__list-clemson-terms">\n<parameter name="max">5</parameter>\n</parameter>\n</function>',
+  'Let me look up the terms first.\n\n<tool_code>\n```json\n{"name": "cu_public__list-clemson-terms"}\n```',
+  "I'll list terms.\n\n<cu_public__list-clemson-terms>\n{\"max\": 20}\n</cu_public__list-clemson-terms>",
+];
+
+test("every malformed shape captured live is detected", () => {
+  for (const [i, sample] of LIVE_MALFORMED.entries()) {
+    assert.equal(
+      detectMalformedToolCall(sample, 0, [
+        "cu_public__list-clemson-terms",
+        "cu_public__search-clemson-classes",
+      ]),
+      true,
+      `live sample ${i + 1} slipped through the detector`,
+    );
+  }
+});
+
+// The detector must not fire on a real answer. A grounded reply talks about
+// "the class search", not about the wire name of a tool.
+test("a genuine answer is never flagged as malformed", () => {
+  const names = ["cu_public__list-clemson-terms", "cu_public__search-clemson-classes"];
+  for (const answer of [
+    "Fall 2026 has three CPSC 3000-level classes: CPSC 3300, CPSC 3600, and CPSC 3720.",
+    "I looked this up with the class search tool and found nothing for that term.",
+    "You need 12 more credits. Your catalog year is 2024-2025.",
+  ]) {
+    assert.equal(
+      detectMalformedToolCall(answer, 0, names),
+      false,
+      `a genuine answer was flagged: ${answer}`,
+    );
+  }
+});
+
+// REGRESSION: with enable_thinking on, the endpoint can spend its whole
+// completion budget in `reasoning` deltas and stop with finish_reason "stop",
+// no content and no tool calls. Reasoning is not an answer and is filtered out
+// of `text`, so the turn used to arrive at outcome `complete` with an empty
+// string — a blank answer rendered as a finished one. Observed live 2026-07-22.
+test("a thinking-only turn with no answer text fails instead of returning blank", async () => {
+  const provider = await startFakeProvider({
+    toolCallsBeforeAnswer: 0,
+    answer: "",
+  });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
+
+  let outcome = "";
+  let threw = false;
+  try {
+    const result = await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "hello",
+    );
+    outcome = result.outcome;
+  } catch {
+    threw = true;
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+
+  assert.ok(threw, `an empty answer was returned as outcome "${outcome}" instead of failing`);
 });

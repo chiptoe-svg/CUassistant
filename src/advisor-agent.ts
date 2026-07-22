@@ -296,6 +296,20 @@ export interface AdvisorTurnResult {
  * model INTENDED to call a tool and no tool ran is precisely the turn whose
  * prose is most likely to be invented — and it renders as a finished answer.
  */
+/**
+ * Structural markers of an attempted tool call. Every one of these was observed
+ * LIVE on 2026-07-22 while the endpoint was in the degraded state — the model
+ * varies the wrapper it invents from generation to generation, so matching only
+ * `<tool_call>` missed two of six real captured shapes.
+ */
+const MALFORMED_MARKERS = [
+  /<\/?tool_call>/i,
+  /<\/?tool_code>/i,
+  /<\/function>/i,
+  /<function[= ]/i,
+  /<parameter name=/i,
+];
+
 export function detectMalformedToolCall(
   text: string,
   toolCalls: number,
@@ -305,8 +319,17 @@ export function detectMalformedToolCall(
   // prose — a legitimate answer may quote a tool name in angle brackets.
   if (toolCalls > 0) return false;
   if (!text) return false;
-  if (/<tool_call>/i.test(text)) return true;
-  return toolNames.some((name) => text.includes(`<${name}>`));
+  if (MALFORMED_MARKERS.some((re) => re.test(text))) return true;
+  // An INTERNAL tool identifier (`cu_public__list-clemson-terms`) in prose that
+  // also carries invocation punctuation, with no tool actually called. A real
+  // answer talks about "the class search", not about the wire name of a tool;
+  // printing the wire name next to a brace or a bracket is the model narrating
+  // a call it never made. Both conditions are required so that merely naming a
+  // tool in a sentence is not enough to trip this.
+  return (
+    toolNames.some((name) => text.includes(name)) &&
+    (text.includes("{") || text.includes("<"))
+  );
 }
 
 // --- context budget ---------------------------------------------------------
@@ -643,6 +666,27 @@ async function runWithProvider(
         },
       );
       return { text, toolCalls, outcome: "malformed_tool_call" };
+    }
+
+    // An EMPTY answer with no tool calls is not a finished turn, and it must
+    // not render as a blank one.
+    //
+    // Observed live 2026-07-22: with enable_thinking on, the endpoint can spend
+    // its whole completion budget in `reasoning` deltas and then stop with
+    // finish_reason "stop", no content and no tool calls. pi-ai parses the
+    // reasoning correctly, but reasoning is not an answer — it is filtered out
+    // of `text` — so the turn arrived here with an empty string and the outcome
+    // `complete`. Enabling thinking makes this more reachable, so the guard
+    // ships alongside it.
+    //
+    // Thrown rather than returned so the provider chain treats it as a failed
+    // attempt and falls through to the fallback, which is the right response to
+    // a provider that returned nothing: runAttempt discards the attempt's JSONL
+    // and the advisor gets an answer from the next provider.
+    if (!text) {
+      throw new Error(
+        "provider returned no answer text and called no tools (thinking-only generation)",
+      );
     }
 
     return { text, toolCalls, outcome: "complete" };

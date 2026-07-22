@@ -21,6 +21,19 @@ const STYLE = `
   :focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
 `;
 
+// The login error is the only place a string crosses into this page's markup.
+// Callers are expected to pass fixed, server-authored text, but escaping here
+// means a future caller that forwards something request-derived gets a broken
+// message rather than reflected XSS.
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 function page(title: string, inner: string): string {
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
@@ -33,7 +46,7 @@ export function renderLoginPage(error = ""): string {
   return page(
     "Advisor chat — sign in",
     `<h1>Advisor chat</h1>
-${error ? `<p role="alert">${error}</p>` : ""}
+${error ? `<p role="alert">${escHtml(error)}</p>` : ""}
 <form action="/login" method="post">
   <label for="password">Password</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required>

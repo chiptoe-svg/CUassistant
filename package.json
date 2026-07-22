@@ -38,6 +38,8 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.75.4",
+    "@earendil-works/pi-ai": "^0.75.4",
     "@modelcontextprotocol/sdk": "1.29.0",
     "better-sqlite3": "^12.11.1",
     "yaml": "^2.5.0"

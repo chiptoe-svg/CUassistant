@@ -590,6 +590,12 @@ data_egress:
       basis: "on-host inference (Ollama); content does not leave the machine"
       authorized: true
 
+    - provider: local_vllm
+      scope: local
+      sends: [subject, body]
+      basis: "on-host inference (vLLM on DGX Spark); content does not leave Clemson-managed hardware"
+      authorized: true
+
   # Model backends that a CONSUMING AGENT (a paired MCP client) may attest to.
   # An agent's per-agent token is minted only if its --provider is listed here
   # with authorized: true, and the server re-checks this on every request. This

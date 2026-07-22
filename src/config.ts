@@ -147,3 +147,32 @@ export const TOKEN_PORTAL_PORT = Number(
 export const TOKEN_PORTAL_BASE_URL =
   process.env.TOKEN_PORTAL_BASE_URL ||
   `http://localhost:${process.env.TOKEN_PORTAL_PORT || 8769}`;
+
+// --- Advisor chat service (port 8770) ---
+export const ADVISOR_PORT = Number(process.env.ADVISOR_PORT || 8770);
+export const ADVISOR_PASSWORD = process.env.ADVISOR_PASSWORD || "";
+export const ADVISOR_SESSION_TTL_MS = Number(
+  process.env.ADVISOR_SESSION_TTL_MS || 2 * 60 * 60 * 1000,
+);
+/** Egress provider name; must be authorized in policy/action-policy.yaml. */
+export const ADVISOR_PROVIDER = process.env.ADVISOR_PROVIDER || "local_vllm";
+/** Tried in order: on-prem first, paid fallback (mirrors ask_gc). */
+export const ADVISOR_PROVIDER_CHAIN = (
+  process.env.ADVISOR_PROVIDER_CHAIN || "spark,openai"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+export const ADVISOR_MODEL = process.env.ADVISOR_MODEL || "qwen3.6-35b-a3b";
+export const ADVISOR_BASE_URL =
+  process.env.ADVISOR_BASE_URL || "http://gcspark.clemson.edu:8080/v1";
+/** Max tool-call rounds per turn. Unattended service: must be bounded. */
+export const ADVISOR_MAX_ROUNDS = Number(process.env.ADVISOR_MAX_ROUNDS || 8);
+export const ADVISOR_MCP_PUBLIC_URL =
+  process.env.ADVISOR_MCP_PUBLIC_URL || "http://127.0.0.1:8766/";
+export const ADVISOR_MCP_CATALOG_URL =
+  process.env.ADVISOR_MCP_CATALOG_URL || "http://127.0.0.1:8767/";
+export const ADVISOR_MCP_WIKI_URL =
+  process.env.ADVISOR_MCP_WIKI_URL || "http://127.0.0.1:3000/api/mcp";
+/** Bearer token for the curriculum wiki MCP, which requires auth (401 without). */
+export const ADVISOR_MCP_WIKI_TOKEN = process.env.ADVISOR_MCP_WIKI_TOKEN || "";

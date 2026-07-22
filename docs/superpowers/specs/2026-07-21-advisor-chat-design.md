@@ -130,8 +130,19 @@ The SDK runs the loop; the CLI it spawns provides isolation:
 **MCP servers are injected explicitly, never inherited — via an isolated
 `CODEX_HOME`.** The SDK does not expose the CLI's `--ignore-user-config`, so
 suppressing user config is not available as a flag. The mechanism is the SDK's
-`env` option: point `CODEX_HOME` at a service-owned directory containing a
-minimal `config.toml` that declares `8766` and `8767` and nothing else.
+`env` option: point `CODEX_HOME` at a directory containing a minimal
+`config.toml` that declares `8766` and `8767` and nothing else. (`env` also
+replaces the child environment wholesale — the SDK "will not inherit variables
+from `process.env`" when it is provided.)
+
+**`CODEX_HOME` is per session, not service-global, because it is a write
+surface.** Codex persists thread transcripts under `CODEX_HOME/sessions`, and a
+single `codex mcp list` was enough to create `memories/` and `tmp/` there.
+Session state the design promises to hold only in memory would therefore be
+written to disk behind our back — with student information potentially in it.
+So each session gets its own `CODEX_HOME`, created alongside its working
+directory and removed by the same `rm -rf` on clear or expiry. This is what
+makes "nothing persists server-side" true rather than aspirational.
 
 This is not theoretical. Verified on this machine, 2026-07-21:
 
@@ -269,8 +280,9 @@ useful when `advisorId` carries real values in Phase 2.
 ## Testing
 
 - **Session store** — two cookies never resolve to each other's session; clear
-  removes both the entry and the temp directory; TTL sweep expires idle sessions
-  and leaves active ones.
+  removes the entry, the working directory, and the session's `CODEX_HOME`
+  (including any transcript Codex wrote under `sessions/`); TTL sweep expires
+  idle sessions and leaves active ones.
 - **Tool boundary** — the generated `CODEX_HOME/config.toml` declares exactly
   `8766` and `8767`. Tests assert `8765` is absent, and that no server from the
   developer's own `~/.codex/config.toml` (notably `node_repl`) can appear. This

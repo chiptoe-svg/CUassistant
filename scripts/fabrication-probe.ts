@@ -105,7 +105,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { getScheduleDbMeta, openScheduleDb, scheduleDbPath } from "../src/clemson-schedule-db.ts";
-import { ADVISOR_BASE_URL } from "../src/config.ts";
+import {
+  ADVISOR_BASE_URL,
+  CLEMSON_LLM_API_KEY,
+  CLEMSON_LLM_OPENAI_BASE_URL,
+  OPENAI_API_KEY,
+} from "../src/config.ts";
 import {
   blockValidity,
   formatInterval,
@@ -1533,14 +1538,31 @@ async function callMcpTool(name: string, args: unknown): Promise<string> {
 interface LoopResult extends FabObservation {
   turns: number;
   toolNames: string[];
+  /**
+   * Tokens summed across every provider request in the trial, when the endpoint
+   * reports `usage`. This is a whole TRIAL (all agentic turns), not one turn —
+   * the price/quality question is about what answering a question costs, and a
+   * model that needs four turns to get there costs four turns' tokens.
+   * Null when the endpoint reported no usage at all.
+   */
+  promptTokens: number | null;
+  completionTokens: number | null;
 }
 
 const MAX_TURNS = 6;
 
+/**
+ * `frontier` strips the vLLM/Qwen-specific fields the OpenAI passthrough
+ * rejects — `chat_template_kwargs.enable_thinking` above all, which is exactly
+ * the field the advisor's own provider code is careful never to send there.
+ * `apiKey` is empty for spark (open on the campus network) and set for the
+ * Clemson gateway.
+ */
 async function runAgenticTrial(
   baseUrl: string,
   payload: Record<string, any>,
   question: string,
+  opts: { apiKey?: string; frontier?: boolean; model?: string } = {},
 ): Promise<LoopResult> {
   const messages: Array<Record<string, any>> = [
     payload.messages[0],
@@ -1553,24 +1575,38 @@ async function runAgenticTrial(
     answer: "",
     turns: 0,
     toolNames: [],
+    promptTokens: null,
+    completionTokens: null,
   };
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     out.turns = turn + 1;
-    const body = {
-      model: payload.model,
+    const body: Record<string, any> = {
+      model: opts.model ?? payload.model,
       messages,
       tools: payload.tools,
       stream: false,
-      temperature: payload.temperature,
       max_tokens: payload.max_tokens,
-      chat_template_kwargs: payload.chat_template_kwargs,
     };
+    if (opts.frontier) {
+      // gpt-5.4 is a reasoning model: the Responses-era models reject an
+      // explicit temperature, and chat_template_kwargs is a vLLM extension the
+      // passthrough does not understand. Both are omitted rather than sent and
+      // ignored — the same two hazards the advisor's provider code guards.
+      delete body.max_tokens;
+      body.max_completion_tokens = payload.max_tokens;
+    } else {
+      body.temperature = payload.temperature;
+      body.chat_template_kwargs = payload.chat_template_kwargs;
+    }
     let res: Response;
     try {
       res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}),
+        },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(240_000),
       });
@@ -1587,7 +1623,20 @@ async function runAgenticTrial(
     }
     let choice: Record<string, any> | undefined;
     try {
-      choice = (JSON.parse(raw) as { choices?: Array<Record<string, any>> }).choices?.[0];
+      const parsed = JSON.parse(raw) as {
+        choices?: Array<Record<string, any>>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      // Accumulated across turns, before the early returns below, so a trial
+      // that ends on its first turn still reports what it cost.
+      const u = parsed.usage;
+      if (typeof u?.prompt_tokens === "number") {
+        out.promptTokens = (out.promptTokens ?? 0) + u.prompt_tokens;
+      }
+      if (typeof u?.completion_tokens === "number") {
+        out.completionTokens = (out.completionTokens ?? 0) + u.completion_tokens;
+      }
+      choice = parsed.choices?.[0];
     } catch {
       return out; // bodyParsed stays false -> unparseable
     }
@@ -1638,9 +1687,16 @@ function modelsUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/v1\/?$/, "")}/v1/models`;
 }
 
-async function fetchEndpointState(baseUrl: string, model: string): Promise<EndpointState> {
+async function fetchEndpointState(
+  baseUrl: string,
+  model: string,
+  apiKey = "",
+): Promise<EndpointState> {
   try {
-    const res = await fetch(modelsUrl(baseUrl), { signal: AbortSignal.timeout(30_000) });
+    const res = await fetch(modelsUrl(baseUrl), {
+      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(30_000),
+    });
     if (!res.ok) {
       return { target: null, othersLoading: [], stateless: false, error: `HTTP ${res.status}` };
     }
@@ -1680,6 +1736,9 @@ interface QuestionResult {
   toolBackedInterval: Interval;
   valid: boolean;
   validity: string;
+  /** Per-trial token totals, for the price half of the question. */
+  promptTokens: number[];
+  completionTokens: number[];
   examples: Array<{
     cls: FabClass;
     extracted: string | null;
@@ -1743,6 +1802,8 @@ export function parseArgs(argv: string[]) {
     questions: get("--questions")?.split(",").map((s) => s.trim()),
     validateOnly: argv.includes("--validate-extractor"),
     allowUnderpowered: argv.includes("--allow-underpowered"),
+    // Measure the paid model through Clemson's gateway instead of spark.
+    frontier: argv.includes("--frontier"),
     report: get("--report"),
   };
 }
@@ -1888,7 +1949,22 @@ async function main() {
     string,
     any
   >;
-  const model = String(payload.model);
+  // Which endpoint this run measures. spark is the default; --frontier swaps in
+  // the Clemson gateway's OpenAI passthrough, keeping the tool surface, the
+  // system prompt and the questions identical so the two cells are comparable.
+  const gatewayKey = CLEMSON_LLM_API_KEY || OPENAI_API_KEY;
+  if (args.frontier && !gatewayKey) {
+    console.error("REFUSED: --frontier requested but CLEMSON_LLM_API_KEY is unset.");
+    process.exit(2);
+  }
+  const endpointUrl = args.frontier ? CLEMSON_LLM_OPENAI_BASE_URL : ADVISOR_BASE_URL;
+  const endpointKey = args.frontier ? gatewayKey : "";
+  const model = args.frontier
+    ? process.env.ADVISOR_OPENAI_MODEL || "gpt-5.4"
+    : String(payload.model);
+  const trialOpts = args.frontier
+    ? { apiKey: endpointKey, frontier: true, model }
+    : {};
   const selected = args.questions
     ? resolutions.filter((r) => args.questions!.includes(r.question.id))
     : resolutions;
@@ -1927,7 +2003,7 @@ async function main() {
   log(`# Fabrication probe — does the answer trace to a tool result?`);
   log();
   log(`Run started: ${started.toISOString()}`);
-  log(`Endpoint: ${ADVISOR_BASE_URL} model=${model}`);
+  log(`Endpoint: ${endpointUrl} model=${model}`);
   log(`Trials per question: ${args.trials}${underpowered ? "  ** NON-CONCLUSIVE **" : ""}`);
   log(
     `Questions: ${questions.length} measured (${questions.length * args.trials} trials total)` +
@@ -1978,14 +2054,18 @@ async function main() {
 
   for (const q of questions) {
     const t0 = Date.now();
-    const before = await fetchEndpointState(ADVISOR_BASE_URL, model);
+    const before = await fetchEndpointState(endpointUrl, model, endpointKey);
     const counts = emptyFabCounts();
     const examples: QuestionResult["examples"] = [];
+    const promptTokens: number[] = [];
+    const completionTokens: number[] = [];
 
     for (let i = 0; i < args.trials; i++) {
-      const obs = await runAgenticTrial(ADVISOR_BASE_URL, payload, q.question);
+      const obs = await runAgenticTrial(endpointUrl, payload, q.question, trialOpts);
       const verdict = classifyFabTrial(obs, q);
       counts[verdict.cls]++;
+      if (obs.promptTokens !== null) promptTokens.push(obs.promptTokens);
+      if (obs.completionTokens !== null) completionTokens.push(obs.completionTokens);
       if (
         verdict.cls === "fabricated" ||
         verdict.cls === "unsupported" ||
@@ -2008,7 +2088,7 @@ async function main() {
       );
     }
 
-    const after = await fetchEndpointState(ADVISOR_BASE_URL, model);
+    const after = await fetchEndpointState(endpointUrl, model, endpointKey);
     const validity = blockValidity(before, after);
     results.push({
       q,
@@ -2018,6 +2098,8 @@ async function main() {
       toolBackedInterval: wilsonInterval(counts.tool_backed, args.trials),
       valid: validity.valid,
       validity: validity.reason,
+      promptTokens,
+      completionTokens,
       examples,
       elapsedMs: Date.now() - t0,
     });
@@ -2079,6 +2161,52 @@ async function main() {
         `${r.valid ? formatInterval(r.fabricatedInterval) : "WITHHELD"} | ` +
         `${r.valid ? formatInterval(r.toolBackedInterval) : "WITHHELD"} | ` +
         `${r.valid ? "valid" : "**INVALID**"} |`,
+    );
+  }
+  log();
+
+  // --- token cost, per question -------------------------------------------
+  // Reported per question for the same reason the rates are: a mean pooled
+  // across questions of very different tool-surface depth is not a per-question
+  // cost. Median is shown alongside the mean because a single 6-turn runaway
+  // trial drags the mean and the median says what a typical answer cost.
+  const anyTokens = results.some((r) => r.promptTokens.length > 0);
+  log(`## Token cost per trial (whole trial, all agentic turns)`);
+  log();
+  if (!anyTokens) {
+    log(
+      `The endpoint returned no \`usage\` block on any request, so cost was not ` +
+        `measured. This is an absence of instrumentation, NOT a cost of zero.`,
+    );
+  } else {
+    const stat = (xs: number[]) => {
+      if (xs.length === 0) return { mean: null, median: null, n: 0 };
+      const s = [...xs].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return {
+        mean: xs.reduce((a, b) => a + b, 0) / xs.length,
+        median: s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2,
+        n: xs.length,
+      };
+    };
+    log(`| question | n | prompt mean | prompt median | completion mean | completion median | total mean |`);
+    log(`|---|---|---|---|---|---|---|`);
+    for (const r of results) {
+      const p = stat(r.promptTokens);
+      const c = stat(r.completionTokens);
+      const fmt = (x: number | null) => (x === null ? "—" : Math.round(x).toLocaleString());
+      const total =
+        p.mean === null && c.mean === null ? null : (p.mean ?? 0) + (c.mean ?? 0);
+      log(
+        `| \`${r.q.id}\` | ${p.n} | ${fmt(p.mean)} | ${fmt(p.median)} | ` +
+          `${fmt(c.mean)} | ${fmt(c.median)} | ${fmt(total)} |`,
+      );
+    }
+    log();
+    log(
+      `Trials whose endpoint block was INVALID are included here: a token count is ` +
+        `a cost that was actually incurred regardless of whether the behavioural ` +
+        `numbers from that block are trustworthy.`,
     );
   }
   log();

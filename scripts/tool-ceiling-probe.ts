@@ -43,7 +43,12 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 
-import { ADVISOR_BASE_URL, OPENAI_API_KEY } from "../src/config.ts";
+import {
+  ADVISOR_BASE_URL,
+  CLEMSON_LLM_API_KEY,
+  CLEMSON_LLM_OPENAI_BASE_URL,
+  OPENAI_API_KEY,
+} from "../src/config.ts";
 
 // ---------------------------------------------------------------------------
 // Pure logic (exported for test/tool-ceiling-probe.test.ts — no network)
@@ -659,15 +664,23 @@ async function main() {
     },
   ];
   if (args.frontier) {
-    if (!OPENAI_API_KEY) {
-      console.error("REFUSED: --frontier requested but OPENAI_API_KEY is unset.");
+    // The frontier control now reaches OpenAI through Clemson's consolidated
+    // gateway rather than dialling api.openai.com directly — same route the
+    // advisor's `openai` chain entry takes, so the control measures the path
+    // that would actually ship. `frontier: true` still strips the vLLM-specific
+    // fields, because the passthrough forwards to the real OpenAI API.
+    const gatewayKey = CLEMSON_LLM_API_KEY || OPENAI_API_KEY;
+    if (!gatewayKey) {
+      console.error(
+        "REFUSED: --frontier requested but CLEMSON_LLM_API_KEY is unset.",
+      );
       process.exit(2);
     }
     endpoints.push({
       label: "frontier",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: CLEMSON_LLM_OPENAI_BASE_URL,
       model: process.env.ADVISOR_OPENAI_MODEL || "gpt-5.4",
-      apiKey: OPENAI_API_KEY,
+      apiKey: gatewayKey,
       frontier: true,
     });
   }
@@ -910,7 +923,7 @@ async function main() {
 // Only run when executed directly, so the test file can import the pure
 // functions without firing 300 HTTP requests.
 const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].split("/").pop() ?? " ");
+  process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].split("/").pop() ?? "");
 if (invokedDirectly) {
   await main();
 }

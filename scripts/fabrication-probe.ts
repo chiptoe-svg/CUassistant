@@ -462,8 +462,40 @@ export function extractCredits(text: string): Extraction {
 
 // --- start time ------------------------------------------------------------
 
+/**
+ * The third alternative — a BARE 4-digit HHMM with no separator and no meridiem
+ * — exists because a model asked to "answer with the start time" may answer
+ * literally `1220`, which is the same normalized form the ground truth itself
+ * uses. Without it that answer extracted as nothing and was filed `no_fact`,
+ * i.e. the instrument scored a model that gave the exactly-correct value as
+ * having stated no fact at all. Measured 2026-07-22: gpt-5.4 answered `1220` on
+ * 20/20 trials of gc3780-start and scored 0/20, while spark answered
+ * "12:20 PM" and scored 20/20 — a 100-point gap that was entirely the regex.
+ *
+ * This is deliberately NARROW, because a bare 4-digit run is the most ambiguous
+ * thing on this page — a CRN, a term code, a year and a room number are all
+ * digits. It is admitted only when:
+ *   - the run is exactly 4 digits (`\b\d{4}\b`), so 5-digit CRNs like 87630 and
+ *     6-digit term codes like 202608 can never match; and
+ *   - it parses as a real 24-hour time (hour <= 23, minute <= 59), which
+ *     excludes years (2026 -> minute 26 is valid but hour 20 is... valid too,
+ *     so see below) —
+ * the hour/minute range check alone is NOT sufficient (2026 parses as 20:26), so
+ * the token is additionally rejected when the surrounding text marks it as
+ * something else: a term/CRN/year label immediately before it. Anything still
+ * ambiguous after that is left to the existing candidate machinery, which
+ * reports multiple candidates rather than silently picking one.
+ */
 const TIME_TOKEN =
-  /\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(a\.?m\.?|p\.?m\.?)?|\b(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)/gi;
+  /\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(a\.?m\.?|p\.?m\.?)?|\b(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)|\b(\d{4})\b/gi;
+
+/**
+ * Text immediately before a bare 4-digit run that proves it is NOT a time.
+ * `term 202608` is 6 digits and cannot reach here, but `term code 2026`, `CRN
+ * 8763`, and `Fall 2026` all can, and none of them is a start time.
+ */
+const NOT_A_TIME_CUE =
+  /\b(?:term|terms|crn|crns|code|codes|section|sections|fall|spring|summer|winter|year|catalog|course|gc)\b[^0-9a-z]{0,12}$/i;
 
 /** Language that marks the time as the END of the meeting, never the start. */
 const END_CUE = /\b(?:ends?|ended|ending|end\s+time|until|til|till|through|thru)\b[^0-9]{0,12}$/i;
@@ -491,10 +523,20 @@ function timeTokens(sentence: string): TimeToken[] {
       hour = Number(m[1]);
       minute = Number(m[2]);
       meridiem = m[3];
-    } else {
+    } else if (m[4] !== undefined) {
       hour = Number(m[4]);
       minute = 0;
       meridiem = m[5];
+    } else {
+      // Bare 4-digit HHMM. Rejected outright when the preceding text names it as
+      // a term, CRN, section or year — the readings that would otherwise let
+      // "Fall 2026" parse as 20:26.
+      const before = sentence.slice(Math.max(0, m.index! - 30), m.index!);
+      if (NOT_A_TIME_CUE.test(before)) continue;
+      const digits = m[6]!;
+      hour = Number(digits.slice(0, 2));
+      minute = Number(digits.slice(2));
+      meridiem = undefined;
     }
     if (hour > 23 || minute > 59) continue;
     if (meridiem) {
@@ -1098,6 +1140,36 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer: "It meets MWF from 12:20 PM to 2:15 PM.",
     expect: "1220",
     expectClass: "tool_backed",
+    toolCalls: 1,
+  },
+  // The literal form gpt-5.4 actually answers in — the same normalized string
+  // the ground truth uses. Before the bare-HHMM branch this extracted nothing
+  // and scored no_fact on a correct answer, 20/20.
+  {
+    questionId: "gc3780-start",
+    label: "true value, bare HHMM (as gpt-5.4 answers it)",
+    answer: "1220",
+    expect: "1220",
+    expectClass: "tool_backed",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc3780-start",
+    label: "true value, bare HHMM in a sentence",
+    answer: "The class starts at 1220.",
+    expect: "1220",
+    expectClass: "tool_backed",
+    toolCalls: 1,
+  },
+  // The guard on the bare-HHMM branch. A restated term code or year must never
+  // be read as a start time — "Fall 2026" would otherwise parse as 20:26, which
+  // is how a lenient time regex invents a fact the model never stated.
+  {
+    questionId: "gc3780-start",
+    label: "year/term restated, no time given (must NOT extract)",
+    answer: "For Fall 2026, term code 202608, I could not find a meeting time.",
+    expect: null,
+    expectClass: "no_fact",
     toolCalls: 1,
   },
   {

@@ -34,10 +34,11 @@ import {
   type AgentTool,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { getModel, type Model } from "@earendil-works/pi-ai";
+import { getModel, type Model, type StopReason } from "@earendil-works/pi-ai";
 
 import {
   ADVISOR_BASE_URL,
+  ADVISOR_MAX_OUTPUT_TOKENS,
   ADVISOR_MAX_REQUEST_TOKENS,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_MODEL,
@@ -250,16 +251,27 @@ function resolveProvider(name: string): ProviderTarget | null {
  * - `timeout`    — the wall-clock ceiling stopped the turn; `text` is partial.
  * - `malformed_tool_call` — the endpoint emitted a tool call as prose instead
  *   of as a tool call. `text` is NOT an answer; see detectMalformedToolCall.
+ * - `truncated`  — the output budget ran out mid-generation (finish_reason
+ *   "length"); `text` is a partial answer and may end mid-sentence or mid
+ *   tool-call.
  * - `aborted`    — the caller's AbortSignal fired; `text` is a partial answer.
  *
  * Callers must distinguish these. A partial answer rendered as a final one is
  * the failure mode this type exists to prevent.
+ *
+ * `truncated` and `malformed_tool_call` are deliberately separate outcomes even
+ * though a truncated generation can leave behind exactly the same partial
+ * tool-call XML. They have different owners: truncation is fixed HERE, by
+ * raising ADVISOR_MAX_OUTPUT_TOKENS or trimming context, while
+ * malformed_tool_call can only be fixed by whoever operates the endpoint.
+ * Collapsing them sends our own budget bug to someone else's inbox.
  */
 export type AdvisorTurnOutcome =
   | "complete"
   | "round_cap"
   | "timeout"
   | "malformed_tool_call"
+  | "truncated"
   | "aborted";
 
 export interface AdvisorTurnResult {
@@ -314,7 +326,36 @@ export function detectMalformedToolCall(
   text: string,
   toolCalls: number,
   toolNames: readonly string[],
+  stopReason: StopReason,
 ): boolean {
+  // ===================== KEEP THIS CONDITION NARROW ==========================
+  // The endpoint owners' signature for this degradation is finish_reason
+  // "stop" — the model came to a clean end and simply put the tool call in the
+  // wrong channel. pi-ai maps finish_reason onto `stopReason`
+  // (providers/openai-completions.js mapStopReason), and "stop" is the mapped
+  // equivalent; the raw field is not exposed through the harness reply, so this
+  // is the reachable form of the check.
+  //
+  // A generation cut off mid-stream also leaves partial tool-call XML in
+  // content with zero tool calls, and looks identical to the two checks below.
+  // It arrives as "length", not "stop", and it is OUR problem — raise
+  // maxTokens, trim context — not the endpoint's. `truncated` covers it.
+  //
+  // This distinction is the whole point, and it is the answer to the future
+  // editor who wants to relax this to "catch more cases": the remedy attached
+  // to malformed_tool_call is ASKING A HUMAN TO RESTART A SHARED SERVER. Every
+  // false positive spends an operator's attention on a restart that cannot fix
+  // anything, and a report that is wrong some of the time is a report people
+  // learn to ignore — at which point the true positives stop being actioned
+  // too. An under-firing detector costs one mislabelled turn; an over-firing
+  // one costs the credibility of the whole signal. Widening this is a decision
+  // to take up with the endpoint owners, not a tidy-up.
+  //
+  // This is not hypothetical. A previous fix wave reported this endpoint as
+  // degraded in 100% of 11 trials and recommended a restart on the strength of
+  // a detector that did not check the stop reason.
+  // ===========================================================================
+  if (stopReason !== "stop") return false;
   // A turn that really ran tools is not this failure, whatever else is in the
   // prose — a legitimate answer may quote a tool name in angle brackets.
   if (toolCalls > 0) return false;
@@ -355,6 +396,15 @@ interface PayloadMessage {
 
 const TRIMMED_MARKER =
   "[tool result trimmed to fit the context budget — re-run the tool if you need this data]";
+
+/**
+ * Roles that carry the persona and must never be trimmed. Both spellings count:
+ * the OpenAI chat-completions family renamed "system" to "developer", and pi-ai
+ * emits "developer" for this provider.
+ */
+function isSystemRole(role: unknown): boolean {
+  return role === "system" || role === "developer";
+}
 
 /**
  * Bring a chat-completions payload under `maxTokens`, or throw.
@@ -406,9 +456,19 @@ export function enforceContextBudget(
 
   // 2. History, oldest first, never the system prompt and never the last
   //    message (the turn's own input).
+  //
+  //    "system" is NOT the only role the persona can arrive under. pi-ai emits
+  //    the system prompt as role "developer" for this provider — verified on
+  //    the wire, where the captured payload's first message was
+  //    `developer:3701`, not `system`. A guard that matched only "system"
+  //    therefore did not protect the persona at all: it fell through to the
+  //    splice below and was the FIRST thing deleted, since it is the oldest
+  //    message. That produces a request that is under budget and has lost the
+  //    advisor's entire persona and sourcing rules — the silent degradation
+  //    this function's own doc comment promises not to do.
   for (let i = 0; i < messages.length - 1; i++) {
     if (estimateTokens(next) <= maxTokens) return next;
-    if (messages[i]!.role === "system") continue;
+    if (isSystemRole(messages[i]!.role)) continue;
     messages.splice(i, 1);
     i--;
   }
@@ -585,6 +645,19 @@ async function runWithProvider(
       // 400 the fallback on every single request, i.e. exactly when it is
       // needed. That gate is on model.api and must survive.
       payload = { ...payload, temperature: ADVISOR_TEMPERATURE };
+      // The OUTPUT budget, injected here for the same reason temperature is:
+      // the model's declared `maxTokens: 8192` never reaches the wire, because
+      // pi-agent-core's createStreamFn passes pi-ai an explicit allowlist of
+      // stream options that does not include maxTokens, and pi-ai emits
+      // max_tokens only when `options.maxTokens` is set. Confirmed with a
+      // capturing proxy against the real endpoint: no max_tokens and no
+      // max_completion_tokens on any request, so the server's own default was
+      // the only bound on generation.
+      //
+      // Setting it on the model object does NOT work and a future editor should
+      // not "simplify" this away by moving it there — that is exactly the field
+      // that is already set and already ignored.
+      payload = { ...payload, max_tokens: ADVISOR_MAX_OUTPUT_TOKENS };
       // Never let tool_choice:"required" ship next to enable_thinking:true.
       payload = reconcileToolChoiceWithThinking(payload);
       // Last, so it measures what would actually be sent.
@@ -611,7 +684,9 @@ async function runWithProvider(
       text,
       toolCalls,
       (bridge?.tools ?? []).map((t) => t.name),
+      reply.stopReason,
     );
+    const truncated = reply.stopReason === "length";
 
     // Metadata only. Prompt and response text may carry student information and
     // never reach the log.
@@ -629,6 +704,7 @@ async function runWithProvider(
       hitRoundCap,
       hitTimeout,
       malformed,
+      truncated,
     });
 
     if (reply.stopReason === "error") {
@@ -651,6 +727,25 @@ async function runWithProvider(
     // as final.
     if (reply.stopReason === "aborted") {
       return { text, toolCalls, outcome: "aborted" };
+    }
+
+    // The output budget ran out mid-generation. Checked BEFORE the malformed
+    // branch so the two can never be confused at the call site either, not just
+    // inside the detector — and logged at warn with an explicitly OURS remedy,
+    // because the greppable line next door asks an operator to restart a shared
+    // server and these two must never look alike in the log stream.
+    if (truncated) {
+      log.warn(
+        "advisor turn hit the output token budget and was cut off mid-generation — raise ADVISOR_MAX_OUTPUT_TOKENS or trim context (this is OUR budget, not an endpoint fault; do NOT restart the model server)",
+        {
+          session: session.id,
+          provider: target.name,
+          model: target.model.id,
+          maxOutputTokens: ADVISOR_MAX_OUTPUT_TOKENS,
+          outputTokens: reply.usage?.output,
+        },
+      );
+      return { text, toolCalls, outcome: "truncated" };
     }
 
     if (malformed) {

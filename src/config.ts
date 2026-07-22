@@ -215,6 +215,28 @@ export const ADVISOR_MAX_REQUEST_TOKENS = positiveNumberEnv(
   process.env.ADVISOR_MAX_REQUEST_TOKENS,
   45000,
 );
+/**
+ * Ceiling on the tokens the model may GENERATE in one provider request — the
+ * output half of the budget, and a different limit from
+ * ADVISOR_MAX_REQUEST_TOKENS above. Both must fit the 64K window together:
+ * 45000 in + 8192 out = 53192, leaving headroom rather than racing the wall.
+ *
+ * This is declared on the model as `maxTokens: 8192` too, but that field never
+ * reached the wire. pi-agent-core builds the stream options it passes to pi-ai
+ * from an explicit allowlist (harness/agent-harness.js createStreamFn) and
+ * `maxTokens` is not in it, so `options.maxTokens` is always undefined; pi-ai
+ * emits `max_tokens` only `if (options?.maxTokens)`
+ * (providers/openai-completions.js:410). Verified on the wire with a capturing
+ * proxy: neither `max_tokens` nor `max_completion_tokens` was present, so
+ * generation was bounded only by the server's own default.
+ *
+ * The advisor therefore injects it into the payload directly, the same way
+ * temperature is injected, and this constant is what it injects.
+ */
+export const ADVISOR_MAX_OUTPUT_TOKENS = positiveNumberEnv(
+  process.env.ADVISOR_MAX_OUTPUT_TOKENS,
+  8192,
+);
 export const ADVISOR_MCP_PUBLIC_URL =
   process.env.ADVISOR_MCP_PUBLIC_URL || "http://127.0.0.1:8766/";
 export const ADVISOR_MCP_CATALOG_URL =

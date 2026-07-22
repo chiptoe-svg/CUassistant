@@ -430,6 +430,62 @@ test("a malformed-tool-call turn never renders its prose as an answer", async ()
   }
 });
 
+// A truncated turn is OURS to fix (raise the output budget, trim context) and a
+// malformed one is the endpoint operator's. If the advisor cannot tell them
+// apart, our budget bug gets escalated as a request to restart a shared server.
+test("a truncated turn is marked partial and reads differently from a malformed one", async () => {
+  const partial = "Fall 2026 CPSC 3000-level classes include CPSC 3300, CPSC 36";
+  const tcServer = createAdvisorServer({
+    runTurn: async () => ({
+      text: partial,
+      toolCalls: 1,
+      outcome: "truncated" as const,
+    }),
+  });
+  await new Promise<void>((r) => tcServer.listen(0, "127.0.0.1", r));
+  const tcBase = `http://127.0.0.1:${(tcServer.address() as AddressInfo).port}`;
+
+  try {
+    const res = await fetch(`${tcBase}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "test-password" }).toString(),
+      redirect: "manual",
+    });
+    const cookie = cookieFrom(res);
+    const chat = await fetch(`${tcBase}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const body = (await chat.json()) as { text: string; outcome: string };
+
+    assert.equal(body.outcome, "truncated", "the outcome must reach the client");
+    assert.notEqual(
+      body.outcome,
+      "complete",
+      "a cut-off turn must never present as a finished answer",
+    );
+    assert.ok(
+      body.text.includes(partial),
+      "genuine partial output should still be shown, unlike malformed prose",
+    );
+    assert.match(
+      body.text,
+      /cut off|length limit/i,
+      "the advisor must be told the answer is unfinished",
+    );
+    // The remedy is ours; the advisor must not be sent to find an operator.
+    assert.ok(
+      !/restart/i.test(body.text),
+      "a truncated turn must not suggest restarting the model server",
+    );
+  } finally {
+    resetSessionsForTest();
+    tcServer.close();
+  }
+});
+
 test("a timed-out turn is marked partial rather than final", async () => {
   const tServer = createAdvisorServer({
     runTurn: async () => ({

@@ -105,6 +105,14 @@ const OUTCOME_NOTE: Record<Exclude<AdvisorTurnResult["outcome"], "complete">, st
   // failure this outcome exists to prevent.
   malformed_tool_call:
     "[The model service returned a malformed response and this turn produced no answer. Please try again; if it repeats, the model server needs to be restarted.]",
+  // Deliberately worded so it can never be mistaken for malformed_tool_call
+  // above: this one is a limit on OUR side, and it must not send the advisor
+  // chasing an operator for a server restart that would fix nothing. The text
+  // IS kept and annotated, unlike the malformed case — a truncated answer is
+  // genuine partial output, not invented prose, so it is worth showing as long
+  // as it is clearly marked as unfinished.
+  truncated:
+    "[This answer was cut off — the turn reached its length limit. Ask for a shorter answer, or ask a follow-up to continue.]",
 };
 
 function withOutcomeNote(result: AdvisorTurnResult): string {

@@ -109,6 +109,14 @@ try {
     `chat_template_kwargs: ${JSON.stringify(first.chat_template_kwargs)}`,
   );
   console.log(`tool_choice:          ${JSON.stringify(first.tool_choice)}`);
+  // The OUTPUT budget, as opposed to enforceContextBudget's INPUT budget. These
+  // are two different limits and the audit exists because one was assumed to
+  // imply the other. `undefined` here means the field never reached the wire
+  // and the server's own default is what bounds generation.
+  console.log(`max_tokens:           ${JSON.stringify(first.max_tokens)}`);
+  console.log(
+    `max_completion_tokens: ${JSON.stringify(first.max_completion_tokens)}`,
+  );
   console.log(
     `tools offered:        ${Array.isArray(first.tools) ? first.tools.length : 0}`,
   );

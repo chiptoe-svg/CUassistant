@@ -9,6 +9,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 import {
+  ADVISOR_MAX_OUTPUT_TOKENS,
   ADVISOR_MAX_REQUEST_TOKENS,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_TEMPERATURE,
@@ -99,6 +100,12 @@ function startFakeProvider(opts: {
   toolArguments?: string;
   /** Content for the final (non-tool-call) message. */
   answer?: string;
+  /**
+   * finish_reason for the final message. "length" is what a real endpoint sends
+   * when the output budget ran out mid-generation — the case that must NOT be
+   * reported as the endpoint's malformed-tool-call degradation.
+   */
+  finishReason?: "stop" | "length";
   /** Delay before responding, to exercise the wall-clock ceiling. */
   delayMs?: number;
 }): Promise<{
@@ -167,7 +174,11 @@ function startFakeProvider(opts: {
           },
           finish_reason: null,
         });
-        send({ index: 0, delta: {}, finish_reason: "stop" });
+        send({
+          index: 0,
+          delta: {},
+          finish_reason: opts.finishReason ?? "stop",
+        });
       }
       res.write("data: [DONE]\n\n");
       res.end();
@@ -303,6 +314,57 @@ test("temperature is injected for the chat-completions provider", async () => {
       "spark must get the configured temperature",
     );
     assert.equal(ADVISOR_TEMPERATURE, 0.6, "the default must be the documented 0.6");
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+});
+
+// REGRESSION: the OUTPUT budget must actually reach the wire.
+//
+// The model object declares `maxTokens: 8192` and that value was never sent.
+// pi-agent-core's createStreamFn hands pi-ai an explicit allowlist of stream
+// options that omits maxTokens, and pi-ai emits max_tokens only when
+// `options.maxTokens` is set — so generation was bounded solely by the server's
+// default. Confirmed against the real endpoint with a capturing proxy: neither
+// max_tokens nor max_completion_tokens appeared on any request.
+//
+// This asserts on the BODY the provider received, not on the model config,
+// because the model config is exactly the thing that lied.
+test("the output token budget is on the wire, not just declared on the model", async () => {
+  const provider = await startFakeProvider({ toolCallsBeforeAnswer: 0 });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
+
+  try {
+    await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "hello",
+    );
+    const first = provider.bodies()[0] as Record<string, unknown>;
+    assert.equal(
+      first.max_tokens,
+      ADVISOR_MAX_OUTPUT_TOKENS,
+      "max_tokens never reached the request — the server default is bounding generation",
+    );
+    // Input cap and output cap are two different limits against ONE window.
+    // Fixing either must not starve the other: the endpoint's guidance is a 64K
+    // window with requests near 45K, leaving room for the answer plus thinking.
+    assert.ok(
+      ADVISOR_MAX_REQUEST_TOKENS + ADVISOR_MAX_OUTPUT_TOKENS <= 65536,
+      `input ${ADVISOR_MAX_REQUEST_TOKENS} + output ${ADVISOR_MAX_OUTPUT_TOKENS} overruns the 64K window`,
+    );
+    // With enable_thinking on, reasoning is spent from the output budget before
+    // any content or tool call appears. Live turns were observed spending
+    // 291-1114 tokens on reasoning alone, so a budget in the hundreds truncates
+    // routinely.
+    assert.ok(
+      ADVISOR_MAX_OUTPUT_TOKENS >= 4096,
+      "the output budget must leave room for thinking plus an answer",
+    );
   } finally {
     setAdvisorBridgeForTest(null);
     await provider.close();
@@ -660,6 +722,38 @@ test("the budget throws rather than send an unshrinkable oversized request", () 
   );
 });
 
+// REGRESSION: the persona arrives as role "developer", not "system".
+//
+// Verified on the wire: the captured payload's first message was
+// `developer:3701`. The trim loop protected only role "system", so the persona
+// fell through to the splice and — being the oldest message — was the FIRST
+// thing deleted. The request then came in under budget with the advisor's
+// entire persona and sourcing rules gone, which is precisely the silent
+// degradation enforceContextBudget documents itself as refusing to do.
+test("the persona is never trimmed, under either role spelling", () => {
+  for (const role of ["system", "developer"]) {
+    const messages: { role: string; content: string }[] = [
+      { role, content: "PERSONA: source every claim from a tool result." },
+    ];
+    for (let i = 0; i < 40; i++) {
+      messages.push({ role: "assistant", content: "z".repeat(20_000) });
+    }
+    messages.push({ role: "user", content: "current question" });
+
+    const out = enforceContextBudget({ messages }, 5000);
+    const kept = out.messages as { role: string; content: string }[];
+    assert.ok(
+      kept.some((m) => m.content.startsWith("PERSONA:")),
+      `the persona was trimmed away when sent as role "${role}"`,
+    );
+    assert.equal(
+      kept[kept.length - 1]!.content,
+      "current question",
+      "the turn's own input must survive too",
+    );
+  }
+});
+
 test("a payload already inside the budget is passed through untouched", () => {
   const payload = { messages: [{ role: "user", content: "hi" }] };
   assert.equal(enforceContextBudget(payload, 45000), payload);
@@ -707,7 +801,7 @@ test("a tool call emitted as prose is reported as a failure, not as an answer", 
 
 test("the <tool_call> XML signature is detected", () => {
   assert.equal(
-    detectMalformedToolCall("<tool_call>{\"name\":\"x\"}</tool_call>", 0, []),
+    detectMalformedToolCall("<tool_call>{\"name\":\"x\"}</tool_call>", 0, [], "stop"),
     true,
   );
 });
@@ -715,11 +809,11 @@ test("the <tool_call> XML signature is detected", () => {
 test("a tool-name block is detected only for tools that exist", () => {
   const text = "<cu_public__search-clemson-classes>{}</cu_public__search-clemson-classes>";
   assert.equal(
-    detectMalformedToolCall(text, 0, ["cu_public__search-clemson-classes"]),
+    detectMalformedToolCall(text, 0, ["cu_public__search-clemson-classes"], "stop"),
     true,
   );
   assert.equal(
-    detectMalformedToolCall(text, 0, ["some_other_tool"]),
+    detectMalformedToolCall(text, 0, ["some_other_tool"], "stop"),
     false,
     "an arbitrary angle-bracket string must not be flagged",
   );
@@ -729,7 +823,7 @@ test("a tool-name block is detected only for tools that exist", () => {
 // answer is allowed to mention a tool name.
 test("a turn that ran tools is never flagged as malformed", () => {
   assert.equal(
-    detectMalformedToolCall("<tool_call> appears in this prose", 3, []),
+    detectMalformedToolCall("<tool_call> appears in this prose", 3, [], "stop"),
     false,
   );
 });
@@ -837,13 +931,111 @@ const LIVE_MALFORMED = [
 test("every malformed shape captured live is detected", () => {
   for (const [i, sample] of LIVE_MALFORMED.entries()) {
     assert.equal(
-      detectMalformedToolCall(sample, 0, [
-        "cu_public__list-clemson-terms",
-        "cu_public__search-clemson-classes",
-      ]),
+      detectMalformedToolCall(
+        sample,
+        0,
+        ["cu_public__list-clemson-terms", "cu_public__search-clemson-classes"],
+        "stop",
+      ),
       true,
       `live sample ${i + 1} slipped through the detector`,
     );
+  }
+});
+
+// --- truncation is NOT the endpoint's degradation ---------------------------
+//
+// A previous wave reported this endpoint degraded in 100% of 11 trials and
+// asked for a server restart. Independent testing showed the detector was
+// firing on generations cut off by a small max_tokens: the partial output left
+// tool-call XML in `content` with zero tool calls, which is byte-for-byte what
+// the real degradation looks like. The ONLY thing that tells them apart is the
+// stop reason — "stop" for the endpoint's fault, "length" for ours — so the
+// detector has to check it. These tests pin both directions.
+
+test("a TRUNCATED generation is not reported as the endpoint's degradation", () => {
+  // Byte-for-byte the shape the detector fires on, differing only in stop
+  // reason. If this ever returns true, the detector is back to asking an
+  // operator to restart a shared server because WE set the budget too low.
+  const partial = "<tool_call>\n{\"name\": \"cu_public__list-clemson-te";
+  assert.equal(
+    detectMalformedToolCall(partial, 0, ["cu_public__list-clemson-terms"], "length"),
+    false,
+    "truncated output must never be attributed to the endpoint",
+  );
+  assert.equal(
+    detectMalformedToolCall(partial, 0, ["cu_public__list-clemson-terms"], "stop"),
+    true,
+    "the same text at finish_reason stop IS the endpoint's degradation",
+  );
+});
+
+test("every live malformed shape is rejected when the stop reason is length", () => {
+  const names = [
+    "cu_public__list-clemson-terms",
+    "cu_public__search-clemson-classes",
+  ];
+  for (const [i, sample] of LIVE_MALFORMED.entries()) {
+    assert.equal(
+      detectMalformedToolCall(sample, 0, names, "length"),
+      false,
+      `live sample ${i + 1} was attributed to the endpoint despite being truncated`,
+    );
+  }
+});
+
+// End-to-end: the two failures must reach the caller as DIFFERENT outcomes, and
+// neither may reach it as `complete`.
+test("a length-stopped turn yields `truncated`, and a stop-stopped one `malformed_tool_call`", async () => {
+  const xml =
+    "<cu_public__search-clemson-classes>\n{\"subject\":\"CPSC\"}\n</cu_public__search-clemson-classes>";
+
+  async function outcomeFor(finishReason: "stop" | "length") {
+    const provider = await startFakeProvider({
+      toolCallsBeforeAnswer: 0,
+      answer: xml,
+      finishReason,
+    });
+    const session = fakeSession();
+    setAdvisorBridgeForTest({
+      tools: [fakeNamedTool("cu_public__search-clemson-classes")],
+      close: async () => {},
+    });
+    try {
+      const result = await __runWithProviderForTest(
+        sparkTarget(provider.url) as never,
+        session,
+        "what CPSC classes are offered?",
+      );
+      return result;
+    } finally {
+      setAdvisorBridgeForTest(null);
+      await provider.close();
+      rmSync(session.workDir, { recursive: true, force: true });
+      rmSync(session.piSessionRoot, { recursive: true, force: true });
+    }
+  }
+
+  const truncated = await outcomeFor("length");
+  const malformed = await outcomeFor("stop");
+
+  assert.equal(
+    truncated.outcome,
+    "truncated",
+    "a budget-exhausted turn must be reported as ours to fix",
+  );
+  assert.equal(
+    malformed.outcome,
+    "malformed_tool_call",
+    "an endpoint-degraded turn must still be reported as the endpoint's",
+  );
+  assert.notEqual(
+    truncated.outcome,
+    malformed.outcome,
+    "identical text must not collapse to one outcome — the remedies differ",
+  );
+  for (const r of [truncated, malformed]) {
+    assert.notEqual(r.outcome, "complete", "neither may render as a finished answer");
   }
 });
 
@@ -857,7 +1049,7 @@ test("a genuine answer is never flagged as malformed", () => {
     "You need 12 more credits. Your catalog year is 2024-2025.",
   ]) {
     assert.equal(
-      detectMalformedToolCall(answer, 0, names),
+      detectMalformedToolCall(answer, 0, names, "stop"),
       false,
       `a genuine answer was flagged: ${answer}`,
     );

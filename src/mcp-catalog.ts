@@ -11,7 +11,7 @@
 // 0.0.0.0 for campus reachability; off loopback the bearer is the only gate.
 import "./mcp-tools/index-catalog.js";
 import { CATALOG_SKILLS, setSkillExposure } from "./mcp-tools/skills.js";
-import { startMcpServer } from "./mcp-tools/server.js";
+import { renameRegisteredTool, startMcpServer } from "./mcp-tools/server.js";
 import {
   MCP_TRANSPORT,
   MCP_CATALOG_HTTP_HOST,
@@ -27,6 +27,18 @@ import {
 // on purpose — the inversion that would have prevented `triage` and
 // `add-cuassistant` from reaching the public port by omission.
 setSkillExposure(CATALOG_SKILLS);
+
+// skills.js is loaded by BOTH the public barrel and this one, so both servers
+// advertised `list-skills`/`get-skill-docs`. The advisor bridges 8766 and 8767
+// and exposes tools under bare names, so it refused to start on the collision
+// (advisor-mcp.ts) — which is how this was found: the advisor has not been run
+// since the catalog gained skill tools.
+//
+// The catalog's copies are renamed rather than the public server's: `list-skills`
+// meant the public server's skills before this server had any, and the advisor's
+// prompt and the shipped skill documents refer to it under that name.
+renameRegisteredTool("list-skills", "list-gc-skills");
+renameRegisteredTool("get-skill-docs", "get-gc-skill-docs");
 
 startMcpServer({
   name: "cuassistant-catalog",

@@ -83,6 +83,29 @@ export function registerTools(tools: McpToolDefinition[]): void {
   }
 }
 
+/**
+ * Rename an already-registered tool on THIS process only.
+ *
+ * Tool modules register at import time under fixed names, so a module loaded by
+ * two entry points offers the same name on both servers. That is fine until one
+ * consumer bridges both: the advisor exposes tools under bare names, so two
+ * servers offering `list-skills` is a startup error there (advisor-mcp.ts).
+ *
+ * Renames both the map key and the advertised name, so dispatch and tools/list
+ * stay consistent. Throws on an unknown source name or an occupied target — a
+ * rename that silently did nothing would reintroduce the collision it exists to
+ * prevent, and one that overwrote a live tool would be worse still.
+ */
+export function renameRegisteredTool(from: string, to: string): void {
+  const t = toolMap.get(from);
+  if (!t) throw new Error(`cannot rename unknown tool "${from}"`);
+  if (toolMap.has(to))
+    throw new Error(`cannot rename "${from}" to "${to}": already registered`);
+  toolMap.delete(from);
+  t.tool.name = to;
+  toolMap.set(to, t);
+}
+
 /** The authenticated caller: id (audit identity), allowed operation set, provider. */
 export interface Principal {
   id: string;
@@ -224,9 +247,8 @@ function buildServer(name: string, principal?: Principal): Server {
         isError: true,
       };
     }
-    return auditContext.run(
-      { consumerId, provider: principal?.provider },
-      () => tool.handler(args ?? {}),
+    return auditContext.run({ consumerId, provider: principal?.provider }, () =>
+      tool.handler(args ?? {}),
     );
   });
   return server;

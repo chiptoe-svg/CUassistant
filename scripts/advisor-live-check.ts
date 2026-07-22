@@ -83,17 +83,23 @@ try {
     `http://127.0.0.1:9099${upstream.pathname}`;
   console.log(`upstream: ${realBase} (via capturing proxy)`);
 
-  const started = Date.now();
-  const result = await __runWithProviderForTest(
-    target,
-    session,
-    "What CPSC 3000-level classes are offered in Fall 2026? Use your tools.",
-  );
-
-  console.log(`\n--- turn result (${Date.now() - started}ms) ---`);
-  console.log(`outcome:   ${result.outcome}`);
-  console.log(`toolCalls: ${result.toolCalls}`);
-  console.log(`text:      ${result.text.slice(0, 400)}`);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const started = Date.now();
+    try {
+      const result = await __runWithProviderForTest(
+        target,
+        session,
+        "What CPSC 3000-level classes are offered in Fall 2026? Use your tools.",
+      );
+      console.log(
+        `\nturn ${attempt} (${Date.now() - started}ms): outcome=${result.outcome} toolCalls=${result.toolCalls} text=${JSON.stringify(result.text.slice(0, 120))}`,
+      );
+    } catch (err) {
+      console.log(
+        `\nturn ${attempt} (${Date.now() - started}ms): FAILED -> ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   console.log(`\n--- on the wire (${captured.length} request(s)) ---`);
   const first = captured[0] ?? {};

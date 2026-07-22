@@ -322,6 +322,26 @@ export function buildToolSurface(
  * Realistic advisor questions, cycled across trials so no cell's number is an
  * artifact of a single prompt. All of them are answerable from the first eight
  * tools, so they stay answerable at every tool count in the matrix.
+ *
+ * KNOWN CONFOUND — two of these are UNDERSPECIFIED and their low tool-call
+ * rates are a property of the question, not of the model or the tool surface:
+ *
+ *   - "Do CRN 12345 and CRN 23456 conflict with each other?" names no term,
+ *     and `term` is REQUIRED by check-schedule-conflicts.
+ *   - "What rooms are free Wednesday afternoon in Fall 2026?" names no
+ *     building or room, both REQUIRED by get-clemson-room-availability — and
+ *     no tool answers "which rooms", only "is this room free".
+ *
+ * Measured 2026-07-22, n=40 per cell, tools=17, bare naming, endpoint steady:
+ * the conflict question scores 0-3% as written and 100% [91-100] once a term
+ * is added, with real and fake CRNs indistinguishable in both conditions. The
+ * misses are the model ASKING for the missing required argument — the correct
+ * and safe behaviour, and the opposite of answering from memory.
+ *
+ * Note that `no_tool_call` does not distinguish "asked a clarifying question"
+ * from "fabricated an answer". When a cell's rate is low, read the actual
+ * generations before concluding anything about tool-calling. See
+ * `.superpowers/sdd/message-effect-report.md`.
  */
 export const PROBE_MESSAGES = [
   "What CPSC 3000-level classes are offered in Fall 2026? Use your tools.",
@@ -333,6 +353,37 @@ export const PROBE_MESSAGES = [
   "Give me a conflict-free schedule for a GC junior in Fall 2026.",
   "What does the skill documentation say about searching for sections?",
 ];
+
+/**
+ * Apply per-tool description overrides by BARE name, before naming variants are
+ * applied. Used by the message-effect experiment to test whether rewriting a
+ * tool's trigger conditions changes how often it is called, while holding the
+ * persona, tool count, naming, temperature and endpoint constant.
+ *
+ * Overriding a name that is not present is a hard error: a silently-ignored
+ * override would make a "no effect" cell indistinguishable from a cell where
+ * the manipulation never happened, which is exactly the kind of uncontrolled
+ * variable this harness exists to rule out.
+ */
+export function applyDescriptionOverrides(
+  real: RealTool[],
+  overrides: Record<string, string>,
+): RealTool[] {
+  const known = new Set(real.map((t) => t.bareName));
+  for (const name of Object.keys(overrides)) {
+    if (!known.has(name)) {
+      throw new Error(
+        `description override targets unknown tool "${name}" — ` +
+          `known tools: ${[...known].sort().join(", ")}`,
+      );
+    }
+  }
+  return real.map((t) =>
+    Object.prototype.hasOwnProperty.call(overrides, t.bareName)
+      ? { ...t, description: overrides[t.bareName]! }
+      : t,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Network
@@ -495,6 +546,12 @@ function parseArgs(argv: string[]) {
     frontier: argv.includes("--frontier"),
     allowUnderpowered: argv.includes("--allow-underpowered"),
     report: get("--report"),
+    // --- controlled-cell overrides (all optional; defaults reproduce the
+    // original matrix run byte-for-byte) ---
+    messageFile: get("--message-file"),
+    systemFile: get("--system-file"),
+    descFile: get("--desc-file"),
+    cellLabel: get("--cell-label"),
   };
 }
 
@@ -615,7 +672,22 @@ async function main() {
     });
   }
 
-  const real = orderTools(await loadRealTools());
+  // ---- controlled-cell overrides -----------------------------------------
+  const messages: string[] = args.messageFile
+    ? (JSON.parse(readFileSync(args.messageFile, "utf8")) as string[])
+    : PROBE_MESSAGES;
+  if (!Array.isArray(messages) || messages.length === 0 || messages.some((m) => typeof m !== "string")) {
+    console.error(`REFUSED: --message-file ${args.messageFile} is not a non-empty array of strings.`);
+    process.exit(2);
+  }
+  const systemOverride = args.systemFile ? readFileSync(args.systemFile, "utf8") : null;
+  const descOverrides: Record<string, string> = args.descFile
+    ? (JSON.parse(readFileSync(args.descFile, "utf8")) as Record<string, string>)
+    : {};
+
+  let real = orderTools(await loadRealTools());
+  // Throws on an unknown tool name — see applyDescriptionOverrides.
+  real = applyDescriptionOverrides(real, descOverrides);
   const started = new Date();
 
   const header: string[] = [];
@@ -632,7 +704,18 @@ async function main() {
   log(`Naming variants: ${args.variants.join(", ")}`);
   log(`Endpoints: ${endpoints.map((e) => `${e.label}(${e.model})`).join(", ")}`);
   log(`Real tools available: ${real.length} (counts above this are padded with clones)`);
-  log(`Probe messages: ${PROBE_MESSAGES.length}, cycled across trials`);
+  log(`Probe messages: ${messages.length}, cycled across trials${args.messageFile ? ` (from ${args.messageFile})` : ""}`);
+  if (args.cellLabel) log(`Cell label: **${args.cellLabel}**`);
+  log(
+    `System prompt: ${systemOverride ? `${args.systemFile} (${systemOverride.length} chars)` : "captured payload developer message (baseline)"}`,
+  );
+  log(
+    `Tool descriptions: ${
+      Object.keys(descOverrides).length > 0
+        ? `${args.descFile} — overriding ${Object.keys(descOverrides).sort().join(", ")}`
+        : "as served by the MCP servers (baseline)"
+    }`,
+  );
   log(
     `Payload base: /tmp/advisor-payload.json (captured wire body) — ` +
       `temperature=${captured.temperature} max_tokens=${captured.max_tokens} ` +
@@ -662,12 +745,22 @@ async function main() {
         const httpStatuses: Record<string, number> = {};
 
         for (let i = 0; i < args.trials; i++) {
-          const message = PROBE_MESSAGES[i % PROBE_MESSAGES.length]!;
+          const message = messages[i % messages.length]!;
           const body: Record<string, unknown> = JSON.parse(JSON.stringify(captured));
           body.tools = tools;
           body.stream = true;
-          const messages = body.messages as Array<Record<string, unknown>>;
-          messages[messages.length - 1] = { role: "user", content: message };
+          const wire = body.messages as Array<Record<string, unknown>>;
+          if (systemOverride !== null) {
+            const sysIdx = wire.findIndex(
+              (m) => m.role === "system" || m.role === "developer",
+            );
+            if (sysIdx < 0) {
+              console.error("REFUSED: --system-file given but captured payload has no system/developer message.");
+              process.exit(2);
+            }
+            wire[sysIdx] = { ...wire[sysIdx], content: systemOverride };
+          }
+          wire[wire.length - 1] = { role: "user", content: message };
           if (ep.frontier) {
             delete body.chat_template_kwargs;
             delete body.temperature;
@@ -764,7 +857,7 @@ async function main() {
   log(`## Per-message breakdown`);
   log();
   log(
-    `Cycled across ${PROBE_MESSAGES.length} messages. A single message behaving unlike ` +
+    `Cycled across ${messages.length} messages. A single message behaving unlike ` +
       `the others is itself an observation.`,
   );
   log();

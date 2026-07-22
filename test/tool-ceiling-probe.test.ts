@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   MIN_TRIALS,
+  applyDescriptionOverrides,
   applyNaming,
   blockValidity,
   buildToolSurface,
@@ -286,4 +287,34 @@ test("the minimum trial count is 20", () => {
 test("at least six distinct probe messages are cycled", () => {
   assert.ok(PROBE_MESSAGES.length >= 6);
   assert.equal(new Set(PROBE_MESSAGES).size, PROBE_MESSAGES.length);
+});
+
+// --- description overrides (controlled-cell apparatus) ---------------------
+
+test("applyDescriptionOverrides replaces only the targeted tool", () => {
+  const out = applyDescriptionOverrides(REAL, {
+    "search-clemson-classes": "REWRITTEN",
+  });
+  const byName = new Map(out.map((t) => [t.bareName, t.description]));
+  assert.equal(byName.get("search-clemson-classes"), "REWRITTEN");
+  assert.equal(
+    byName.get("list-clemson-terms"),
+    REAL.find((t) => t.bareName === "list-clemson-terms")!.description,
+  );
+  assert.equal(out.length, REAL.length);
+});
+
+test("applyDescriptionOverrides does not mutate its input", () => {
+  const before = REAL.map((t) => t.description);
+  applyDescriptionOverrides(REAL, { "search-clemson-classes": "REWRITTEN" });
+  assert.deepEqual(REAL.map((t) => t.description), before);
+});
+
+test("applyDescriptionOverrides throws on an unknown tool name", () => {
+  // A silently-ignored override would make a "no effect" cell indistinguishable
+  // from a cell where the manipulation never happened.
+  assert.throws(
+    () => applyDescriptionOverrides(REAL, { "no-such-tool": "x" }),
+    /unknown tool "no-such-tool"/,
+  );
 });

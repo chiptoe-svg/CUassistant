@@ -47,7 +47,7 @@ export function renderLoginPage(error = ""): string {
     "Advisor chat — sign in",
     `<h1>Advisor chat</h1>
 ${error ? `<p role="alert">${escHtml(error)}</p>` : ""}
-<form action="/login" method="post">
+<form action="login" method="post">
   <label for="password">Password</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required>
   <button type="submit">Sign in</button>
@@ -97,7 +97,7 @@ $("composer").addEventListener("submit", async (e) => {
   $("stop").disabled = false;   // a turn is now in flight — stop can reach it
   status.textContent = "Checking the schedule\\u2026";
   try {
-    const r = await fetch("/chat", {
+    const r = await fetch("chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
@@ -130,7 +130,7 @@ $("stop").addEventListener("click", async () => {
   $("stop").disabled = true;
   status.textContent = "Stopping\\u2026";
   try {
-    const r = await fetch("/stop", { method: "POST" });
+    const r = await fetch("stop", { method: "POST" });
     const data = await r.json();
     status.textContent = data.stopped ? "Stop requested." : "Nothing to stop.";
   } catch (err) {
@@ -139,17 +139,17 @@ $("stop").addEventListener("click", async () => {
 });
 
 $("clear").addEventListener("click", async () => {
-  await fetch("/clear", { method: "POST" });
+  await fetch("clear", { method: "POST" });
   answers.replaceChildren();
   $("schedule").hidden = true;   // the old session's document is gone with it
   status.textContent = "Session cleared.";
   $("message").focus();
 });
 
-$("export").addEventListener("click", () => { location.href = "/export"; });
+$("export").addEventListener("click", () => { location.href = "export"; });
 
 $("schedule").addEventListener("click", () => {
-  window.open("/export/schedule", "_blank", "noopener");
+  window.open("export/schedule", "_blank", "noopener");
 });
 </script>`,
   );

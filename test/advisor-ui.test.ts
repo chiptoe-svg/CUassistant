@@ -86,9 +86,11 @@ async function runChatSubmit(responseBody: unknown) {
   return { elements, fetchCalls };
 }
 
-test("login page posts to /login and shows an error when given one", () => {
+test("login page posts to login and shows an error when given one", () => {
   const page = renderLoginPage();
-  assert.match(page, /<form[^>]+action="\/login"[^>]+method="post"/);
+  // Relative action: the page is served both at / (loopback) and under Caddy's
+  // /advisor/ prefix, and a root-absolute "/login" would escape the prefix.
+  assert.match(page, /<form[^>]+action="login"[^>]+method="post"/);
   assert.match(page, /type="password"/);
   assert.doesNotMatch(page, /Incorrect password/);
   assert.match(renderLoginPage("Incorrect password."), /Incorrect password\./);
@@ -110,14 +112,15 @@ test("both live regions are mounted empty in the initial markup", () => {
 // reproducing the exact failure the pattern exists to prevent. So assert the
 // positive invariant instead: the answer arrives in exactly one buffered
 // request and is appended to #answers exactly once.
-test("the client fetches /chat once and appends the answer exactly once", async () => {
+test("the client fetches chat once and appends the answer exactly once", async () => {
   const page = renderChatPage();
-  assert.match(page, /fetch\("\/chat"/);
+  // Relative URL — see the login-form note; it must keep the /advisor/ prefix.
+  assert.match(page, /fetch\("chat"/);
 
   const { elements, fetchCalls } = await runChatSubmit({ text: "Room capacity is 30." });
 
   assert.equal(fetchCalls.length, 1, "expected exactly one request for the whole exchange");
-  assert.equal(fetchCalls[0][0], "/chat");
+  assert.equal(fetchCalls[0][0], "chat");
 
   // The echoed question plus exactly one assistant answer — never more.
   assert.equal(elements.answers.children.length, 2);

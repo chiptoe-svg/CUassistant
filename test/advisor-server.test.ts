@@ -66,7 +66,8 @@ test("the root path serves the login page to an unauthenticated visitor", async 
   const res = await fetch(base);
   assert.equal(res.status, 200);
   const page = await res.text();
-  assert.match(page, /action="\/login"/);
+  // Relative so the form still posts inside the /advisor/ prefix behind Caddy.
+  assert.match(page, /action="login"/);
   assert.doesNotMatch(page, /id="composer"/);
 });
 
@@ -102,7 +103,10 @@ test("a failed login never reflects request-supplied text into the page", async 
 test("a correct password sets an HttpOnly session cookie and redirects", async () => {
   const res = await login();
   assert.equal(res.status, 302);
-  assert.equal(res.headers.get("location"), "/");
+  // Relative, not "/". The app is also mounted under Caddy's /advisor/ prefix,
+  // where an absolute "/" would redirect the browser out of the app entirely
+  // (onto the capture tool sharing that vhost). "./" is correct at both mounts.
+  assert.equal(res.headers.get("location"), "./");
   const set = res.headers.get("set-cookie")!;
   assert.match(set, /advisor_sid=/);
   assert.match(set, /HttpOnly/);

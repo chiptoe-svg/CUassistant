@@ -78,12 +78,22 @@ const loginHits = new Map<string, number[]>();
 
 /**
  * Client IP, X-Forwarded-For first element then the socket address — matching
- * ask_gc, since this may end up behind Caddy.
+ * ask_gc.
  *
- * X-Forwarded-For is CLIENT-CONTROLLED when no trusted proxy sets it, so an
- * attacker can rotate the header and get a fresh bucket each time. This is a
- * usability limiter (it stops accidental hammering and casual guessing), not a
- * security boundary — do not count it as one when reasoning about the password.
+ * As deployed this value is now trustworthy. The server binds 127.0.0.1
+ * (ADVISOR_HTTP_HOST), so the only route in is Caddy's TLS vhost
+ * gcworkflow.clemson.edu:8443/advisor/, and Caddy trusts no upstream proxies by
+ * default: it REPLACES any client-sent X-Forwarded-For with the real peer
+ * address rather than appending to it. Verified — a request carrying a forged
+ * "X-Forwarded-For: 1.2.3.4" arrives here with the header rewritten to the
+ * actual client IP. So the first element is the real client, and the /login
+ * rate limiter is a genuine per-client bound, not merely a usability one.
+ *
+ * That guarantee rests on BOTH halves of the deployment. If the bind is ever
+ * widened again (ADVISOR_HTTP_HOST=0.0.0.0), or a trusted_proxies directive is
+ * added to the Caddy site, this header goes back to being client-controlled and
+ * the limiter degrades to usability-only. The socket fallback stays for the
+ * loopback path, where there is no proxy and no header.
  */
 export function clientIp(req: http.IncomingMessage): string {
   const fwd = req.headers["x-forwarded-for"];
@@ -248,8 +258,12 @@ export function createAdvisorServer(
         }
         const session = createSession("shared");
         log.info("advisor login", { session: session.id });
+        // Relative, not "/": behind the Caddy /advisor/ prefix an absolute "/"
+        // would land the browser on the capture tool at :3000. "./" resolves
+        // from /login to / and from /advisor/login to /advisor/ — correct at
+        // both mount points, which is also why the UI uses relative URLs.
         res.writeHead(302, {
-          Location: "/",
+          Location: "./",
           "Set-Cookie": sessionCookie(session.id),
         });
         return res.end();

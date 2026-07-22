@@ -49,6 +49,7 @@ import "./mcp-tools/index.js";
 import "./mcp-tools/index-public.js";
 import "./mcp-tools/index-catalog.js";
 import { startMcpServer } from "./mcp-tools/server.js";
+import { setSkillExposure } from "./mcp-tools/skills.js";
 import { recordSeen } from "./mcp-tools/consumers.js";
 import { ApprovalGate } from "./approval/gate.js";
 import { makeSender } from "./approval/sender.js";
@@ -138,6 +139,13 @@ function touchConsumer(id: string): void {
   lastTouchMs.set(id, now);
   recordSeen(id, new Date(now).toISOString());
 }
+
+// This server is loopback-only and per-agent credentialed, so it serves every
+// skill — including the private-path ones (`triage`, `add-cuassistant`) that
+// the public server's allowlist withholds. The skill tools default to the
+// public allowlist (see mcp-tools/skills.ts), so the full set is an explicit
+// opt-in here rather than something a new server inherits by accident.
+setSkillExposure("all");
 
 initApprovalGate();
 startMcpServer({

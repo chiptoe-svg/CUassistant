@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["term", "sections", "notes"],
+  "properties": {
+    "term": {
+      "type": "string",
+      "description": "Banner term code the schedule is for, e.g. \"202608\"."
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Optional advising note printed under the table. null when there is nothing to add."
+    },
+    "sections": {
+      "type": "array",
+      "description": "The proposed sections, in the order they should be printed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "crn",
+          "subjectCourse",
+          "section",
+          "title",
+          "creditHours",
+          "days",
+          "beginTime",
+          "endTime",
+          "building",
+          "room"
+        ],
+        "properties": {
+          "crn": { "type": "string" },
+          "subjectCourse": { "type": "string" },
+          "section": { "type": "string" },
+          "title": { "type": "string" },
+          "creditHours": { "type": "number" },
+          "days": { "type": "string" },
+          "beginTime": { "type": "string" },
+          "endTime": { "type": "string" },
+          "building": { "type": ["string", "null"] },
+          "room": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

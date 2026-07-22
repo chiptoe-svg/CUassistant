@@ -1,7 +1,7 @@
 # Advisor Chat — Design
 
 **Date:** 2026-07-21
-**Status:** Approved (design); ready for implementation plan.
+**Status:** Implemented 2026-07-21.
 
 ## Goal
 
@@ -33,11 +33,26 @@ place to find out.
   one-shot: *"No MCP server, no tool round-trips."*
 - MCP servers: `8765` credentialed, `8766` public (Clemson schedule),
   `8767` catalog (GC curriculum). All loopback-only.
-- `@openai/codex-sdk` 0.145.0 — provides the agent loop `codex-agent.ts` lacks.
-  It **spawns the CLI** (`spawn`, `child_process`, `codexPathOverride`), so
-  `sandboxMode` and `workingDirectory` map to the same flags, and process
-  isolation carries over. Exposes `baseUrl`, `apiKey`, `model`, `outputSchema`,
-  and arbitrary `--config` overrides; emits `mcp_tool_call` events.
+- `@earendil-works/pi-agent-core` + `pi-ai` (public on npm, 0.81.x; nanoclaw runs
+  0.75.4) — the agent loop, with abort/cancellation through the pipeline
+  including mid-tool-call, and `compact()` for long conversations. These are the
+  things a hand-rolled loop gets subtly wrong, and the stop control this design
+  requires is exactly that case. `pi-coding-agent` is NOT used: its file/bash
+  tools are a liability in a web app.
+- `pi-mcp-bridge.ts` (187 lines, already written for nanoclaw) — a pure function
+  of `mcpServers config -> { tools, close() }`. It imports only the MCP SDK, Pi
+  types, and two small local modules; no containers, no SQLite, no channel
+  adapters. `StreamableHTTPClientTransport` for `url` servers, and
+  `resolveHeaders(config.headers, env)` already supplies auth headers — so the
+  authenticated curriculum wiki is a config entry, not new code.
+- `~/projects/gc_alumni/ask_gc/app.py` (180 lines) — a working precedent for this
+  exact shape: a constrained agent over tools, `temperature=0`, a tool-round cap,
+  and `for prov in ("campus", "openai")` — on-prem first, paid fallback.
+- Local inference is proven, not assumed. Tested 2026-07-21, all three providers
+  in `gc_alumni/db/classify.py` returned correctly parsed OpenAI-format tool
+  calls: `campus` (gptoss-120b), `spark` (qwen3.6-35b-a3b), `local`
+  (gemma-4-26B-A4B MLX). The design-doc risk that a local endpoint "silently
+  half-works" by emitting tool calls as raw text does not apply here.
 - Ports in use: 8765, 8766, 8767, 8769, 8011, 10255. **8770 is free.**
 
 ## Decisions
@@ -53,11 +68,26 @@ crosses the network instead, which is exactly what `baseUrl` is for. This also
 settles containerisation: a host process reaches `127.0.0.1:8766` with no bridge,
 no vmnet, no forwarding.
 
-**Model configurable, defaulting to local.** `baseUrl` is a first-class SDK
-option, so supporting both costs nearly nothing. Defaulting to the Spark's vLLM
-forces the pilot question immediately rather than letting it be deferred
-indefinitely; OpenAI is the fallback when it disappoints. Both are permitted for
-Clemson data under existing policy.
+**Model configurable, defaulting to local, with fallback.** Following `ask_gc`:
+try the on-prem provider first and fall back to OpenAI, both permitted for
+Clemson data under existing policy. Tool calling is already verified working on
+campus, spark, and local MLX, so the open question is answer *quality* on
+multi-step advising, not mechanics.
+
+**Pi as the agent runner, not a hand-rolled loop.** A direct loop was considered
+and rejected. It handles the happy path in ~90 lines, but this service needs a
+working stop control (§7) and needs to survive conversations that outgrow the
+context window — cancellation mid-tool-call and compaction are precisely what a
+hand-rolled loop gets wrong. Pi supplies both, is TypeScript, and the MCP bridge
+it needs is already written and owned.
+
+The Codex SDK was also considered and rejected for this service. It is
+MCP-native, but it has no `--ignore-user-config` equivalent, so suppressing the
+developer's own `~/.codex/config.toml` requires an isolated `CODEX_HOME` — and
+without one the agent silently inherits whatever MCP servers are configured
+there. Verified on this machine: that is `codegraph` and `node_repl`, a
+code-execution tool. With Pi the tool array is passed explicitly, so no such
+surface exists.
 
 **Sessions in memory, with advisor-initiated export.** Nothing persists
 server-side. "It never persisted" is a stronger guarantee than "we delete it,"
@@ -87,12 +117,14 @@ One service, four modules, each with a single responsibility.
 |---|---|
 | `src/advisor-server.ts` | HTTP routes, auth check, static page delivery |
 | `src/advisor-session.ts` | In-memory session store: create, touch, clear, TTL sweep |
-| `src/advisor-agent.ts` | Codex SDK wrapper: thread lifecycle, MCP config, egress gate |
+| `src/advisor-agent.ts` | Pi harness: session lifecycle, provider chain, egress gate |
 | `src/advisor-artifacts.ts` | Host-side rendering of schema-validated agent output |
+| `src/advisor-mcp.ts` | The ported MCP bridge: `mcpServers -> { tools, close() }` |
 | `src/advisor-ui.ts` | The HTML/CSS/JS payload, kept out of the server module |
 
-Following `token-portal.ts`: `node:http`, no framework. One new runtime
-dependency (`@openai/codex-sdk`) in a repo that currently has three.
+Following `token-portal.ts`: `node:http`, no framework. Two new runtime
+dependencies (`pi-agent-core`, `pi-ai`) in a repo that currently has three; the
+MCP SDK the bridge needs is already present, since this repo serves MCP.
 
 ### Request flow
 
@@ -100,74 +132,87 @@ dependency (`@openai/codex-sdk`) in a repo that currently has three.
 POST /chat
   → authenticate(req) -> { advisorId } | null      (shared password today)
   → resolve session by opaque cookie, or create
-  → advisor-agent: run turn on the session's thread
-        MCP tools: 8766 + 8767 only
-        sandbox: read-only, cwd = session temp dir
-        model: baseUrl from env (local vLLM default)
+  → advisor-agent: run turn on the session's Pi harness
+        tools: bridge.tools only (8766, 8767, curriculum wiki)
+        provider: on-prem first, OpenAI fallback
+        abort: wired to the UI stop control
   → buffer the answer; stream only status events
   → release the complete answer + "response ready"
 ```
 
 ## Agent loop and the tool boundary
 
-The SDK runs the loop; the CLI it spawns provides isolation:
+`PiAgentHarness` from `pi-agent-core`, constructed per session:
 
-- `sandboxMode: "read-only"` — the agent never writes. §5 explains how artifacts
-  are produced without loosening this.
-- `workingDirectory` — the session's temp directory, holding uploaded files.
-  Created on session start, `rm -rf` on clear or expiry.
-- `baseUrl` / `model` — from env; local vLLM by default, OpenAI as fallback.
-- `webSearchMode: "disabled"` — **answers come from the MCP tools or not at
-  all.** Web search is the quiet way "retrieve, don't generate" fails: Clemson
-  course and requirement pages exist publicly, are frequently outdated, and are
-  not versioned by catalog year. An answer sourced from a stale web page is
-  indistinguishable in tone from one sourced from `8767`, and the advisor has no
-  way to tell them apart. The snapshot in `state/clemson/` is the authority.
-- `approvalPolicy: "never"` — an unattended web service has no one to prompt.
+- **`tools` is exactly `bridge.tools`.** Nothing else. nanoclaw's harness also
+  passes `createFetchTool()`, `createWebSearchTool()`, and
+  `createCodingTools()`; all three are omitted here. "Answers come from the MCP
+  tools or not at all" is therefore structural — the agent has no other
+  capability to reach for, rather than a flag telling it not to.
+
+  Web search in particular is excluded deliberately: Clemson course and
+  requirement pages are public, frequently outdated, and not versioned by
+  catalog year. An answer sourced from a stale page is indistinguishable in tone
+  from one sourced from the catalog server, and the advisor cannot tell them
+  apart. The snapshot in `state/clemson/` is the authority.
+
+- **`systemPrompt`** is `advisor/AGENTS.md`, composed at startup.
+- **`temperature`/round cap** follow `ask_gc`: deterministic answering, and a
+  bounded number of tool-call rounds so an unattended service cannot loop.
+- **Provider chain** tries the on-prem endpoint first, then OpenAI.
+- **Abort** is wired to the UI's stop control — the reason a runner is used at
+  all.
 - `isEgressAuthorized()` gates every call and fails closed, per existing
   convention.
 
-**MCP servers are injected explicitly, never inherited — via an isolated
-`CODEX_HOME`.** The SDK does not expose the CLI's `--ignore-user-config`, so
-suppressing user config is not available as a flag. The mechanism is the SDK's
-`env` option: point `CODEX_HOME` at a directory containing a minimal
-`config.toml` that declares `8766` and `8767` and nothing else. (`env` also
-replaces the child environment wholesale — the SDK "will not inherit variables
-from `process.env`" when it is provided.)
+### MCP servers
 
-**`CODEX_HOME` is per session, not service-global, because it is a write
-surface.** Codex persists thread transcripts under `CODEX_HOME/sessions`, and a
-single `codex mcp list` was enough to create `memories/` and `tmp/` there.
-Session state the design promises to hold only in memory would therefore be
-written to disk behind our back — with student information potentially in it.
-So each session gets its own `CODEX_HOME`, created alongside its working
-directory and removed by the same `rm -rf` on clear or expiry. This is what
-makes "nothing persists server-side" true rather than aspirational.
+Three, all over `StreamableHTTPClientTransport`, declared in one place:
 
-This is not theoretical. Verified on this machine, 2026-07-21:
-
-```
-default CODEX_HOME    -> codegraph, node_repl
-CODEX_HOME=isolated   -> cu_public only
-```
-
-`node_repl` is a code-execution tool. **Without an isolated `CODEX_HOME` the
-advisor agent silently inherits it**, along with whatever else a developer
-happens to have configured. Nothing in the SDK surface warns about this, and the
-tool list would look correct in casual inspection because the extra servers are
-never named anywhere in this repo.
+| Server | URL | Auth |
+|---|---|---|
+| `cu_public` | `127.0.0.1:8766` | none (loopback) |
+| `cu_catalog` | `127.0.0.1:8767` | none (loopback) |
+| `gc_curriculum_wiki` | `127.0.0.1:3000/api/mcp` | bearer, via `resolveHeaders` |
 
 **`8765` is never wired in.** It carries `send-outlook-mail`, `send-gmail`, and
-calendar writes. An advisor chat has no business holding them. Together with the
-`CODEX_HOME` isolation this makes the tool surface a closed set that is stated in
-one place, rather than the union of this design and an unrelated config file.
-This is the boundary hardest to walk back, so it is explicit rather than default.
+calendar writes. Because Pi receives an explicit tool array, this is enforced by
+construction: a server that is not in the config contributes no tools. There is
+no inheritance path to close.
+
+All three are HTTP, so the stdio-concurrency caveat does not apply and one
+client per server can be shared across request handlers. Per the harness notes,
+the bridge is built **once at service startup**, not per request: connecting and
+enumerating on every turn would pay `listTools()` latency each time and churn
+connections against the MCP servers.
+
+### Skills
+
+Skills stay out of the system prompt. `list-skills` and `get-skill-docs` are
+already served on the public server (8766), so the agent retrieves a skill when
+it decides one is relevant.
+
+This matters for the context budget: the three relevant skills
+(`clemson-schedule-advising`, `gc-curriculum-lookup`, `gc-advisor`) total ~6,500
+tokens. Inlining them would spend roughly a tenth of a 64k window on every turn,
+before the conversation starts — the same budget that the 2026-07-21 payload
+work was undertaken to reclaim.
 
 ## Sessions
 
 An in-memory `Map` keyed by an opaque `httpOnly; Secure; SameSite=Strict`
-cookie. Each entry holds the thread handle, message history, temp directory
-path, `advisorId`, and a last-touched timestamp.
+cookie. Each entry holds the Pi session, message history, temp directory path,
+`advisorId`, and a last-touched timestamp.
+
+**Pi writes transcripts to disk, so the session root is per session.** nanoclaw
+pairs `PiAgentHarness` with `JsonlSessionRepo({ sessionsRoot: ... })`, which
+persists the conversation as JSONL. Left at a shared path, content this design
+promises to hold only in memory — possibly including student information —
+would land on disk behind our back. So each session's root is a temp directory
+created with its working directory and removed by the same `rm -rf`. This is
+what makes "nothing persists server-side" true rather than aspirational, and it
+is the same hazard the Codex option had via `CODEX_HOME`: a runner that
+remembers is a runner that writes somewhere.
 
 - **Clear** — drop the entry, remove the temp directory, mint a fresh cookie.
   This is the control an advisor uses when moving to another student, and it is
@@ -189,31 +234,30 @@ simply present.
 *systems of record* (registering, mailing, calendar writes), not artifacts. A
 proposed-schedule document changes nothing outside the session and is in scope.
 
-But `sandboxMode: read-only` blocks agent-side file creation, and that constraint
-is worth keeping. So artifacts follow the pattern `codex-agent.ts` already
-established with `--output-schema`: **the agent returns structured JSON; the host
-renders it.** For a proposed schedule that means CRNs, meeting times, rooms,
-credits, and conflict status — validated against the schema, and re-checkable
-against `check-schedule-conflicts` before anything is rendered.
+The agent has no file-writing capability at all — it holds only
+`bridge.tools`, and none of those write. So an artifact cannot come from the
+agent directly regardless of sandboxing; the host must render it.
 
-**Prose is the default; schema is the exception.** `outputSchema` lives on
-`TurnOptions`, not `ThreadOptions`, so it is chosen per turn on the same thread
-with the same history. Ordinary conversation runs with no schema at all and the
-agent answers in prose, because this is a chat tool and most turns are
-discussion — clarifying what the student needs, explaining why a section does not
-fit, thinking out loud about tradeoffs. Constraining every response to JSON would
-buy nothing and cost the thing the interface is for.
+**Structured output arrives as a tool call, not a response format.** Rather than
+depend on a runner-specific structured-output feature, the host supplies one
+extra tool, `propose_schedule`, whose parameters *are* the schedule: term, and a
+list of sections with CRN, meeting times, room, credits. When the advisor asks
+for a document, the agent calls it; the host validates the arguments against the
+schema, rejects malformed output, and renders.
 
-An artifact is a second, explicit turn: the advisor asks for the schedule as a
-document, and *that* turn carries the schema. Two consequences worth having —
-documents are never produced by surprise, and the artifact turn can be validated
-and re-verified against the tools before rendering, which a turn of prose cannot
-be.
+This reuses the tool-calling path already verified working on all three local
+providers, so it needs nothing that a given model or runner might not support.
+It also keeps the boundary honest: `propose_schedule` is the *only* tool the
+host adds beyond the MCP servers, and it still writes nothing — it returns
+structured data to the host.
 
-Three benefits beyond preserving the sandbox: formatting is deterministic
-because a template produces it; output is validatable in a way a
-model-authored document is not; and the model decides *what* is in the schedule
-while never deciding how the page looks.
+**Prose is the default; structure is the exception.** Ordinary conversation is
+just conversation — clarifying what the student needs, explaining why a section
+does not fit, weighing tradeoffs. That is what a chat interface is for, and
+constraining every response would cost it. A document is produced only when the
+agent calls `propose_schedule`, which means documents are never produced by
+surprise, and the arguments can be re-verified against `check-schedule-conflicts`
+before rendering — something a turn of prose cannot be.
 
 **Rendering is HTML with a print stylesheet**, served at `/export/schedule`;
 the advisor prints to PDF. Zero new dependencies, and it produces a real
@@ -280,19 +324,18 @@ useful when `advisorId` carries real values in Phase 2.
 ## Testing
 
 - **Session store** — two cookies never resolve to each other's session; clear
-  removes the entry, the working directory, and the session's `CODEX_HOME`
-  (including any transcript Codex wrote under `sessions/`); TTL sweep expires
-  idle sessions and leaves active ones.
-- **Tool boundary** — the generated `CODEX_HOME/config.toml` declares exactly
-  `8766` and `8767`. Tests assert `8765` is absent, and that no server from the
-  developer's own `~/.codex/config.toml` (notably `node_repl`) can appear. This
-  is the failure nobody would notice by inspection: the inherited servers are
-  named nowhere in this repo, so a reviewer reading only this code sees a
-  correct tool list.
+  removes the entry, the working directory, and the Pi session root (including
+  any JSONL transcript written there); TTL sweep expires idle sessions and
+  leaves active ones.
+- **Tool boundary** — the MCP config declares exactly the three intended
+  servers; a test asserts `8765` is absent, and that the tool array handed to Pi
+  contains nothing beyond `bridge.tools` (no fetch, no web search, no coding
+  tools). The bridge injects `createTransport`, so this is testable without real
+  sockets.
 - **Egress gate** — an unauthorized provider is refused, failing closed.
-- **Turn modes** — a conversational turn carries no `outputSchema` and returns
-  prose; an artifact turn carries one and returns JSON. Both run on the same
-  thread, so history is shared.
+- **Turn modes** — a conversational turn returns prose; a `propose_schedule`
+  tool call returns validated structure. A test asserts `propose_schedule` is
+  the only host-supplied tool alongside `bridge.tools`.
 - **Artifacts** — schema-invalid agent output is rejected rather than rendered;
   a valid schedule renders deterministically.
 - **Auth seam** — `authenticate()` returning null denies; sessions carry

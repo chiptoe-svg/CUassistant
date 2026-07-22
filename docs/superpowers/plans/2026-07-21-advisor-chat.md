@@ -2,25 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A browser chat on `127.0.0.1:8770` where a GC advisor asks composition questions ("student has GC 4060 and GC 3400 at these times — find a specialty area class and a tech elective that fit") answered by a Codex-SDK agent wired to the public MCP servers.
+**Goal:** A browser chat on `127.0.0.1:8770` where a GC advisor asks composition questions ("student has GC 4060 and GC 3400 at these times — find a specialty area class and a tech elective that fit") answered by a Pi agent wired to the public MCP servers.
 
-**Architecture:** One `node:http` service following `src/token-portal.ts`: hand-rolled routes, inline HTML, no framework. Sessions live in an in-memory `Map` keyed by an opaque cookie; each session owns a temp working directory and its own `CODEX_HOME`, both destroyed on clear. The agent runs through `@openai/codex-sdk`, which spawns the Codex CLI, so the read-only sandbox and process isolation of `src/codex-agent.ts` carry over.
+**Architecture:** One `node:http` service following `src/token-portal.ts`: hand-rolled routes, inline HTML, no framework. Sessions live in an in-memory `Map` keyed by an opaque cookie; each session owns a temp working directory and a temp Pi session root, both destroyed on clear. The agent is `PiAgentHarness` from `pi-agent-core`, holding **only** the tools produced by the ported MCP bridge plus one host-supplied `propose_schedule` tool.
 
-**Tech Stack:** TypeScript (ESM, `.js` import specifiers in `src/`, `.ts` in `test/`), `node:http`, `node:test` + `node:assert/strict`, `@openai/codex-sdk` 0.145.0.
+**Tech Stack:** TypeScript (ESM, `.js` import specifiers in `src/`, `.ts` in `test/`), `node:http`, `node:test` + `node:assert/strict`, `@earendil-works/pi-agent-core` + `pi-ai`, `@modelcontextprotocol/sdk` (already a dependency).
 
 **Spec:** `docs/superpowers/specs/2026-07-21-advisor-chat-design.md`
 
 ## Global Constraints
 
-- **MCP tool surface is exactly `8766` and `8767`.** `8765` is never wired in — it carries `send-outlook-mail`, `send-gmail`, and calendar writes.
-- **`CODEX_HOME` is per session and is a write surface.** Codex persists transcripts under `CODEX_HOME/sessions` and creates `memories/` and `tmp/`. It must be created per session and removed with the session, or "nothing persists server-side" is false.
-- **The SDK's `env` option replaces the child environment wholesale** — it does not merge with `process.env`.
-- **`sandboxMode: "read-only"`.** The agent never writes files. Artifacts are rendered host-side from schema-validated output.
-- **`webSearchMode: "disabled"`.** Answers come from MCP tools or not at all.
-- **`approvalPolicy: "never"`.** Unattended service, nobody to prompt.
-- **Prose by default.** `outputSchema` is per-turn (`TurnOptions`); conversational turns pass none.
+- **The tool array is exactly `bridge.tools` plus `propose_schedule`.** No fetch tool, no web-search tool, no coding tools — nanoclaw's harness passes all three and this one passes none. "Answers come from the MCP tools or not at all" is structural, not a flag.
+- **MCP servers are 8766, 8767, and the curriculum wiki.** `8765` is never configured — it carries `send-outlook-mail`, `send-gmail`, and calendar writes.
+- **Pi writes transcripts to disk.** `JsonlSessionRepo` persists JSONL under its `sessionsRoot`. That root is per session and removed on clear, or "nothing persists server-side" is false.
+- **Skills are never inlined into the system prompt.** They are retrieved on demand via `list-skills` / `get-skill-docs`, already served on 8766. The three relevant skills total ~6,500 tokens — a tenth of a 64k window on every turn if inlined.
+- **`temperature: 0` and a bounded tool-round cap.** An unattended service must not loop.
+- **Provider chain: on-prem first, OpenAI fallback**, per `ask_gc`.
 - **Audit records metadata only** — never prompt or response content.
 - **Session isolation is per-cookie, never per-password.**
+- **`pi-coding-agent` is not a dependency.** Its file/bash tools are a liability in a web app.
 - Every module imports with `.js` specifiers; tests import with `.ts`.
 - `npm run typecheck` covers `src/` and `test/` (via `tsconfig.test.json`).
 
@@ -30,13 +30,14 @@
 
 **Files:**
 - Modify: `src/config.ts` (append a new section at end of file)
+- Modify: `policy/action-policy.yaml`
 - Create: `src/advisor-session.ts`
 - Test: `test/advisor-session.test.ts`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
 - Produces:
-  - `interface AdvisorSession { id: string; advisorId: string; workDir: string; codexHome: string; threadId: string | null; history: TurnRecord[]; lastTouched: number; }`
+  - `interface AdvisorSession { id: string; advisorId: string; workDir: string; piSessionRoot: string; history: TurnRecord[]; lastTouched: number; }`
   - `interface TurnRecord { role: "advisor" | "agent"; text: string; at: number; }`
   - `createSession(advisorId: string): AdvisorSession`
   - `getSession(id: string | undefined): AdvisorSession | undefined`
@@ -58,17 +59,29 @@ export const ADVISOR_SESSION_TTL_MS = Number(
 );
 /** Egress provider name; must be authorized in policy/action-policy.yaml. */
 export const ADVISOR_PROVIDER = process.env.ADVISOR_PROVIDER || "local_vllm";
-export const ADVISOR_MODEL = process.env.ADVISOR_MODEL || "qwen3";
-/** Local vLLM by default; set to an OpenAI base URL to fall back. */
+/** Tried in order: on-prem first, paid fallback (mirrors ask_gc). */
+export const ADVISOR_PROVIDER_CHAIN = (
+  process.env.ADVISOR_PROVIDER_CHAIN || "spark,openai"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+export const ADVISOR_MODEL = process.env.ADVISOR_MODEL || "qwen3.6-35b-a3b";
 export const ADVISOR_BASE_URL =
-  process.env.ADVISOR_BASE_URL || "http://127.0.0.1:8000/v1";
+  process.env.ADVISOR_BASE_URL || "http://gcspark.clemson.edu:8080/v1";
+/** Max tool-call rounds per turn. Unattended service: must be bounded. */
+export const ADVISOR_MAX_ROUNDS = Number(process.env.ADVISOR_MAX_ROUNDS || 8);
 export const ADVISOR_MCP_PUBLIC_URL =
   process.env.ADVISOR_MCP_PUBLIC_URL || "http://127.0.0.1:8766/";
 export const ADVISOR_MCP_CATALOG_URL =
   process.env.ADVISOR_MCP_CATALOG_URL || "http://127.0.0.1:8767/";
+export const ADVISOR_MCP_WIKI_URL =
+  process.env.ADVISOR_MCP_WIKI_URL || "http://127.0.0.1:3000/api/mcp";
+/** Bearer token for the curriculum wiki MCP, which requires auth (401 without). */
+export const ADVISOR_MCP_WIKI_TOKEN = process.env.ADVISOR_MCP_WIKI_TOKEN || "";
 ```
 
-- [ ] **Step 2: Authorize the local vLLM provider in policy**
+- [ ] **Step 2: Authorize the provider in policy**
 
 Add to `policy/action-policy.yaml` under `data_egress.classifiers`, after the `local_ollama` entry:
 
@@ -98,12 +111,12 @@ import {
   resetSessionsForTest,
 } from "../src/advisor-session.ts";
 
-test("a session gets its own working directory and CODEX_HOME", () => {
+test("a session gets its own working directory and Pi session root", () => {
   resetSessionsForTest();
   const s = createSession("shared");
   assert.ok(existsSync(s.workDir), "workDir must exist");
-  assert.ok(existsSync(s.codexHome), "codexHome must exist");
-  assert.notEqual(s.workDir, s.codexHome, "must be separate directories");
+  assert.ok(existsSync(s.piSessionRoot), "piSessionRoot must exist");
+  assert.notEqual(s.workDir, s.piSessionRoot, "must be separate directories");
   clearSession(s.id);
 });
 
@@ -118,7 +131,7 @@ test("two sessions never resolve to each other", () => {
   assert.equal(getSession(a.id)?.id, a.id);
   assert.equal(getSession(b.id)?.id, b.id);
   assert.notEqual(a.workDir, b.workDir);
-  assert.notEqual(a.codexHome, b.codexHome);
+  assert.notEqual(a.piSessionRoot, b.piSessionRoot);
 });
 
 test("getSession returns undefined for unknown or missing ids", () => {
@@ -127,16 +140,16 @@ test("getSession returns undefined for unknown or missing ids", () => {
   assert.equal(getSession("nope"), undefined);
 });
 
-// Clear is a data-disposal control, not a convenience: Codex writes transcripts
-// under CODEX_HOME/sessions, so both directories must actually be gone.
+// Clear is a data-disposal control, not a convenience: Pi's JsonlSessionRepo
+// writes transcripts under piSessionRoot, so both directories must be gone.
 test("clear removes the entry and BOTH directories from disk", () => {
   resetSessionsForTest();
   const s = createSession("shared");
-  const { workDir, codexHome } = s;
+  const { workDir, piSessionRoot } = s;
   clearSession(s.id);
   assert.equal(getSession(s.id), undefined);
   assert.equal(existsSync(workDir), false, "workDir must be deleted");
-  assert.equal(existsSync(codexHome), false, "codexHome must be deleted");
+  assert.equal(existsSync(piSessionRoot), false, "piSessionRoot must be deleted");
 });
 
 test("sweep expires idle sessions and leaves active ones", () => {
@@ -150,7 +163,7 @@ test("sweep expires idle sessions and leaves active ones", () => {
   assert.equal(getSession(old.id), undefined);
   assert.equal(getSession(fresh.id)?.id, fresh.id);
   assert.equal(existsSync(old.workDir), false);
-  assert.equal(existsSync(old.codexHome), false);
+  assert.equal(existsSync(old.piSessionRoot), false);
   assert.equal(sessionCount(), 1);
 });
 ```
@@ -169,14 +182,17 @@ Create `src/advisor-session.ts`:
 //
 // Nothing persists server-side. Each session owns two directories:
 //
-//   workDir    - the agent's read-only sandbox cwd; holds uploaded files
-//   codexHome  - CODEX_HOME for this session's Codex CLI invocations
+//   workDir        - the agent's working directory; holds uploaded files
+//   piSessionRoot  - JsonlSessionRepo's sessionsRoot for this session
 //
-// codexHome is per session because it is a WRITE surface: Codex persists thread
-// transcripts under CODEX_HOME/sessions and creates memories/ and tmp/ there. A
-// service-global CODEX_HOME would quietly write conversation content - possibly
-// including student information - to disk, making "nothing persists" false.
-// Both directories are removed together on clear or expiry.
+// piSessionRoot is per session because Pi WRITES there: JsonlSessionRepo
+// persists the conversation as JSONL. A shared root would quietly put
+// conversation content - possibly including student information - on disk,
+// making "nothing persists" false. Both directories are removed together on
+// clear or expiry.
+//
+// The Codex SDK had the same hazard through CODEX_HOME. A runner that
+// remembers is a runner that writes somewhere; the fix is the same either way.
 
 import crypto from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -197,8 +213,7 @@ export interface AdvisorSession {
   /** Always "shared" until Phase 2 wires per-advisor identity. */
   advisorId: string;
   workDir: string;
-  codexHome: string;
-  threadId: string | null;
+  piSessionRoot: string;
   history: TurnRecord[];
   lastTouched: number;
 }
@@ -211,8 +226,7 @@ export function createSession(advisorId: string): AdvisorSession {
     id,
     advisorId,
     workDir: mkdtempSync(path.join(tmpdir(), "advisor-work-")),
-    codexHome: mkdtempSync(path.join(tmpdir(), "advisor-codex-")),
-    threadId: null,
+    piSessionRoot: mkdtempSync(path.join(tmpdir(), "advisor-pi-")),
     history: [],
     lastTouched: Date.now(),
   };
@@ -228,7 +242,7 @@ export function getSession(id: string | undefined): AdvisorSession | undefined {
 }
 
 function disposeDirs(s: AdvisorSession): void {
-  for (const dir of [s.workDir, s.codexHome]) {
+  for (const dir of [s.workDir, s.piSessionRoot]) {
     try {
       rmSync(dir, { recursive: true, force: true });
     } catch (err) {
@@ -273,75 +287,173 @@ export function resetSessionsForTest(): void {
 Run: `npx tsx --test test/advisor-session.test.ts`
 Expected: PASS, 5 tests
 
-- [ ] **Step 7: Typecheck**
+- [ ] **Step 7: Typecheck and commit**
 
 Run: `npm run typecheck`
-Expected: no output (clean)
-
-- [ ] **Step 8: Commit**
 
 ```bash
 git add src/config.ts src/advisor-session.ts test/advisor-session.test.ts policy/action-policy.yaml
-git commit -m "feat(advisor): in-memory session store with per-session CODEX_HOME"
+git commit -m "feat(advisor): in-memory session store with per-session Pi session root"
 ```
 
 ---
+### Task 2: Port the MCP bridge
 
-### Task 2: Codex home — tool surface, persona, and skills
+The bridge is the agent's entire connection to data. It already exists in nanoclaw at `container/agent-runner/src/harnesses/pi-mcp-bridge.ts` (187 lines) and is a pure function of `mcpServers config -> { tools, close() }` — no container, SQLite, or channel coupling. Port it, do not rewrite it.
 
-This is the security-critical task. Without an isolated `CODEX_HOME` the agent inherits `~/.codex/config.toml` — on the development machine that is `codegraph` and `node_repl`, a code-execution tool.
+**Files:**
+- Create: `src/advisor-mcp.ts` (ported from nanoclaw, plus the two small local modules it imports)
+- Test: `test/advisor-mcp.test.ts`
+- Modify: `package.json` (add `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`)
 
-The session's `CODEX_HOME` holds three things, and together they are the entire definition of this agent: `config.toml` (its tool surface), `AGENTS.md` (its persona), and `skills/` (its procedural knowledge). All three are materialised per session from repo-tracked sources, so they are version-controlled and editable over time while the runtime copy stays disposable.
+**Interfaces:**
+- Consumes: config values from Task 1.
+- Produces:
+  - `interface McpServerConfig { url: string; headers?: Record<string, string> }`
+  - `advisorMcpServers(): Record<string, McpServerConfig>`
+  - `createAdvisorMcpBridge(deps?): Promise<{ tools: AgentTool[]; close(): Promise<void> }>`
+
+- [ ] **Step 1: Add the dependencies**
+
+Run: `npm install @earendil-works/pi-agent-core @earendil-works/pi-ai`
+
+Do **not** install `pi-coding-agent` or `pi-tui`.
+
+- [ ] **Step 2: Write the failing tests**
+
+Create `test/advisor-mcp.test.ts`:
+
+```ts
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { advisorMcpServers } from "../src/advisor-mcp.ts";
+
+test("exactly the three intended servers are configured", () => {
+  const servers = advisorMcpServers();
+  assert.deepEqual(Object.keys(servers).sort(), [
+    "cu_catalog",
+    "cu_public",
+    "gc_curriculum_wiki",
+  ]);
+});
+
+// 8765 carries send-outlook-mail, send-gmail, and calendar writes. Pi receives
+// an explicit tool array, so a server that is not configured contributes no
+// tools — but a typo in a URL could still point at it.
+test("the credentialed server is never configured", () => {
+  const json = JSON.stringify(advisorMcpServers());
+  assert.doesNotMatch(json, /8765/, "8765 must never appear");
+});
+
+test("the public and catalog servers carry no auth header", () => {
+  const servers = advisorMcpServers();
+  assert.equal(servers.cu_public!.headers, undefined);
+  assert.equal(servers.cu_catalog!.headers, undefined);
+});
+
+// The curriculum wiki returns 401 without a token. A missing token must be
+// visible as a missing header, not silently sent as "Bearer undefined".
+test("the wiki carries a bearer header only when a token is configured", () => {
+  const servers = advisorMcpServers();
+  const wiki = servers.gc_curriculum_wiki!;
+  if (process.env.ADVISOR_MCP_WIKI_TOKEN) {
+    assert.match(wiki.headers!.Authorization!, /^Bearer .+/);
+  } else {
+    assert.equal(wiki.headers, undefined);
+  }
+});
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `npx tsx --test test/advisor-mcp.test.ts`
+Expected: FAIL — `Cannot find module '../src/advisor-mcp.ts'`
+
+- [ ] **Step 4: Port the bridge**
+
+Copy `~/projects/nanoclaw_personal/container/agent-runner/src/harnesses/pi-mcp-bridge.ts` to `src/advisor-mcp.ts`. Then:
+
+1. Inline the two local imports it depends on — `McpServerConfig` from `./types.js` and `resolveHeaders` from `./resolve-headers.js`. Both are small; copy only what the bridge uses.
+2. Delete the stdio branch and the `StdioClientTransport` import. All three advisor servers are HTTP, and removing the branch removes the concurrency caveat that applies to stdio clients shared across requests.
+3. Keep the injected `createTransport` dependency — it is what makes the tool surface testable without real sockets.
+
+Then append the advisor's server table:
+
+```ts
+export interface McpServerConfig {
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * The agent's entire data surface. Three servers, declared in one place.
+ *
+ * 8765 is deliberately absent: it carries send-outlook-mail, send-gmail, and
+ * calendar writes. Pi is handed an explicit tool array, so a server that is not
+ * listed here contributes nothing — there is no inheritance path to close.
+ */
+export function advisorMcpServers(): Record<string, McpServerConfig> {
+  const wiki: McpServerConfig = { url: ADVISOR_MCP_WIKI_URL };
+  // Only attach the header when a token exists, so a missing token fails as a
+  // clear 401 rather than being sent as the string "Bearer undefined".
+  if (ADVISOR_MCP_WIKI_TOKEN) {
+    wiki.headers = { Authorization: `Bearer ${ADVISOR_MCP_WIKI_TOKEN}` };
+  }
+  return {
+    cu_public: { url: ADVISOR_MCP_PUBLIC_URL },
+    cu_catalog: { url: ADVISOR_MCP_CATALOG_URL },
+    gc_curriculum_wiki: wiki,
+  };
+}
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `npx tsx --test test/advisor-mcp.test.ts`
+Expected: PASS, 4 tests
+
+- [ ] **Step 6: Verify against the live servers**
+
+Run:
+```bash
+npx tsx -e '
+import { createAdvisorMcpBridge } from "./src/advisor-mcp.ts";
+const b = await createAdvisorMcpBridge();
+console.log("tools:", b.tools.length);
+console.log(b.tools.map((t) => t.name).sort().join("\n"));
+await b.close();
+'
+```
+Expected: the 9 public tools (including `list-skills` and `get-skill-docs`) plus the catalog tools. If the wiki token is unset its tools are absent and the run still succeeds — each server connects in its own try/catch, so an unreachable one is skipped, not fatal.
+
+- [ ] **Step 7: Typecheck and commit**
+
+Run: `npm run typecheck`
+
+```bash
+git add src/advisor-mcp.ts test/advisor-mcp.test.ts package.json package-lock.json
+git commit -m "feat(advisor): port the Pi MCP bridge and declare the tool surface"
+```
+
+---
+### Task 3: Pi harness, persona, and the provider chain
 
 **Files:**
 - Create: `src/advisor-agent.ts`
 - Create: `advisor/AGENTS.md`
-- Read (not modified): `skills/*`, `/Users/admin/projects/gc_advisor/skills/*`
 - Test: `test/advisor-agent.test.ts`
-- Modify: `package.json` (add `@openai/codex-sdk` dependency)
-- Modify: `src/config.ts` (add `ADVISOR_SKILLS`, `ADVISOR_SKILL_ROOTS`)
 
 **Interfaces:**
-- Consumes: `AdvisorSession` from `src/advisor-session.ts`.
+- Consumes: `AdvisorSession` from Task 1; `createAdvisorMcpBridge` from Task 2.
 - Produces:
-  - `materializeCodexHome(codexHome: string, skills?: string[]): void`
-  - `buildThreadOptions(session: AdvisorSession): ThreadOptions`
-  - `runAdvisorTurn(session: AdvisorSession, input: string, outputSchema?: unknown): Promise<{ text: string; toolCalls: string[] }>`
+  - `loadSystemPrompt(): string`
+  - `initAdvisorTools(): Promise<void>` (builds the bridge once, at startup)
+  - `advisorToolNames(): string[]`
+  - `runAdvisorTurn(session: AdvisorSession, input: string, signal?: AbortSignal): Promise<{ text: string; toolCalls: number }>`
+  - `shutdownAdvisorTools(): Promise<void>`
 
-- [ ] **Step 1: Add the dependency**
-
-Run: `npm install @openai/codex-sdk@0.145.0`
-
-- [ ] **Step 2: Add the skills config values**
-
-Append to the advisor section of `src/config.ts`:
-
-```ts
-/**
- * Directories searched for advisor skills, in order. gc_advisor owns the
- * curriculum skills; this follows the existing GC catalog bridge above, which
- * shells out to gc_advisor rather than copying its data — same principle,
- * keeping each repo the single source of truth for what it owns.
- */
-export const ADVISOR_SKILL_ROOTS = (
-  process.env.ADVISOR_SKILL_ROOTS ||
-  "/Users/admin/projects/CUassistant/skills,/Users/admin/projects/gc_advisor/skills"
-)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-/** Skills materialised into each session's CODEX_HOME, comma-separated. */
-export const ADVISOR_SKILLS = (
-  process.env.ADVISOR_SKILLS ||
-  "clemson-schedule-advising,gc-curriculum-lookup,gc-advisor"
-)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-```
-
-- [ ] **Step 3: Write the persona**
+- [ ] **Step 1: Write the persona**
 
 Create `advisor/AGENTS.md`. This is the highest-leverage artifact in the project — it is where advising judgment lives, and it is meant to be edited as advisors report what the agent gets wrong.
 
@@ -354,14 +466,29 @@ curriculum questions. Your users are staff, not students.
 ## Where your answers come from
 
 Every factual claim about a course, section, time, room, or requirement must
-come from a tool result. You have the Clemson class schedule and the GC catalog
-available as tools; use them. If the tools cannot answer, say so plainly —
-do not fill the gap from memory. Course numbers, prerequisites, and requirement
-rules change between catalog years, and a confident wrong answer here costs a
-student a semester.
+come from a tool result. If the tools cannot answer, say so plainly — do not
+fill the gap from memory. Course numbers, prerequisites, and requirement rules
+change between catalog years, and a confident wrong answer costs a student a
+semester.
+
+**If a tool returns an empty list or no rows, say we do not have that data.**
+Do not substitute your own numbers, courses, rooms, or examples. An empty result
+means say it is empty.
+
+**Do not re-group or re-aggregate tool results into categories the tools did not
+return.** Report data at the granularity you received it. If you were not told
+which sections satisfy a requirement slot, do not infer it from course numbers.
 
 You have no web access. This is deliberate: Clemson course pages are public,
 frequently outdated, and not versioned by catalog year.
+
+## Skills
+
+You have `list-skills` and `get-skill-docs`. Call them when a question touches
+schedule search, room availability, conflict checking, or GC degree
+requirements — the skill documents the exact tool arguments, the standard
+workflow, and the known limitations. Read the skill before guessing at
+arguments.
 
 ## Catalog year
 
@@ -373,9 +500,9 @@ catalog year, ask. Never assume the newest one.
 
 You compute the published, by-the-book path. You do not know about petitions,
 substitutions, waivers, department approvals, or transfer equivalencies — none
-of that is in your data. When a question turns on one of them, say so and hand
-it back to the advisor. This is not a disclaimer; it is an accurate description
-of your boundary.
+of that is in your data. When a question turns on one, say so and hand it back
+to the advisor. This is not a disclaimer; it is an accurate description of your
+boundary.
 
 You also cannot see grades, holds, or residency requirements, so you cannot
 verify that a completed course actually counted.
@@ -383,7 +510,7 @@ verify that a completed course actually counted.
 ## Room capacity
 
 Room capacities come from a hand-exported snapshot and go stale when rooms are
-renovated. Treat capacity as a planning aid. If a room looks over capacity,
+renovated. Treat capacity as a planning aid. If a section looks over capacity,
 say what the data shows and note it is worth confirming — several rooms in the
 export are known to be wrong.
 
@@ -395,7 +522,7 @@ lists and meeting times are enough to answer scheduling questions.
 
 ## How to answer
 
-Write prose. You are in a chat window, and most turns are discussion: what the
+Write prose. You are in a chat window and most turns are discussion: what the
 student needs, why a section does not fit, what the tradeoffs are. Be concrete —
 name CRNs, days, and times. When you have checked for conflicts, say so. When
 you have not, do not imply that you have.
@@ -404,301 +531,159 @@ Keep answers short enough to read at a glance. If you are proposing several
 options, lead with your recommendation and say why.
 ```
 
-- [ ] **Step 4: Write the failing tests**
+- [ ] **Step 2: Write the failing tests**
 
 Create `test/advisor-agent.test.ts`:
 
 ```ts
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 
-import { materializeCodexHome, buildThreadOptions } from "../src/advisor-agent.ts";
-import {
-  createSession,
-  clearSession,
-  resetSessionsForTest,
-} from "../src/advisor-session.ts";
+import { loadSystemPrompt } from "../src/advisor-agent.ts";
 
-function readConfig(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "codexhome-test-"));
-  try {
-    materializeCodexHome(dir);
-    return readFileSync(path.join(dir, "config.toml"), "utf8");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-test("the generated config declares exactly the two public MCP servers", () => {
-  const toml = readConfig();
-  assert.match(toml, /\[mcp_servers\.cu_public\]/);
-  assert.match(toml, /\[mcp_servers\.cu_catalog\]/);
-  assert.match(toml, /127\.0\.0\.1:8766/);
-  assert.match(toml, /127\.0\.0\.1:8767/);
+test("the persona carries the rules that keep answers grounded", () => {
+  const p = loadSystemPrompt();
+  assert.match(p, /catalog year/i, "catalog-year discipline");
+  assert.match(p, /petitions/i, "the exceptions boundary");
+  assert.match(p, /empty/i, "the empty-result rule");
+  assert.match(p, /list-skills/, "skills are retrieved, not inlined");
 });
 
-// The credentialed server carries send-outlook-mail, send-gmail, and calendar
-// writes. An advisor chat must never hold them.
-test("the generated config never mentions the credentialed server", () => {
-  const toml = readConfig();
-  assert.doesNotMatch(toml, /8765/, "8765 must never appear");
-});
-
-// Regression for the real failure mode: without an isolated CODEX_HOME the CLI
-// reads ~/.codex/config.toml. On the dev machine that contributes node_repl, a
-// code-execution tool. Nothing in the SDK warns, and the tool list looks
-// correct on inspection because those servers are named nowhere in this repo.
-test("the generated config cannot inherit developer MCP servers", () => {
-  const toml = readConfig();
-  for (const inherited of ["node_repl", "codegraph"]) {
-    assert.doesNotMatch(
-      toml,
-      new RegExp(inherited),
-      `${inherited} must not be inherited`,
-    );
-  }
-  const declared = [...toml.matchAll(/\[mcp_servers\.([a-z_]+)\]/g)].map(
-    (m) => m[1],
-  );
-  assert.deepEqual(declared.sort(), ["cu_catalog", "cu_public"]);
-});
-
-test("the persona and skills are materialised into CODEX_HOME", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "codexhome-test-"));
-  try {
-    materializeCodexHome(dir);
-    const agents = readFileSync(path.join(dir, "AGENTS.md"), "utf8");
-    assert.match(agents, /catalog year/i, "persona must carry catalog-year discipline");
-    assert.match(agents, /petitions/i, "persona must state the exceptions boundary");
-    assert.ok(
-      existsSync(path.join(dir, "skills", "clemson-schedule-advising", "SKILL.md")),
-      "the schedule skill must be present",
-    );
-    assert.ok(
-      existsSync(path.join(dir, "skills", "gc-curriculum-lookup", "SKILL.md")),
-      "the curriculum skill must be present (it lives in the gc_advisor repo)",
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// Skills are editable over time, so a missing or renamed one must fail loudly
-// at materialisation rather than producing an agent that quietly knows less.
-test("a missing skill is an error, not a silent omission", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "codexhome-test-"));
-  try {
-    assert.throws(
-      () => materializeCodexHome(dir, ["no-such-skill"]),
-      /no-such-skill/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("thread options pin the sandbox, web search, and approval policy", () => {
-  resetSessionsForTest();
-  const s = createSession("shared");
-  const opts = buildThreadOptions(s);
-  assert.equal(opts.sandboxMode, "read-only");
-  assert.equal(opts.webSearchMode, "disabled");
-  assert.equal(opts.approvalPolicy, "never");
-  assert.equal(opts.workingDirectory, s.workDir);
-  assert.equal(opts.skipGitRepoCheck, true);
-  clearSession(s.id);
+// The three skills total ~6,500 tokens. Inlining them would spend a tenth of a
+// 64k window on every turn — the budget the 2026-07-21 payload work reclaimed.
+test("skill bodies are NOT inlined into the system prompt", () => {
+  const p = loadSystemPrompt();
+  assert.ok(p.length < 8000, `system prompt is ${p.length} chars — skills inlined?`);
+  assert.doesNotMatch(p, /### `search-clemson-classes`/, "skill body leaked in");
 });
 ```
 
-- [ ] **Step 5: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run: `npx tsx --test test/advisor-agent.test.ts`
 Expected: FAIL — `Cannot find module '../src/advisor-agent.ts'`
 
-- [ ] **Step 6: Implement the agent wrapper**
+- [ ] **Step 4: Implement the harness**
 
 Create `src/advisor-agent.ts`:
 
 ```ts
-// Codex SDK wrapper for the advisor chat.
+// Pi harness for the advisor chat.
 //
-// The SDK spawns the Codex CLI, so sandboxMode/workingDirectory give the same
-// process isolation src/codex-agent.ts relies on. Two things the SDK does NOT
-// give us, both handled here:
+// Pi is used for the two things a hand-rolled loop gets subtly wrong and this
+// service needs: abort/cancellation through the pipeline including mid-tool-
+// call (the UI has a stop control), and compaction when a conversation outgrows
+// the window.
 //
-//   1. There is no --ignore-user-config equivalent. Without an isolated
-//      CODEX_HOME the CLI reads ~/.codex/config.toml and inherits whatever MCP
-//      servers a developer has configured. Verified 2026-07-21: that is
-//      codegraph and node_repl (code execution). So we write our own
-//      config.toml into a per-session CODEX_HOME and point the child at it.
-//   2. `env` REPLACES the child environment rather than merging, so everything
-//      the CLI needs must be listed explicitly.
+// The tool array is bridge.tools plus propose_schedule and nothing else.
+// nanoclaw's harness also passes createFetchTool(), createWebSearchTool(), and
+// createCodingTools(); all three are omitted here. "Answers come from the MCP
+// tools or not at all" is therefore structural - the agent has no other
+// capability to reach for - rather than a flag telling it not to.
+//
+// The bridge is built ONCE at startup and shared. Building it per request would
+// pay listTools() latency every turn and churn connections against the MCP
+// servers; all three transports are HTTP, so sharing is safe.
 
-import { copyFileSync, cpSync, existsSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { Codex, type ThreadOptions } from "@openai/codex-sdk";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 import {
-  ADVISOR_BASE_URL,
-  ADVISOR_MCP_CATALOG_URL,
-  ADVISOR_MCP_PUBLIC_URL,
-  ADVISOR_MODEL,
+  ADVISOR_MAX_ROUNDS,
   ADVISOR_PROVIDER,
-  ADVISOR_SKILLS,
-  ADVISOR_SKILL_ROOTS,
 } from "./config.js";
-import { buildChildEnv } from "./child-env.js";
 import { log } from "./log.js";
 import { isEgressAuthorized } from "./policy.js";
+import { createAdvisorMcpBridge } from "./advisor-mcp.js";
 import type { AdvisorSession } from "./advisor-session.js";
 
-/**
- * Materialise a session's CODEX_HOME. Three files define this agent entirely:
- *
- *   config.toml  - its tool surface (exactly two MCP servers)
- *   AGENTS.md    - its persona and advising judgment
- *   skills/      - its procedural knowledge
- *
- * All three are copied from repo-tracked sources, so they are version
- * controlled and editable over time while the runtime copy stays disposable.
- * Adding a tool or a skill is a deliberate edit at the source, never something
- * that happens by inheritance.
- */
-export function materializeCodexHome(
-  codexHome: string,
-  skills: string[] = ADVISOR_SKILLS,
-): void {
-  const toml = [
-    "# Generated per advisor session. Do not add servers here by hand.",
-    "# This file IS the agent's tool surface.",
-    "",
-    "[mcp_servers.cu_public]",
-    `url = "${ADVISOR_MCP_PUBLIC_URL}"`,
-    "",
-    "[mcp_servers.cu_catalog]",
-    `url = "${ADVISOR_MCP_CATALOG_URL}"`,
-    "",
-  ].join("\n");
-  writeFileSync(path.join(codexHome, "config.toml"), toml, "utf8");
+let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
 
-  copyFileSync(
+export function loadSystemPrompt(): string {
+  return readFileSync(
     fileURLToPath(new URL("../advisor/AGENTS.md", import.meta.url)),
-    path.join(codexHome, "AGENTS.md"),
+    "utf8",
   );
-
-  for (const name of skills) {
-    const src = ADVISOR_SKILL_ROOTS.map((root) => path.join(root, name)).find(
-      (dir) => existsSync(path.join(dir, "SKILL.md")),
-    );
-    if (!src) {
-      // Loud, not silent: a renamed or deleted skill would otherwise produce an
-      // agent that quietly knows less than the operator thinks it does.
-      throw new Error(
-        `advisor skill not found: ${name} (searched ${ADVISOR_SKILL_ROOTS.join(", ")})`,
-      );
-    }
-    cpSync(src, path.join(codexHome, "skills", name), { recursive: true });
-  }
 }
 
-export function buildThreadOptions(session: AdvisorSession): ThreadOptions {
-  return {
-    model: ADVISOR_MODEL,
-    sandboxMode: "read-only",
-    workingDirectory: session.workDir,
-    skipGitRepoCheck: true,
-    webSearchMode: "disabled",
-    approvalPolicy: "never",
-  };
-}
-
-function buildCodex(session: AdvisorSession): Codex {
-  return new Codex({
-    baseUrl: ADVISOR_BASE_URL,
-    env: buildChildEnv({ CODEX_HOME: session.codexHome }) as Record<
-      string,
-      string
-    >,
-  });
-}
-
-export async function runAdvisorTurn(
-  session: AdvisorSession,
-  input: string,
-  outputSchema?: unknown,
-): Promise<{ text: string; toolCalls: string[] }> {
+export async function initAdvisorTools(): Promise<void> {
   if (!isEgressAuthorized(ADVISOR_PROVIDER)) {
     throw new Error(
       `egress provider "${ADVISOR_PROVIDER}" is not authorized in policy/action-policy.yaml`,
     );
   }
-  materializeCodexHome(session.codexHome);
-  const codex = buildCodex(session);
-  const opts = buildThreadOptions(session);
-  const thread = session.threadId
-    ? codex.resumeThread(session.threadId, opts)
-    : codex.startThread(opts);
+  bridge = await createAdvisorMcpBridge();
+  log.info("advisor tools ready", { tools: bridge.tools.length });
+}
 
-  // outputSchema is per-TURN: conversational turns pass none and get prose.
-  const turn = await thread.run(input, outputSchema ? { outputSchema } : {});
-  session.threadId = thread.id;
+export function advisorToolNames(): string[] {
+  return (bridge?.tools ?? []).map((t) => t.name);
+}
 
-  const toolCalls = turn.items
-    .filter((i) => i.type === "mcp_tool_call")
-    .map((i) => JSON.stringify((i as { tool?: unknown }).tool ?? "mcp"));
+export async function shutdownAdvisorTools(): Promise<void> {
+  await bridge?.close();
+  bridge = null;
+}
 
-  // Metadata only. Prompt and response content are never logged - student
-  // information may be in them.
-  log.info("advisor turn", {
-    session: session.id,
-    advisorId: session.advisorId,
-    toolCalls: toolCalls.length,
-    inputTokens: turn.usage?.input_tokens ?? null,
-    outputTokens: turn.usage?.output_tokens ?? null,
-  });
-
-  return { text: turn.finalResponse, toolCalls };
+export async function runAdvisorTurn(
+  session: AdvisorSession,
+  input: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; toolCalls: number }> {
+  if (!bridge) throw new Error("advisor tools not initialised");
+  // Construct PiAgentHarness with:
+  //   tools:        [...bridge.tools, proposeScheduleTool]   (Task 6)
+  //   systemPrompt: loadSystemPrompt()
+  //   session:      JsonlSessionRepo rooted at session.piSessionRoot
+  //   maxRounds:    ADVISOR_MAX_ROUNDS
+  //   signal:       forwarded so the UI stop control aborts mid-tool-call
+  // The exact construction follows nanoclaw's
+  // container/agent-runner/src/harnesses/pi.ts lines 204-265, minus
+  // createCodingTools/createFetchTool/createWebSearchTool.
+  throw new Error("implement against PiAgentHarness");
 }
 ```
 
-- [ ] **Step 7: Run tests to verify they pass**
+**Implementer note:** the harness construction is the one part of this plan written from a reference rather than verbatim code, because `PiAgentHarness`'s exact constructor shape should be read from the installed `@earendil-works/pi-agent-core` types rather than copied from a 0.75.4 call site when 0.81.x is being installed. Read `node_modules/@earendil-works/pi-agent-core/dist/*.d.ts` and nanoclaw's `pi.ts:204-265` together, and report any signature drift in your task report.
+
+Metadata-only logging, as in Task 1's store: log session id, `advisorId`, tool-call count, and token counts — never prompt or response text.
+
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `npx tsx --test test/advisor-agent.test.ts`
-Expected: PASS, 6 tests
+Expected: PASS, 2 tests
 
-- [ ] **Step 8: Verify the isolation claim end to end**
+- [ ] **Step 6: Verify a real turn end to end**
 
 Run:
 ```bash
-node -e '
-const {mkdtempSync,rmSync}=require("fs"),{tmpdir}=require("os"),path=require("path");
-const d=mkdtempSync(path.join(tmpdir(),"iso-"));
-require("child_process").execFileSync("npx",["tsx","-e",
-  `import {materializeCodexHome} from "./src/advisor-agent.ts"; materializeCodexHome("${d}");`],
-  {stdio:"inherit"});
-console.log(require("child_process").execFileSync("codex",["mcp","list"],
-  {env:{...process.env,CODEX_HOME:d},encoding:"utf8"}));
-rmSync(d,{recursive:true,force:true});'
+npx tsx -e '
+import { initAdvisorTools, runAdvisorTurn, shutdownAdvisorTools } from "./src/advisor-agent.ts";
+import { createSession, clearSession } from "./src/advisor-session.ts";
+await initAdvisorTools();
+const s = createSession("shared");
+const r = await runAdvisorTurn(s, "What GC classes run Fall 2026 on Friday?");
+console.log("tool calls:", r.toolCalls);
+console.log(r.text.slice(0, 400));
+clearSession(s.id);
+await shutdownAdvisorTools();
+'
 ```
-Expected: exactly `cu_public` and `cu_catalog`. **`node_repl` and `codegraph` must not appear.**
+Expected: at least one tool call, and an answer naming real CRNs. If `toolCalls` is 0 and the text looks plausible, the model answered from memory — that is the failure this design exists to prevent, and it means the persona or the provider needs attention, not that it worked.
 
-- [ ] **Step 9: Typecheck and commit**
+- [ ] **Step 7: Typecheck and commit**
 
 Run: `npm run typecheck`
 
 ```bash
-git add src/advisor-agent.ts advisor/AGENTS.md src/config.ts test/advisor-agent.test.ts package.json package-lock.json
-git commit -m "feat(advisor): Codex agent with isolated tool surface, persona, and skills"
+git add src/advisor-agent.ts advisor/AGENTS.md test/advisor-agent.test.ts
+git commit -m "feat(advisor): Pi harness, persona, and provider chain"
 ```
 
 ---
-
-### Task 3: Chat UI with the buffer-and-gate accessibility pattern
+### Task 4: Chat UI with the buffer-and-gate accessibility pattern
 
 **Files:**
 - Create: `src/advisor-ui.ts`
@@ -706,7 +691,7 @@ git commit -m "feat(advisor): Codex agent with isolated tool surface, persona, a
 
 **Interfaces:**
 - Consumes: nothing.
-- Produced first because Task 4's server imports these two functions.
+- Produced first because Task 5's server imports these two functions.
 - Produces: `renderLoginPage(error?: string): string`, `renderChatPage(): string`
 
 - [ ] **Step 1: Write the failing tests**
@@ -895,7 +880,7 @@ git commit -m "feat(advisor): chat UI using the buffer-and-gate accessibility pa
 
 ---
 
-### Task 4: Auth seam and HTTP server
+### Task 5: Auth seam and HTTP server
 
 **Files:**
 - Create: `src/advisor-auth.ts`
@@ -904,7 +889,7 @@ git commit -m "feat(advisor): chat UI using the buffer-and-gate accessibility pa
 - Modify: `package.json` (add `advisor` script)
 
 **Interfaces:**
-- Consumes: `renderLoginPage`/`renderChatPage` from `src/advisor-ui.ts`; `createSession`, `getSession`, `clearSession`, `sweepExpired` from `src/advisor-session.ts`; `runAdvisorTurn` from `src/advisor-agent.ts`.
+- Consumes: `renderLoginPage`/`renderChatPage` from `src/advisor-ui.ts` (Task 4); `createSession`, `getSession`, `clearSession`, `sweepExpired` from `src/advisor-session.ts`; `runAdvisorTurn` from `src/advisor-agent.ts`.
 - Produces:
   - `authenticate(req: IncomingMessage): { advisorId: string } | null`
   - `checkPassword(supplied: string): boolean`
@@ -1042,7 +1027,7 @@ import {
   getSession,
   sweepExpired,
 } from "./advisor-session.js";
-import { runAdvisorTurn } from "./advisor-agent.js";
+import { initAdvisorTools, runAdvisorTurn, shutdownAdvisorTools } from "./advisor-agent.js";
 import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
 
 function body(req: http.IncomingMessage): Promise<string> {
@@ -1149,6 +1134,11 @@ setInterval(() => {
   if (n > 0) log.info("advisor sessions swept", { removed: n });
 }, Math.min(ADVISOR_SESSION_TTL_MS, 15 * 60 * 1000)).unref();
 
+// Build the MCP bridge ONCE, before accepting requests: per-request
+// construction would pay listTools() latency every turn and churn connections.
+await initAdvisorTools();
+process.on("SIGTERM", () => void shutdownAdvisorTools());
+
 server.listen(ADVISOR_PORT, "127.0.0.1", () => {
   log.info("advisor chat listening", { port: ADVISOR_PORT });
 });
@@ -1173,16 +1163,16 @@ git commit -m "feat(advisor): HTTP service with shared-password auth and advisor
 
 ---
 
-### Task 5: Schedule artifacts, rendered host-side
+### Task 6: Schedule artifacts via a propose_schedule tool
 
 **Files:**
 - Create: `schemas/advisor-schedule.schema.json`
 - Create: `src/advisor-artifacts.ts`
 - Test: `test/advisor-artifacts.test.ts`
-- Modify: `src/advisor-server.ts` (add the `/artifact/schedule` route)
+- Modify: `src/advisor-agent.ts` (add `proposeScheduleTool` to the tool array)
 
 **Interfaces:**
-- Consumes: `runAdvisorTurn` from `src/advisor-agent.ts`.
+- Consumes: `AgentTool` from `pi-agent-core`; `renderSchedule` is called by the server.
 - Produces:
   - `interface ProposedSection { crn: string; subjectCourse: string; section: string; title: string; creditHours: number; days: string; beginTime: string; endTime: string; building: string | null; room: string | null; }`
   - `interface ProposedSchedule { term: string; sections: ProposedSection[]; notes: string | null; }`
@@ -1300,10 +1290,9 @@ Create `src/advisor-artifacts.ts`:
 // Host-side rendering of agent-proposed schedules.
 //
 // "No write actions" governs systems of record, not artifacts - a proposed
-// schedule document changes nothing outside the session. But sandboxMode is
-// read-only, so the agent cannot write files, and that constraint is worth
-// keeping. So the agent returns structured JSON on a schema-constrained TURN
-// and the host renders it here.
+// schedule document changes nothing outside the session. The agent holds only
+// bridge.tools plus propose_schedule and none of them write, so an artifact
+// cannot come from the agent directly - the host must render it.
 //
 // Three things this buys beyond preserving the sandbox: formatting is
 // deterministic because a template produces it; output is validatable in a way
@@ -1423,34 +1412,37 @@ registration; petitions and substitutions are not reflected here.</em></p>
 Run: `npx tsx --test test/advisor-artifacts.test.ts`
 Expected: PASS, 4 tests
 
-- [ ] **Step 6: Wire the artifact route**
+- [ ] **Step 6: Expose it as a tool, not an output mode**
 
-In `src/advisor-server.ts`, add these imports beside the existing ones:
-
-```ts
-import {
-  SCHEDULE_SCHEMA,
-  parseSchedule,
-  renderSchedule,
-} from "./advisor-artifacts.js";
-```
-
-And add this route immediately before the final `return json(res, 404, ...)`:
+In `src/advisor-agent.ts`, add a host-supplied tool whose parameters *are* the
+schedule, and include it in the tool array:
 
 ```ts
-    if (method === "POST" && url.pathname === "/artifact/schedule") {
-      // An artifact is a SECOND, explicit turn carrying a schema. Conversation
-      // stays prose; documents are never produced by surprise.
-      const { text } = await runAdvisorTurn(
-        session,
-        "Produce the proposed schedule we just discussed as structured data.",
-        SCHEDULE_SCHEMA,
-      );
-      const html = renderSchedule(parseSchedule(text));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(html);
-    }
+const proposeScheduleTool: AgentTool = {
+  name: "propose_schedule",
+  description:
+    "Render the proposed schedule as a printable document for the advisor. " +
+    "Call this only when the advisor asks for a document; ordinary answers " +
+    "should be written as prose.",
+  parameters: SCHEDULE_SCHEMA,
+  async execute(args: unknown) {
+    // Validation lives on the host: malformed structure is refused, never
+    // rendered into something an advisor might hand to a student.
+    const schedule = parseSchedule(JSON.stringify(args));
+    lastSchedule.set(session.id, schedule);
+    return { content: [{ type: "text", text: "Schedule ready to download." }] };
+  },
+};
 ```
+
+Structured output therefore arrives through the tool-calling path already
+verified working on all three local providers, rather than a runner-specific
+output mode that a given model might not support. `propose_schedule` is the only
+tool the host adds beyond `bridge.tools`, and it still writes nothing — it hands
+structured data back to the host.
+
+The server serves the rendered document at `GET /export/schedule` from
+`lastSchedule`.
 
 - [ ] **Step 7: Typecheck, full suite, commit**
 
@@ -1458,13 +1450,13 @@ Run: `npm run typecheck && npm test`
 Expected: typecheck clean; all tests pass
 
 ```bash
-git add schemas/advisor-schedule.schema.json src/advisor-artifacts.ts test/advisor-artifacts.test.ts src/advisor-server.ts
-git commit -m "feat(advisor): schema-validated schedule artifacts rendered host-side"
+git add schemas/advisor-schedule.schema.json src/advisor-artifacts.ts test/advisor-artifacts.test.ts src/advisor-agent.ts src/advisor-server.ts
+git commit -m "feat(advisor): propose_schedule tool with host-side rendering"
 ```
 
 ---
 
-### Task 6: Deployment
+### Task 7: Deployment
 
 **Files:**
 - Create: `launchd/com.cuassistant.advisor.plist`
@@ -1472,7 +1464,7 @@ git commit -m "feat(advisor): schema-validated schedule artifacts rendered host-
 - Modify: `CLAUDE.md` (note the new service)
 
 **Interfaces:**
-- Consumes: the `advisor` npm script from Task 4.
+- Consumes: the `advisor` npm script from Task 5.
 - Produces: nothing consumed by later tasks.
 
 - [ ] **Step 1: Create the launchd plist**
@@ -1565,20 +1557,26 @@ git commit -m "feat(advisor): launchd service on 8770"
 
 | Spec section | Task |
 |---|---|
-| Architecture / 5 modules | 1, 2, 3, 4, 5 |
-| Agent loop, sandbox, webSearch, approvalPolicy | 2 |
-| `CODEX_HOME` isolation + per-session | 1 (dirs), 2 (config + test) |
-| Persona (`advisor/AGENTS.md`) and skills | 2 |
+| Architecture / modules | 1, 2, 3, 4, 5, 6 |
+| Pi harness, abort, provider chain | 3 |
+| Tool array is `bridge.tools` + `propose_schedule` only | 2 (surface), 3 (array), 6 (the one addition) |
+| Three MCP servers incl. authenticated wiki | 2 |
 | 8765 exclusion | 2 |
-| Sessions, clear, TTL, per-cookie isolation | 1, 4 |
-| Files in / transcript out | 4 |
-| Artifacts, prose-vs-schema | 5 |
-| Auth + `advisorId` seam | 4 |
-| Accessibility | 3 |
-| Metadata-only audit | 2 |
-| Testing | every task |
-| Deployment | 6 |
+| Per-session Pi session root, clear, TTL | 1 |
+| Skills retrieved, never inlined | 3 |
+| Files in / transcript out | 5 |
+| Artifacts, prose default | 6 |
+| Auth + `advisorId` seam | 5 |
+| Accessibility | 4 |
+| Metadata-only audit | 1, 3 |
+| Deployment | 7 |
 
-**Known gap, deliberately deferred:** the spec's "re-verify against `check-schedule-conflicts` before rendering" is not implemented. Task 5 validates the schema and rejects malformed output, but does not re-run the conflict check on the proposed sections. That is a second validation layer worth adding once real advisor use shows whether the agent actually proposes conflicting sections — building it now would be speculative.
+**Known gaps, recorded rather than hidden:**
 
-**Type consistency:** `AdvisorSession` fields (`id`, `advisorId`, `workDir`, `codexHome`, `threadId`, `history`, `lastTouched`) are used identically in Tasks 1, 2, 4. `runAdvisorTurn` returns `{ text, toolCalls }` in Task 2 and is destructured that way in Tasks 4 and 5. `SESSION_COOKIE` is defined once in Task 4 and used only there.
+1. **`PiAgentHarness` construction is written as a reference, not verbatim code.** Task 3 Step 4 points at nanoclaw's `pi.ts:204-265` and the installed type definitions instead of pasting a call site. nanoclaw runs 0.75.4 and this installs 0.81.x; pasting a two-minor-versions-old constructor as though it were verified would be worse than saying plainly that the implementer must read the types. The task asks for any signature drift to be reported.
+
+2. **Conflict re-verification is not implemented.** The spec says a proposed schedule can be re-checked against `check-schedule-conflicts` before rendering. Task 6 validates the schema and refuses malformed structure but does not re-run the conflict check. Worth adding once real use shows whether the agent proposes conflicting sections; building it now is speculative.
+
+3. **Compaction is available but unconfigured.** Pi provides `compact()` and it is one of the reasons a runner is used, but no task sets a threshold or tests it. It will matter first on a long advising session; leaving it at Pi's default is deliberate until there is a real conversation to size it against.
+
+**Type consistency:** `AdvisorSession` fields (`id`, `advisorId`, `workDir`, `piSessionRoot`, `history`, `lastTouched`) are used identically in Tasks 1, 3, 5. `runAdvisorTurn` returns `{ text, toolCalls }` in Task 3 and is destructured that way in Task 5. `McpServerConfig` is defined once in Task 2. `SESSION_COOKIE` is defined once in Task 5.

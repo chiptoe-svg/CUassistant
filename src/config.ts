@@ -66,6 +66,34 @@ export const CLASSIFIER_BATCH_SIZE = Math.max(
   Number(process.env.CLASSIFIER_BATCH_SIZE || 10),
 );
 
+// --- Clemson consolidated LLM gateway ---
+//
+// Clemson IT put their campus-hosted models AND their OpenAI access behind one
+// gateway sharing ONE key:
+//   CLEMSON_LLM_BASE_URL         campus-hosted models (Clemson-operated inference)
+//   CLEMSON_LLM_OPENAI_BASE_URL  passthrough — Clemson forwards to OpenAI
+//
+// Both are the same host (llm.rcd.clemson.edu), which is why one credential
+// covers both and why the egress policy record for the passthrough names a
+// CLEMSON-operated destination, not OpenAI directly. See
+// policy/action-policy.yaml → clemson_llm_gateway_openai.
+//
+// gcspark.clemson.edu:8080 is NOT this gateway — different host, own auth,
+// still configured through ADVISOR_BASE_URL / ADVISOR_API_KEY below.
+export const CLEMSON_LLM_API_KEY = process.env.CLEMSON_LLM_API_KEY || "";
+export const CLEMSON_LLM_BASE_URL =
+  process.env.CLEMSON_LLM_BASE_URL || "https://llm.rcd.clemson.edu/v1";
+export const CLEMSON_LLM_OPENAI_BASE_URL =
+  process.env.CLEMSON_LLM_OPENAI_BASE_URL ||
+  "https://llm.rcd.clemson.edu/openai/v1";
+
+/**
+ * Superseded as a separate credential by CLEMSON_LLM_API_KEY: the gateway key
+ * covers both the campus-hosted and the OpenAI-passthrough endpoint.
+ *
+ * Still read because src/openai-classifier.ts dials api.openai.com directly and
+ * has not been moved onto the gateway. Anything NEW should take the gateway key.
+ */
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 export const OPENAI_CLASSIFIER_MODEL =
   process.env.OPENAI_CLASSIFIER_MODEL || "gpt-5.4-mini";
@@ -147,3 +175,101 @@ export const TOKEN_PORTAL_PORT = Number(
 export const TOKEN_PORTAL_BASE_URL =
   process.env.TOKEN_PORTAL_BASE_URL ||
   `http://localhost:${process.env.TOKEN_PORTAL_PORT || 8769}`;
+
+// --- Advisor chat service (port 8770) ---
+export const ADVISOR_PORT = Number(process.env.ADVISOR_PORT || 8770);
+export const ADVISOR_PASSWORD = process.env.ADVISOR_PASSWORD || "";
+export const ADVISOR_SESSION_TTL_MS = Number(
+  process.env.ADVISOR_SESSION_TTL_MS || 2 * 60 * 60 * 1000,
+);
+/**
+ * Tried in order: on-prem first, paid fallback (mirrors ask_gc). Every entry
+ * reached must map to an authorized destination in policy/action-policy.yaml —
+ * see CHAIN_EGRESS_PROVIDER in advisor-agent.ts. This list is what the egress
+ * gate checks; there is no separate provider setting.
+ */
+export const ADVISOR_PROVIDER_CHAIN = (
+  process.env.ADVISOR_PROVIDER_CHAIN || "spark,openai"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+export const ADVISOR_MODEL = process.env.ADVISOR_MODEL || "qwen3.6-35b-a3b";
+export const ADVISOR_BASE_URL =
+  process.env.ADVISOR_BASE_URL || "http://gcspark.clemson.edu:8080/v1";
+/**
+ * Read a positive-number env var, falling back on anything that is not one.
+ *
+ * `Number(env || d)` is NOT safe here: a non-numeric value yields NaN, and
+ * EVERY comparison against NaN is false. A cap of NaN is a cap that never
+ * fires — an unbounded loop against a provider, on a typo in a unit file.
+ */
+function positiveNumberEnv(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Max tool-call rounds per turn. Unattended service: must be bounded. */
+export const ADVISOR_MAX_ROUNDS = positiveNumberEnv(
+  process.env.ADVISOR_MAX_ROUNDS,
+  8,
+);
+/**
+ * Wall-clock ceiling for one turn. The round cap bounds how many times the
+ * model may be asked; this bounds how long a single turn may take regardless.
+ * Without it a stalled provider holds a session's directories and the request
+ * open indefinitely — only a client disconnect ends the turn.
+ */
+export const ADVISOR_TURN_TIMEOUT_MS = positiveNumberEnv(
+  process.env.ADVISOR_TURN_TIMEOUT_MS,
+  10 * 60 * 1000,
+);
+/**
+ * Sampling temperature for the chat-completions target. The endpoint docs for
+ * qwen3.6-35b-a3b give 0.6 as the canonical value; 0 was our own invention and
+ * is not what this model is tuned for.
+ */
+export const ADVISOR_TEMPERATURE = (() => {
+  const n = Number(process.env.ADVISOR_TEMPERATURE);
+  // 0 is a legitimate temperature, so this cannot use positiveNumberEnv.
+  return Number.isFinite(n) && n >= 0 ? n : 0.6;
+})();
+/**
+ * Ceiling on the estimated token size of one provider request. The window is
+ * 64K; requests are held near 45K so a long answer plus the model's own
+ * thinking still fit. Tool results are the unbounded term.
+ */
+export const ADVISOR_MAX_REQUEST_TOKENS = positiveNumberEnv(
+  process.env.ADVISOR_MAX_REQUEST_TOKENS,
+  45000,
+);
+/**
+ * Ceiling on the tokens the model may GENERATE in one provider request — the
+ * output half of the budget, and a different limit from
+ * ADVISOR_MAX_REQUEST_TOKENS above. Both must fit the 64K window together:
+ * 45000 in + 8192 out = 53192, leaving headroom rather than racing the wall.
+ *
+ * This is declared on the model as `maxTokens: 8192` too, but that field never
+ * reached the wire. pi-agent-core builds the stream options it passes to pi-ai
+ * from an explicit allowlist (harness/agent-harness.js createStreamFn) and
+ * `maxTokens` is not in it, so `options.maxTokens` is always undefined; pi-ai
+ * emits `max_tokens` only `if (options?.maxTokens)`
+ * (providers/openai-completions.js:410). Verified on the wire with a capturing
+ * proxy: neither `max_tokens` nor `max_completion_tokens` was present, so
+ * generation was bounded only by the server's own default.
+ *
+ * The advisor therefore injects it into the payload directly, the same way
+ * temperature is injected, and this constant is what it injects.
+ */
+export const ADVISOR_MAX_OUTPUT_TOKENS = positiveNumberEnv(
+  process.env.ADVISOR_MAX_OUTPUT_TOKENS,
+  8192,
+);
+export const ADVISOR_MCP_PUBLIC_URL =
+  process.env.ADVISOR_MCP_PUBLIC_URL || "http://127.0.0.1:8766/";
+export const ADVISOR_MCP_CATALOG_URL =
+  process.env.ADVISOR_MCP_CATALOG_URL || "http://127.0.0.1:8767/";
+export const ADVISOR_MCP_WIKI_URL =
+  process.env.ADVISOR_MCP_WIKI_URL || "http://127.0.0.1:3000/api/mcp";
+/** Bearer token for the curriculum wiki MCP, which requires auth (401 without). */
+export const ADVISOR_MCP_WIKI_TOKEN = process.env.ADVISOR_MCP_WIKI_TOKEN || "";

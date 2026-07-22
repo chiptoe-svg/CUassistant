@@ -101,8 +101,9 @@ Restart maps to what you changed:
 
 | You edited | Affects tools on | Restart this launchd job |
 |---|---|---|
-| `src/mcp-tools/clemson-*.ts`, `skills.ts`, `index-public.ts` | public 8766 | `com.cuassistant.mcp-public-http` |
+| `src/mcp-tools/clemson-*.ts`, `index-public.ts` | public 8766 | `com.cuassistant.mcp-public-http` |
 | `src/mcp-tools/catalog.ts`, `clemson-advising.ts`, `index-catalog.ts` | catalog 8767 | `com.cuassistant.mcp-catalog-http` |
+| `src/mcp-tools/skills.ts` (all three load it) | 8765 + 8766 + 8767 | all three jobs |
 | mail/calendar/tasks/gws tools, `index-*.ts` (credentialed) | credentialed 8765 | `com.cuassistant.mcp-http` |
 | `policy/action-policy.yaml`, `permissions.ts` | whichever server serves the op | the matching job(s) above |
 

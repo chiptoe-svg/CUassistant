@@ -184,6 +184,13 @@ export const GC_ADVISOR_AUDIT =
 export const GC_ADVISOR_DB =
   process.env.GC_ADVISOR_DB ||
   "/Users/admin/projects/gc_advisor/db/gc_advisor.db";
+// gc_advisor also owns the SKILL.md documents that describe how to drive the
+// catalog tools (gc-curriculum-lookup, gc-advisor). They are read in place for
+// the same reason query.py is shelled out to rather than reimplemented: the
+// project that owns the data owns its documentation, and a copy in this repo
+// would drift from it silently.
+export const GC_ADVISOR_SKILLS =
+  process.env.GC_ADVISOR_SKILLS || "/Users/admin/projects/gc_advisor/skills";
 
 // Public GC catalog MCP server port (loopback HTTP transport).
 export const MCP_CATALOG_HTTP_PORT = Number(

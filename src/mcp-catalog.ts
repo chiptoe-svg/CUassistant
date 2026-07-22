@@ -10,6 +10,7 @@
 // BIND: MCP_CATALOG_HTTP_HOST (its own variable, default loopback). Set to
 // 0.0.0.0 for campus reachability; off loopback the bearer is the only gate.
 import "./mcp-tools/index-catalog.js";
+import { CATALOG_SKILLS, setSkillExposure } from "./mcp-tools/skills.js";
 import { startMcpServer } from "./mcp-tools/server.js";
 import {
   MCP_TRANSPORT,
@@ -18,6 +19,14 @@ import {
   MCP_CATALOG_AUTH_TOKEN,
   MCP_CATALOG_AUTH_TOKEN_PROVIDER,
 } from "./config.js";
+
+// SKILLS: an explicit allowlist of exactly the two GC skills, never a denylist.
+// The default exposure is the PUBLIC set (clemson-schedule-advising), which is
+// not what this server serves, so it must opt in by name. Anything added to
+// either skill root later is invisible here until someone edits CATALOG_SKILLS
+// on purpose — the inversion that would have prevented `triage` and
+// `add-cuassistant` from reaching the public port by omission.
+setSkillExposure(CATALOG_SKILLS);
 
 startMcpServer({
   name: "cuassistant-catalog",

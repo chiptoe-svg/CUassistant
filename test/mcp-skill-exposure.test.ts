@@ -19,9 +19,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import {
+  CATALOG_SKILLS,
   PUBLIC_SKILLS,
+  __resetSkillRoots,
+  __setSkillRoots,
   __skillTools,
+  buildSkillIndex,
   resetSkillExposure,
   setSkillExposure,
 } from "../src/mcp-tools/skills.ts";
@@ -119,6 +127,107 @@ test("the exposure default is the restrictive set, not 'all'", async () => {
     [...PUBLIC_SKILLS],
     "an unconfigured server must serve only the public allowlist",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Catalog server (8767): the GC skills, read from gc_advisor's root.
+// ---------------------------------------------------------------------------
+
+test("catalog server: list-skills returns exactly the two GC skills", async () => {
+  // What src/mcp-catalog.ts does at startup.
+  setSkillExposure(CATALOG_SKILLS);
+  const names = await listNames();
+  assert.deepEqual(names, ["gc-advisor", "gc-curriculum-lookup"]);
+  resetSkillExposure();
+});
+
+test("catalog server: get-skill-docs refuses the private skills by direct name", async () => {
+  // The bypass again, on the new server. `triage` and `add-cuassistant` live in
+  // THIS repo's root, which the catalog server also scans, so only the
+  // allowlist keeps them off 8767.
+  setSkillExposure(CATALOG_SKILLS);
+  for (const s of [...PRIVATE_SKILLS, "clemson-schedule-advising"]) {
+    const res = await fetchDocs(s);
+    assert.equal(res.isError, true, `get-skill-docs("${s}") must fail on 8767`);
+    assert.match(res.content[0].text, /not found/);
+  }
+  resetSkillExposure();
+});
+
+test("catalog server: the GC skills are actually fetchable and have real content", async () => {
+  // Guards the two halves that could each make the test above vacuous: the
+  // gc_advisor root being unreadable, and the allowlist naming skills that do
+  // not exist.
+  setSkillExposure(CATALOG_SKILLS);
+  for (const s of CATALOG_SKILLS) {
+    const doc = payload(await fetchDocs(s));
+    assert.equal(doc.name, s);
+    assert.ok((doc.content as string).length > 100, `expected real docs for "${s}"`);
+  }
+  resetSkillExposure();
+});
+
+test("8766 and 8765 exposure are unchanged by the second root", async () => {
+  // The GC skills are now on disk for every server that loads skills.ts. The
+  // public server must still list exactly one skill, and the credentialed
+  // server must still see the full local set.
+  resetSkillExposure();
+  assert.deepEqual(await listNames(), [...PUBLIC_SKILLS]);
+  for (const s of CATALOG_SKILLS) {
+    const res = await fetchDocs(s);
+    assert.equal(res.isError, true, `"${s}" must not be served on 8766`);
+  }
+
+  setSkillExposure("all");
+  const all = await listNames();
+  for (const s of [...PRIVATE_SKILLS, ...PUBLIC_SKILLS]) {
+    assert.ok(all.includes(s), `credentialed server must still list "${s}"`);
+  }
+  resetSkillExposure();
+});
+
+test("a missing second root degrades rather than throwing", async () => {
+  // The catalog server's seven data tools do not depend on gc_advisor's skills
+  // being checked out. An absent root drops its documents and logs; it must not
+  // take the server down or break the roots that ARE readable.
+  const absent = path.join(os.tmpdir(), "cuassistant-no-such-skills-root");
+  fs.rmSync(absent, { recursive: true, force: true });
+
+  __setSkillRoots([path.resolve(process.cwd(), "skills"), absent]);
+  try {
+    const index = buildSkillIndex();
+    assert.ok(index.has("triage"), "the readable root must still be indexed");
+    assert.ok(!index.has("gc-advisor"), "the absent root contributes nothing");
+
+    setSkillExposure(CATALOG_SKILLS);
+    const res = (await __skillTools.listSkills.handler({})) as CallResult;
+    assert.equal(res.isError, undefined, "list-skills must still succeed");
+    assert.deepEqual((payload(res).skills as { name: string }[]).map((s) => s.name), []);
+  } finally {
+    resetSkillExposure();
+    __resetSkillRoots();
+  }
+});
+
+test("a cross-root name collision fails loudly", async () => {
+  // Two independent repos with no shared naming authority. Precedence would let
+  // an agent read one skill's documentation while calling the other's tools,
+  // with nothing in the transcript to show the substitution.
+  const shadow = fs.mkdtempSync(path.join(os.tmpdir(), "cuassistant-skill-shadow-"));
+  fs.mkdirSync(path.join(shadow, "triage"), { recursive: true });
+  fs.writeFileSync(path.join(shadow, "triage", "SKILL.md"), "---\ndescription: impostor\n---\n");
+
+  __setSkillRoots([path.resolve(process.cwd(), "skills"), shadow]);
+  try {
+    assert.throws(
+      () => buildSkillIndex(),
+      /collision.*triage/s,
+      "a name present in two roots must throw, not silently shadow",
+    );
+  } finally {
+    __resetSkillRoots();
+    fs.rmSync(shadow, { recursive: true, force: true });
+  }
 });
 
 test("a hypothetical new skill is not public by default", async () => {

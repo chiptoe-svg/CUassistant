@@ -5,11 +5,90 @@
 import fs from "fs";
 import path from "path";
 
+import { GC_ADVISOR_SKILLS } from "../config.js";
+import { log } from "../log.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
-const SKILLS_DIR = path.resolve(process.cwd(), "skills");
+// SKILL ROOTS
+// ===========
+// Skills come from two directories. The first is this repo's own `skills/`.
+// The second is gc_advisor's, read IN PLACE rather than copied here: the
+// catalog server already shells out to gc_advisor's query.py instead of
+// duplicating its data (src/config.ts), and the documents describing how to
+// drive those tools belong to the same owner. A copy in this repo would go
+// stale against the project that keeps changing it, and nothing would say so.
+const LOCAL_SKILLS_DIR = path.resolve(process.cwd(), "skills");
+
+let skillRoots: readonly string[] = [LOCAL_SKILLS_DIR, GC_ADVISOR_SKILLS];
+
+/** Override the roots. For tests only. */
+export function __setSkillRoots(next: readonly string[]): void {
+  skillRoots = [...next];
+}
+
+/** Restore the configured roots. For tests only. */
+export function __resetSkillRoots(): void {
+  skillRoots = [LOCAL_SKILLS_DIR, GC_ADVISOR_SKILLS];
+  warnedRoots.clear();
+}
+
+const warnedRoots = new Set<string>();
+
+/**
+ * Map skill name -> the directory holding its SKILL.md, scanning `roots` in
+ * order.
+ *
+ * A root that cannot be read is a DEGRADED experience, not a fatal one: the
+ * catalog server's seven data tools work whether or not gc_advisor is checked
+ * out beside it, so an absent root drops its skills and logs loudly (the same
+ * shape as roomCapacity() degrading to "unknown everywhere") instead of
+ * refusing to start.
+ *
+ * A name present in TWO roots is the opposite case and throws. The roots are
+ * separate repos with no shared naming authority, so a collision is possible
+ * in principle even though none exists today. Resolving it by precedence would
+ * hand an agent the documentation for one skill while it calls the other, with
+ * nothing in the transcript to show the substitution — the same reasoning that
+ * makes createAdvisorMcpBridge kill startup on an MCP tool-name collision.
+ */
+export function buildSkillIndex(
+  roots: readonly string[] = skillRoots,
+): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const root of roots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch (e) {
+      if (!warnedRoots.has(root)) {
+        warnedRoots.add(root);
+        log.warn("skill root unavailable; its skills will not be served", {
+          root,
+          err: String(e),
+        });
+      }
+      continue;
+    }
+    warnedRoots.delete(root);
+    for (const d of entries) {
+      if (!d.isDirectory()) continue;
+      if (!fs.existsSync(path.join(root, d.name, "SKILL.md"))) continue;
+      const existing = index.get(d.name);
+      if (existing !== undefined) {
+        throw new Error(
+          `skill name collision: "${d.name}" exists in both "${existing}" and ` +
+            `"${path.join(root, d.name)}"; one would silently shadow the other, ` +
+            `so an agent could read documentation for a different tool than it ` +
+            `calls — rename the skill in one of the roots`,
+        );
+      }
+      index.set(d.name, path.join(root, d.name));
+    }
+  }
+  return index;
+}
 
 // PER-SERVER SKILL EXPOSURE
 // =========================
@@ -35,6 +114,16 @@ const SKILLS_DIR = path.resolve(process.cwd(), "skills");
 
 /** Skills the public server (8766) may serve. Add a name here to publish it. */
 export const PUBLIC_SKILLS: readonly string[] = ["clemson-schedule-advising"];
+
+/**
+ * Skills the catalog server (8767) may serve. These document the seven GC
+ * curriculum tools that server exposes; both live in gc_advisor's skills root
+ * and neither requires credentials.
+ */
+export const CATALOG_SKILLS: readonly string[] = [
+  "gc-advisor",
+  "gc-curriculum-lookup",
+];
 
 type SkillExposure = "all" | ReadonlySet<string>;
 
@@ -83,25 +172,18 @@ const listSkills: McpToolDefinition = {
     } catch (e) {
       return permissionErr(e);
     }
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
-    } catch {
-      return err("Skills directory not found.");
-    }
+    const index = buildSkillIndex();
     const skills = [];
-    for (const d of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (!d.isDirectory()) continue;
-      if (!isSkillExposed(d.name)) continue;
-      const skillPath = path.join(SKILLS_DIR, d.name, "SKILL.md");
-      if (!fs.existsSync(skillPath)) continue;
+    for (const name of [...index.keys()].sort((a, b) => a.localeCompare(b))) {
+      if (!isSkillExposed(name)) continue;
+      const skillPath = path.join(index.get(name)!, "SKILL.md");
       let description = "";
       try {
         description = parseDescription(fs.readFileSync(skillPath, "utf-8"));
       } catch {
         // leave description empty for unreadable files
       }
-      skills.push({ name: d.name, description });
+      skills.push({ name, description });
     }
     return okJson({ skills });
   },
@@ -149,7 +231,13 @@ const getSkillDocs: McpToolDefinition = {
         `Skill "${name}" not found. Use list-skills to see available skills.`,
       );
     }
-    const skillPath = path.join(SKILLS_DIR, name, "SKILL.md");
+    const dir = buildSkillIndex().get(name);
+    if (dir === undefined) {
+      return err(
+        `Skill "${name}" not found. Use list-skills to see available skills.`,
+      );
+    }
+    const skillPath = path.join(dir, "SKILL.md");
     let content: string;
     try {
       content = fs.readFileSync(skillPath, "utf-8");
@@ -169,6 +257,11 @@ const getSkillDocs: McpToolDefinition = {
 };
 
 registerTools([listSkills, getSkillDocs]);
+
+// Scan once at import, so an unreadable root is reported at STARTUP rather
+// than silently on some later tool call, and so a name collision aborts the
+// process before it can ever serve a shadowed document.
+buildSkillIndex();
 
 /** Exported for tests: the tool handlers, exercised directly. */
 export const __skillTools = { listSkills, getSkillDocs };

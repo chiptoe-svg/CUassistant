@@ -14,6 +14,7 @@ import {
   ADVISOR_BASE_URL,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_TEMPERATURE,
+  CLEMSON_LLM_OPENAI_BASE_URL,
 } from "../src/config.ts";
 import {
   __dialledHostForTest,
@@ -60,8 +61,9 @@ test("the egress gate rejects a chain entry with no policy destination", () => {
 });
 
 test("the egress gate rejects a chain entry whose policy record is unauthorized", () => {
-  // "openai" maps to openai_api; deny it and the gate must refuse, proving the
-  // gate reads the policy record instead of just checking the name is known.
+  // "openai" maps to clemson_llm_gateway_openai; deny it and the gate must
+  // refuse, proving the gate reads the policy record instead of just checking
+  // the name is known.
   assert.throws(
     () => assertAdvisorChainAuthorized(["openai"], () => false),
     /not authorized in policy/,
@@ -80,7 +82,9 @@ test("the gate checks the provider that is actually dialled, not a stand-in", ()
     seen.push(p);
     return true;
   });
-  assert.deepEqual(seen, ["clemson_spark_vllm", "openai_api"]);
+  // "openai" checks clemson_llm_gateway_openai, not openai_api: the fallback
+  // now reaches OpenAI via Clemson's gateway rather than dialling OpenAI itself.
+  assert.deepEqual(seen, ["clemson_spark_vllm", "clemson_llm_gateway_openai"]);
 });
 
 // --- harness behaviour ------------------------------------------------------
@@ -974,8 +978,8 @@ test("OPENAI_BASE_URL does not move the host the gate checks", () => {
   try {
     assert.equal(
       __dialledHostForTest("openai"),
-      "api.openai.com",
-      "the openai host must come from the pi-ai model registry",
+      "llm.rcd.clemson.edu",
+      "the openai host must come from the model object we build, not the env",
     );
     assert.doesNotThrow(() => assertAdvisorChainAuthorized(["openai"]));
   } finally {
@@ -984,14 +988,101 @@ test("OPENAI_BASE_URL does not move the host the gate checks", () => {
   }
 });
 
-// The `openai` entry's real destination, asserted positively: whatever the
-// registry says, it has to be a host the openai_api policy record covers.
-test("the openai entry's registry model dials the declared OpenAI host", () => {
-  assert.equal(__dialledHostForTest("openai"), "api.openai.com");
+// --- Clemson consolidated LLM gateway ---------------------------------------
+//
+// Clemson IT put their OpenAI access behind their own gateway. The `openai`
+// chain entry therefore dials llm.rcd.clemson.edu, NOT api.openai.com, and the
+// policy record it maps to was rewritten to describe that route. Both halves are
+// pinned here: the allowlist entry and the baseUrl override that makes the model
+// actually go there.
+
+// The `openai` entry's real destination, asserted positively.
+test("the openai entry dials the Clemson gateway, not OpenAI directly", () => {
+  assert.equal(__dialledHostForTest("openai"), "llm.rcd.clemson.edu");
   assert.equal(
     __dialledHostForTest("spark"),
     new URL(ADVISOR_BASE_URL).hostname,
     "spark's host must come from its own model object",
+  );
+});
+
+// REGRESSION (allowlist): the openai entry must map to the rewritten policy
+// record and to the gateway host. Reverting CHAIN_EGRESS_PROVIDER.openai to
+// {openai_api, api.openai.com} fails this.
+test("the openai chain entry is allowlisted for the Clemson gateway host", () => {
+  assert.doesNotThrow(
+    () =>
+      assertAdvisorChainAuthorized(
+        ["openai"],
+        (p) => {
+          assert.equal(
+            p,
+            "clemson_llm_gateway_openai",
+            "the openai entry must check the rewritten gateway policy record",
+          );
+          return true;
+        },
+        () => "llm.rcd.clemson.edu",
+      ),
+    "the gateway host must be covered by the openai entry's policy record",
+  );
+});
+
+// api.openai.com is no longer a route anything takes on this path, so it must
+// NOT still be authorized — a stale allowlist entry would permit a
+// direct-to-OpenAI egress that no current policy record describes.
+test("the openai chain entry no longer authorizes a direct dial to OpenAI", () => {
+  assert.throws(
+    () =>
+      assertAdvisorChainAuthorized(
+        ["openai"],
+        () => true,
+        () => "api.openai.com",
+      ),
+    /would dial host "api\.openai\.com"/,
+  );
+});
+
+// REGRESSION (baseUrl override): pi-ai's registry hardcodes
+// baseUrl: https://api.openai.com/v1 for OpenAI models, so without the explicit
+// override in providerModel() the model dials OpenAI directly. Dropping the
+// override fails this AND the gate test above.
+test("the openai model carries an explicit gateway baseUrl override", () => {
+  const target = __resolveProviderForTest("openai");
+  assert.ok(target, "openai must resolve (gateway key present in .env)");
+  const baseUrl = (target.model as unknown as { baseUrl?: string }).baseUrl;
+  assert.equal(
+    baseUrl,
+    CLEMSON_LLM_OPENAI_BASE_URL,
+    "the registry's hardcoded OpenAI baseUrl must be overridden",
+  );
+  assert.equal(
+    new URL(baseUrl!).hostname,
+    "llm.rcd.clemson.edu",
+    "the override must point at the Clemson gateway",
+  );
+  assert.doesNotThrow(() => assertAdvisorTargetAuthorized(target));
+});
+
+// The two model-specific hazards that are correct for spark and WRONG for the
+// passthrough. `api` staying `openai-responses` is what keeps `temperature` out
+// (the Responses API rejects it for reasoning models) and what keeps
+// `chat_template_kwargs.enable_thinking` out (Qwen/vLLM-specific; emitted only
+// under openai-completions + the qwen compat flag). Copying spark's
+// reasoning/compat fields onto this model, or flipping its api, breaks both.
+test("the openai model does not inherit spark's Qwen-specific fields", () => {
+  const target = __resolveProviderForTest("openai");
+  assert.ok(target);
+  const model = target.model as unknown as Record<string, unknown>;
+  assert.notEqual(
+    model.api,
+    "openai-completions",
+    "openai-completions would inject temperature, which the Responses API rejects for reasoning models",
+  );
+  assert.equal(
+    (model.compat as { thinkingFormat?: string } | undefined)?.thinkingFormat,
+    undefined,
+    "qwen-chat-template must never reach the OpenAI passthrough",
   );
 });
 

@@ -45,6 +45,8 @@ import {
   ADVISOR_PROVIDER_CHAIN,
   ADVISOR_TEMPERATURE,
   ADVISOR_TURN_TIMEOUT_MS,
+  CLEMSON_LLM_API_KEY,
+  CLEMSON_LLM_OPENAI_BASE_URL,
   OPENAI_API_KEY,
 } from "./config.js";
 import { log } from "./log.js";
@@ -86,9 +88,11 @@ interface ChainDestination {
   policyProvider: string;
   /**
    * Hosts this policy record covers. `clemson_spark_vllm`'s basis names
-   * on-premises Clemson hardware at gcspark.clemson.edu; `openai_api`'s names
-   * the OpenAI API. Neither covers an arbitrary host, so neither list may grow
-   * without the corresponding policy record being rewritten and re-reviewed.
+   * on-premises Clemson hardware at gcspark.clemson.edu;
+   * `clemson_llm_gateway_openai`'s names the Clemson-operated LLM gateway at
+   * llm.rcd.clemson.edu. Neither covers an arbitrary host, so neither list may
+   * grow without the corresponding policy record being rewritten and
+   * re-reviewed.
    */
   hosts: readonly string[];
 }
@@ -98,9 +102,16 @@ const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, ChainDestination>> = {
     policyProvider: "clemson_spark_vllm",
     hosts: ["gcspark.clemson.edu"],
   },
+  // The `openai` chain entry no longer dials OpenAI. Clemson consolidated their
+  // OpenAI access behind their own gateway, so bytes now leave for
+  // llm.rcd.clemson.edu and CLEMSON forwards them to OpenAI. The policy record
+  // was rewritten to describe that route (openai_api → clemson_llm_gateway_openai)
+  // and the host list follows it. api.openai.com is deliberately NOT retained:
+  // nothing dials it on this path any more, and leaving it here would authorize
+  // a direct-to-OpenAI egress that no current policy record describes.
   openai: {
-    policyProvider: "openai_api",
-    hosts: ["api.openai.com"],
+    policyProvider: "clemson_llm_gateway_openai",
+    hosts: ["llm.rcd.clemson.edu"],
   },
 };
 
@@ -264,7 +275,25 @@ function providerModel(name: string): Model<never> | null {
   }
   if (name === "openai") {
     const id = process.env.ADVISOR_OPENAI_MODEL || "gpt-5.4";
-    return getModel("openai", id as never) as unknown as Model<never>;
+    const registry = getModel("openai", id as never) as unknown as Model<never>;
+    // pi-ai's registry HARDCODES baseUrl: https://api.openai.com/v1 for every
+    // OpenAI model, and pi-ai dials `model.baseUrl` — it never consults
+    // OPENAI_BASE_URL or any other environment variable at dial time. So reaching
+    // Clemson's passthrough requires overriding the field on the model object
+    // itself, the same hand-built-model pattern `spark` above uses.
+    //
+    // ONLY baseUrl is overridden. `api` stays whatever the registry says
+    // (`openai-responses` for reasoning models like gpt-5.4), because two live
+    // behaviours hang off it and both break if it moves:
+    //   1. `temperature` is injected ONLY under `openai-completions`. The
+    //      Responses API rejects temperature for reasoning models — a 400 on
+    //      every fallback request, i.e. exactly when the fallback is needed.
+    //   2. `chat_template_kwargs.enable_thinking` is Qwen/vLLM-specific. It is
+    //      emitted only for `openai-completions` + the qwen-chat-template compat
+    //      flag, neither of which is set here. It must never reach the OpenAI
+    //      passthrough, which does not understand it.
+    // Do NOT copy spark's `reasoning`/`compat` fields onto this model.
+    return { ...registry, baseUrl: CLEMSON_LLM_OPENAI_BASE_URL };
   }
   return null;
 }
@@ -277,13 +306,15 @@ function resolveProvider(name: string): ProviderTarget | null {
     });
     return null;
   }
-  if (name === "openai" && !OPENAI_API_KEY) return null;
+  // The gateway key covers both gateway endpoints and supersedes OPENAI_API_KEY
+  // on this path. OPENAI_API_KEY is still accepted as a fallback so an
+  // environment that has not been re-provisioned yet keeps working.
+  const gatewayKey = CLEMSON_LLM_API_KEY || OPENAI_API_KEY;
+  if (name === "openai" && !gatewayKey) return null;
   return {
     name,
     apiKey:
-      name === "spark"
-        ? process.env.ADVISOR_API_KEY || "local"
-        : OPENAI_API_KEY,
+      name === "spark" ? process.env.ADVISOR_API_KEY || "local" : gatewayKey,
     model,
   };
 }

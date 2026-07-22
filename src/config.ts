@@ -66,6 +66,34 @@ export const CLASSIFIER_BATCH_SIZE = Math.max(
   Number(process.env.CLASSIFIER_BATCH_SIZE || 10),
 );
 
+// --- Clemson consolidated LLM gateway ---
+//
+// Clemson IT put their campus-hosted models AND their OpenAI access behind one
+// gateway sharing ONE key:
+//   CLEMSON_LLM_BASE_URL         campus-hosted models (Clemson-operated inference)
+//   CLEMSON_LLM_OPENAI_BASE_URL  passthrough — Clemson forwards to OpenAI
+//
+// Both are the same host (llm.rcd.clemson.edu), which is why one credential
+// covers both and why the egress policy record for the passthrough names a
+// CLEMSON-operated destination, not OpenAI directly. See
+// policy/action-policy.yaml → clemson_llm_gateway_openai.
+//
+// gcspark.clemson.edu:8080 is NOT this gateway — different host, own auth,
+// still configured through ADVISOR_BASE_URL / ADVISOR_API_KEY below.
+export const CLEMSON_LLM_API_KEY = process.env.CLEMSON_LLM_API_KEY || "";
+export const CLEMSON_LLM_BASE_URL =
+  process.env.CLEMSON_LLM_BASE_URL || "https://llm.rcd.clemson.edu/v1";
+export const CLEMSON_LLM_OPENAI_BASE_URL =
+  process.env.CLEMSON_LLM_OPENAI_BASE_URL ||
+  "https://llm.rcd.clemson.edu/openai/v1";
+
+/**
+ * Superseded as a separate credential by CLEMSON_LLM_API_KEY: the gateway key
+ * covers both the campus-hosted and the OpenAI-passthrough endpoint.
+ *
+ * Still read because src/openai-classifier.ts dials api.openai.com directly and
+ * has not been moved onto the gateway. Anything NEW should take the gateway key.
+ */
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 export const OPENAI_CLASSIFIER_MODEL =
   process.env.OPENAI_CLASSIFIER_MODEL || "gpt-5.4-mini";

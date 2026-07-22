@@ -570,10 +570,39 @@ data_egress:
       basis: "ChatGPT Edu institutional agreement (Clemson)"
       authorized: true
 
+    # DIRECT to OpenAI. Retained because src/openai-classifier.ts still dials
+    # api.openai.com itself with its own OPENAI_API_KEY. This record covers THAT
+    # path and nothing else — the advisor's fallback no longer uses it, see
+    # clemson_llm_gateway_openai below.
     - provider: openai_api
       scope: external
       sends: [subject, body]
-      basis: "OpenAI — covered under Clemson institutional contract"
+      basis: "OpenAI (api.openai.com), dialled directly — covered under Clemson institutional contract"
+      authorized: true
+
+    # The advisor's paid fallback, as it is ACTUALLY routed since Clemson IT
+    # consolidated their hosted models and their OpenAI access behind one
+    # gateway.
+    #
+    # Content does NOT go to OpenAI directly. It goes to a Clemson-operated
+    # gateway at llm.rcd.clemson.edu, authenticated with a Clemson-issued key,
+    # and Clemson forwards it to OpenAI. Both the campus-hosted models
+    # (/v1) and the OpenAI passthrough (/openai/v1) are the same host and the
+    # same credential; this record covers the passthrough, which is the only one
+    # of the two that leaves Clemson at all.
+    #
+    # This is a privacy IMPROVEMENT over the previous direct-to-OpenAI route and
+    # is worth stating plainly rather than glossing: the first hop is now
+    # Clemson-operated infrastructure over TLS, Clemson holds the OpenAI
+    # relationship and the credential rather than this host holding an OpenAI key
+    # of its own, and Clemson is positioned to log, police, or cut the forward.
+    # The content still ultimately reaches OpenAI, so the scope stays external
+    # and the institutional contract is still the basis — the gateway changes WHO
+    # controls the egress, not whether egress happens.
+    - provider: clemson_llm_gateway_openai
+      scope: external
+      sends: [subject, body]
+      basis: "Clemson-operated LLM gateway (llm.rcd.clemson.edu/openai/v1) over TLS, which forwards to OpenAI under the Clemson institutional contract; Clemson holds the credential and the OpenAI relationship"
       authorized: true
 
     # Local LLM backends — on-host inference, no egress. Declared and authorized

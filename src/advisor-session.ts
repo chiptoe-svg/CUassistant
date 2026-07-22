@@ -21,7 +21,7 @@ import path from "node:path";
 
 import { ADVISOR_SESSION_TTL_MS } from "./config.js";
 import { log } from "./log.js";
-import type { ProposedSchedule } from "./advisor-artifacts.js";
+import type { CheckedSchedule } from "./advisor-schedule-verify.js";
 
 export interface TurnRecord {
   role: "advisor" | "agent";
@@ -43,7 +43,7 @@ export interface AdvisorSession {
    * describes a specific student's term and must not outlive the session that
    * produced it.
    */
-  lastSchedule?: ProposedSchedule;
+  lastSchedule?: CheckedSchedule;
   lastTouched: number;
 }
 

@@ -22,6 +22,9 @@ import { readFileSync } from "node:fs";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
+import { verifySchedule } from "./advisor-schedule-verify.js";
+import type { CheckedSchedule } from "./advisor-schedule-verify.js";
+
 export interface ProposedSection {
   crn: string;
   subjectCourse: string;
@@ -165,7 +168,12 @@ function place(s: ProposedSection): string {
   return `${esc(s.building)} ${esc(s.room ?? "")}`.trim();
 }
 
-export function renderSchedule(s: ProposedSchedule): string {
+/**
+ * Renders a CheckedSchedule, not a ProposedSchedule: the type is how the
+ * compiler guarantees nothing reaches this template without having been through
+ * host-side verification.
+ */
+export function renderSchedule(s: CheckedSchedule): string {
   const rows = s.sections
     .map(
       (x) => `    <tr>
@@ -189,10 +197,21 @@ export function renderSchedule(s: ProposedSchedule): string {
   caption { text-align: left; padding-bottom: .5rem; }
   th, td { border: 1px solid #999; padding: .4rem .6rem; text-align: left; }
   footer { margin-top: 1.5rem; font-size: 10pt; }
+  .unverified { border: 3px solid #000; background: #f2f2f2; padding: .6rem .8rem;
+                margin-bottom: 1rem; font-weight: bold; }
+  .verified { font-size: 10pt; color: #333; margin-bottom: 1rem; }
   @media print { body { margin: 0; } button { display: none; } }
 </style></head>
 <body>
 <h1>Proposed schedule &mdash; ${esc(s.term)}</h1>
+${
+  s.verifiedAgainst === null
+    ? `<p class="unverified">NOT VERIFIED &mdash; no local schedule snapshot exists
+for term ${esc(s.term)}, so the CRNs, times, and rooms below could not be checked
+against published schedule data. Confirm every line against Banner before use.</p>`
+    : `<p class="verified">CRNs, credit hours, meeting times, and rooms checked
+against the published schedule snapshot fetched ${esc(s.verifiedAgainst)}.</p>`
+}
 <table>
   <caption>${esc(s.sections.length)} sections, ${esc(credits)} credits total</caption>
   <thead><tr><th>Course</th><th>Title</th><th>CRN</th><th>Credits</th>
@@ -209,7 +228,7 @@ registration; petitions and substitutions are not reflected here.</em></footer>
 
 /** Anything the host can hang the current schedule off — in practice an AdvisorSession. */
 export interface ScheduleHolder {
-  lastSchedule?: ProposedSchedule;
+  lastSchedule?: CheckedSchedule;
 }
 
 /**
@@ -227,7 +246,10 @@ export function createProposeScheduleTool(holder: ScheduleHolder): AgentTool {
       "this when the advisor asks for a schedule they can print, save, hand " +
       "to a student, or download — the parameters are the schedule itself, " +
       "and the host renders the page. Use the exact CRNs, times, and rooms " +
-      "returned by the schedule tools; do not invent sections. Ordinary " +
+      "returned by the schedule tools; do not invent sections — every CRN and " +
+      "its course, credits, days, times, and room are checked against the " +
+      "published schedule snapshot and the call is refused if they disagree. " +
+      "Ordinary " +
       "answers stay prose — do not call this for discussion.",
     parameters: Type.Unsafe(SCHEDULE_SCHEMA),
     async execute(_toolCallId, params) {
@@ -236,7 +258,12 @@ export function createProposeScheduleTool(holder: ScheduleHolder): AgentTool {
       // how a Pi tool reports a recoverable failure — agent-loop.js catches it,
       // feeds the message back as an error tool result, and lets the model
       // correct its arguments. Nothing is stored on the way through.
-      const schedule = parseSchedule(JSON.stringify(params));
+      //
+      // Structure first, then truth: parseSchedule refuses a malformed payload,
+      // verifySchedule refuses a well-formed one whose CRNs, courses, credits,
+      // times, or rooms disagree with the local snapshot. A hallucinated CRN
+      // passes the first check and fails the second.
+      const schedule = verifySchedule(parseSchedule(JSON.stringify(params)));
       holder.lastSchedule = schedule;
       return {
         content: [
@@ -244,6 +271,12 @@ export function createProposeScheduleTool(holder: ScheduleHolder): AgentTool {
             type: "text",
             text:
               `Schedule document ready (${schedule.sections.length} sections). ` +
+              (schedule.verifiedAgainst === null
+                ? `No schedule snapshot exists for term ${schedule.term}, so ` +
+                  `nothing on it could be verified — the document is marked ` +
+                  `NOT VERIFIED and the advisor must confirm every line. `
+                : `Every section was verified against the published schedule ` +
+                  `snapshot. `) +
               `Tell the advisor it can be opened with the "Open proposed ` +
               `schedule" button.`,
           },

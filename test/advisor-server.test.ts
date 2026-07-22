@@ -265,6 +265,9 @@ test("/export/schedule serves a document only after one has been proposed", asyn
       session.lastSchedule = {
         term: "202608",
         notes: null,
+        // This route test injects a schedule directly; verification is exercised
+        // in advisor-artifacts.test.ts against the real snapshot.
+        verifiedAgainst: "2026-07-21T23:27:08.673Z",
         sections: [
           {
             crn: "80833",

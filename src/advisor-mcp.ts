@@ -43,10 +43,14 @@ interface AdvisorMcpBridgeDeps {
 
 const defaultDeps: AdvisorMcpBridgeDeps = {
   createTransport: (url, init) => new StreamableHTTPClientTransport(url, init),
-  createClient: () => new Client({ name: "cuassistant-advisor-mcp", version: "1.0.0" }),
+  createClient: () =>
+    new Client({ name: "cuassistant-advisor-mcp", version: "1.0.0" }),
 };
 
-async function loadToolsFromClient(serverName: string, client: ClientLike): Promise<AgentTool[]> {
+async function loadToolsFromClient(
+  serverName: string,
+  client: ClientLike,
+): Promise<AgentTool[]> {
   const listed = await client.listTools();
   return listed.tools.map((tool) => mcpToolToPiTool(serverName, tool, client));
 }
@@ -81,7 +85,11 @@ async function loadToolsFromClient(serverName: string, client: ClientLike): Prom
  * the guard in createAdvisorMcpBridge, which fails startup loudly rather than
  * letting one server silently shadow another's tool.
  */
-function mcpToolToPiTool(serverName: string, tool: McpTool, client: ClientLike): AgentTool {
+function mcpToolToPiTool(
+  serverName: string,
+  tool: McpTool,
+  client: ClientLike,
+): AgentTool {
   return {
     name: tool.name,
     label: `${serverName}:${tool.name}`,
@@ -98,7 +106,9 @@ function mcpToolToPiTool(serverName: string, tool: McpTool, client: ClientLike):
         name: tool.name,
         arguments: params as Record<string, unknown>,
       })) as Record<string, unknown> & {
-        content?: Array<{ type: string; text?: string } & Record<string, unknown>>;
+        content?: Array<
+          { type: string; text?: string } & Record<string, unknown>
+        >;
       };
       const content: Array<TextContent | ImageContent> = [];
       for (const item of result.content ?? []) {
@@ -111,7 +121,11 @@ function mcpToolToPiTool(serverName: string, tool: McpTool, client: ClientLike):
           typeof item.data === "string" &&
           typeof item.mimeType === "string"
         ) {
-          content.push({ type: "image", data: item.data, mimeType: item.mimeType });
+          content.push({
+            type: "image",
+            data: item.data,
+            mimeType: item.mimeType,
+          });
         }
       }
 
@@ -142,19 +156,39 @@ function mcpToolToPiTool(serverName: string, tool: McpTool, client: ClientLike):
  * startup, so a substituted URL kills the process before it accepts a request
  * rather than surfacing on the first turn.
  */
+/**
+ * The credentialed MCP server's port as a LITERAL, not as configuration.
+ *
+ * Deliberately not `MCP_HTTP_PORT`: see assertAdvisorMcpUrlSafe. A guard whose
+ * threat model is a hostile environment cannot take its only constant from that
+ * same environment.
+ */
+export const CREDENTIALED_MCP_PORT = 8765;
+
 export function assertAdvisorMcpUrlSafe(serverName: string, url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`advisor MCP server "${serverName}" has an unparseable URL`);
+    throw new Error(
+      `advisor MCP server "${serverName}" has an unparseable URL`,
+    );
   }
   const port = parsed.port
     ? Number(parsed.port)
     : parsed.protocol === "https:"
       ? 443
       : 80;
-  if (port === MCP_HTTP_PORT) {
+  // Both the CONFIGURED port and the literal 8765.
+  //
+  // MCP_HTTP_PORT is itself read from the environment, and the threat this guard
+  // exists to stop is "URLs come from the environment, so a slot can be
+  // substituted". Checking only the configured value lets the same mechanism
+  // defeat the guard: `MCP_HTTP_PORT=9999 ADVISOR_MCP_PUBLIC_URL=http://127.0.0.1:8765/`
+  // moves the variable out of the way and puts the credentialed server back into
+  // the agent's tool array. 8765 is the port that server has always listened on,
+  // so it is refused whether or not the environment still admits to it.
+  if (port === MCP_HTTP_PORT || port === CREDENTIALED_MCP_PORT) {
     throw new Error(
       `advisor MCP server "${serverName}" resolves to port ${port}, the credentialed MCP server; ` +
         `the advisor agent must never be handed mail-send or calendar-write tools`,
@@ -243,7 +277,9 @@ export async function createAdvisorMcpBridge(
     for (const tool of loaded) {
       const existing = owners.get(tool.name);
       if (existing !== undefined) {
-        await Promise.allSettled(runtimes.map(async (runtime) => runtime.close()));
+        await Promise.allSettled(
+          runtimes.map(async (runtime) => runtime.close()),
+        );
         throw new Error(
           `advisor MCP tool name collision: "${tool.name}" is exposed by both ` +
             `"${existing}" and "${serverName}"; tools are exposed under bare names, so one ` +
@@ -258,7 +294,9 @@ export async function createAdvisorMcpBridge(
   return {
     tools,
     async close() {
-      await Promise.allSettled(runtimes.map(async (runtime) => runtime.close()));
+      await Promise.allSettled(
+        runtimes.map(async (runtime) => runtime.close()),
+      );
     },
   };
 }

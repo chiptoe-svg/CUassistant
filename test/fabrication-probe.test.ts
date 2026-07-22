@@ -12,8 +12,10 @@ import {
   extractSeatCap,
   extractStartTime,
   extractionValue,
+  MIN_TRIALS,
   looksLikeAbstention,
   normalizeNumber,
+  parseArgs,
   routeToolName,
   runExtractorValidation,
   type FabObservation,
@@ -61,7 +63,7 @@ describe("extractor validation suite", () => {
     for (const question of FACT_QUESTIONS) {
       const cases = EXTRACTOR_CASES.filter((c) => c.questionId === question.id);
       assert.ok(
-        cases.some((c) => c.expectClass === "grounded" || c.expectClass === "unsupported"),
+        cases.some((c) => c.expectClass === "tool_backed" || c.expectClass === "unsupported"),
         `${question.id} has no known-good case`,
       );
       assert.ok(
@@ -73,7 +75,7 @@ describe("extractor validation suite", () => {
 
   it("every question's stated truth is what a known-good case extracts to", () => {
     for (const c of EXTRACTOR_CASES) {
-      if (c.expectClass !== "grounded" && c.expectClass !== "unsupported") continue;
+      if (c.expectClass !== "tool_backed" && c.expectClass !== "unsupported") continue;
       assert.equal(
         c.expect,
         q(c.questionId).truth,
@@ -328,7 +330,7 @@ describe("classifyFabTrial", () => {
       obs({ toolCallCount: 1, answer: "GC 3400 is 4 credit hours." }),
       q("gc3400-credits"),
     );
-    assert.equal(v.cls, "grounded");
+    assert.equal(v.cls, "tool_backed");
     assert.equal(v.extracted, "4");
   });
 
@@ -402,7 +404,7 @@ describe("classifyFabTrial", () => {
       obs({ toolCallCount: 1, answer: "Credit hours: 0.0" }),
       q("gc2071-credits"),
     );
-    assert.equal(v.cls, "grounded");
+    assert.equal(v.cls, "tool_backed");
   });
 });
 
@@ -440,5 +442,88 @@ describe("emptyFabCounts", () => {
     assert.equal(Object.values(c).reduce((a, b) => a + b, 0), 0);
     assert.equal(c.fabricated, 0);
     assert.equal(c.unsupported, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final review I5: the argv parser had a silent zero-trials path.
+//
+// `get("--trials")` returned the NEXT argv element whatever it was, so
+// `--trials --report x` yielded Number("--report") -> NaN. `NaN < MIN_TRIALS` is
+// false, so the underpowered refusal was skipped, the trial loop ran zero times,
+// "RUN COMPLETE" printed and the process exited 0 — a report measuring nothing,
+// indistinguishable from a real one. `--trials=100` had the mirror-image bug:
+// indexOf never matched the equals form, so it silently used the default.
+//
+// The branch's headline numbers come from this instrument, so both spellings are
+// pinned here.
+// ---------------------------------------------------------------------------
+
+describe("parseArgs --trials", () => {
+  it("reads the space-separated form", () => {
+    assert.equal(parseArgs(["--trials", "40"]).trials, 40);
+  });
+
+  it("reads the equals form instead of silently defaulting", () => {
+    assert.equal(
+      parseArgs(["--trials=100"]).trials,
+      100,
+      "--trials=N must not fall back to the default",
+    );
+  });
+
+  it("defaults to the minimum when --trials is absent", () => {
+    assert.equal(parseArgs([]).trials, MIN_TRIALS);
+  });
+
+  it("REFUSES a flag consumed as the trial count instead of yielding NaN", () => {
+    assert.throws(
+      () => parseArgs(["--trials", "--report", "/tmp/x.md"]),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /REFUSED/);
+        assert.match(err.message, /--trials/);
+        return true;
+      },
+      "a missing trial count must refuse, not become NaN and run zero trials",
+    );
+  });
+
+  it("REFUSES a non-numeric trial count", () => {
+    assert.throws(
+      () => parseArgs(["--trials", "lots"]),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /not a positive whole number/);
+        return true;
+      },
+    );
+  });
+
+  it("REFUSES zero and negative trial counts", () => {
+    for (const bad of ["0", "-5"]) {
+      assert.throws(
+        () => parseArgs(["--trials", bad]),
+        (err: unknown) => {
+          assert.ok(err instanceof Error);
+          assert.match(err.message, /not a positive whole number/);
+          return true;
+        },
+        `--trials ${bad} must refuse rather than run an empty measurement`,
+      );
+    }
+  });
+
+  it("still parses the other flags when --trials uses the equals form", () => {
+    const args = parseArgs(["--trials=25", "--report", "/tmp/r.md", "--questions=a,b"]);
+    assert.equal(args.trials, 25);
+    assert.equal(args.report, "/tmp/r.md");
+    assert.deepEqual(args.questions, ["a", "b"]);
+  });
+
+  it("does not read a following flag as another flag's value", () => {
+    // Same defect class as --trials: --report --questions x would have made the
+    // report path the literal string "--questions".
+    assert.equal(parseArgs(["--report", "--questions", "a"]).report, undefined);
   });
 });

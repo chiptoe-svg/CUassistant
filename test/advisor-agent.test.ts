@@ -11,13 +11,16 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   ADVISOR_MAX_OUTPUT_TOKENS,
   ADVISOR_MAX_REQUEST_TOKENS,
+  ADVISOR_BASE_URL,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_TEMPERATURE,
 } from "../src/config.ts";
 import {
+  __dialledHostForTest,
   __resolveProviderForTest,
   __runWithProviderForTest,
   assertAdvisorChainAuthorized,
+  assertAdvisorTargetAuthorized,
   detectMalformedToolCall,
   enforceContextBudget,
   loadSystemPrompt,
@@ -910,6 +913,86 @@ test("the egress gate accepts the declared spark host", () => {
 // The shipped default must pass its own gate, host check included.
 test("the shipped chain passes the host check with the shipped base URL", () => {
   assert.doesNotThrow(() => assertAdvisorChainAuthorized(["spark", "openai"]));
+});
+
+// --- final review I1: the gate must read the MODEL that will be dialled ------
+//
+// The `openai` entry was gated on process.env.OPENAI_BASE_URL, which pi-ai never
+// reads — it dials `model.baseUrl` (providers/openai-completions.js:386,
+// openai-responses.js:169). And the assertion ran BEFORE resolveProvider(), so
+// the gate could not have seen the model object even in principle. Both halves
+// are covered here.
+
+test("the target gate reads the host off model.baseUrl, not off configuration", () => {
+  const spark = __resolveProviderForTest("spark");
+  assert.ok(spark, "spark must resolve");
+  // Same declared provider, same name, same policy record — only the field
+  // pi-ai dials is redirected. A gate reading anything else passes this.
+  const redirected = {
+    ...spark,
+    model: { ...spark.model, baseUrl: "https://evil.example.com/v1" },
+  };
+  assert.throws(
+    () => assertAdvisorTargetAuthorized(redirected),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /would dial host "evil\.example\.com"/);
+      assert.match(err.message, /not covered by egress provider "clemson_spark_vllm"/);
+      return true;
+    },
+  );
+});
+
+test("the target gate refuses a model with no baseUrl at all", () => {
+  const spark = __resolveProviderForTest("spark");
+  assert.ok(spark);
+  const model = { ...spark.model } as Record<string, unknown>;
+  delete model.baseUrl;
+  const hostless = { ...spark, model } as unknown as typeof spark;
+  assert.throws(
+    () => assertAdvisorTargetAuthorized(hostless),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /no resolvable endpoint host/);
+      return true;
+    },
+  );
+});
+
+test("the target gate accepts the real resolved targets", () => {
+  const spark = __resolveProviderForTest("spark");
+  assert.ok(spark);
+  assert.doesNotThrow(() => assertAdvisorTargetAuthorized(spark));
+});
+
+// OPENAI_BASE_URL is the variable the old gate validated. pi-ai does not read
+// it, so the gate must not either: setting it to an undeclared host must change
+// nothing, because it changes nothing about where bytes go.
+test("OPENAI_BASE_URL does not move the host the gate checks", () => {
+  const before = process.env.OPENAI_BASE_URL;
+  process.env.OPENAI_BASE_URL = "https://evil.example.com/v1";
+  try {
+    assert.equal(
+      __dialledHostForTest("openai"),
+      "api.openai.com",
+      "the openai host must come from the pi-ai model registry",
+    );
+    assert.doesNotThrow(() => assertAdvisorChainAuthorized(["openai"]));
+  } finally {
+    if (before === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = before;
+  }
+});
+
+// The `openai` entry's real destination, asserted positively: whatever the
+// registry says, it has to be a host the openai_api policy record covers.
+test("the openai entry's registry model dials the declared OpenAI host", () => {
+  assert.equal(__dialledHostForTest("openai"), "api.openai.com");
+  assert.equal(
+    __dialledHostForTest("spark"),
+    new URL(ADVISOR_BASE_URL).hostname,
+    "spark's host must come from its own model object",
+  );
 });
 
 // Captured LIVE from the spark endpoint on 2026-07-22 while it was in the

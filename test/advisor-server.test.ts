@@ -392,6 +392,81 @@ test("/clear waits for an in-flight turn that would recreate the session directo
   }
 });
 
+// --- final review I3: /chat must not race the turn it just aborted ----------
+//
+// /chat aborted a prior in-flight turn but did not await it, while /clear does.
+// A prior turn past its abort checks still runs its commit step —
+// `rm(piSessionRoot)` then `cp(attemptRoot, piSessionRoot)` (advisor-agent.ts) —
+// so the new turn could be copying FROM piSessionRoot while the old turn was
+// deleting and rewriting it: ENOENT, or a half-copied conversation committed as
+// history. Double-submitting in the UI reaches this.
+//
+// The ordering IS the property, so the test asserts the ordering: the second
+// turn must not begin until the first turn's commit step has finished.
+test("/chat waits for the aborted prior turn to finish its commit before starting the next", async () => {
+  const events: string[] = [];
+  let firstStarted: () => void;
+  const started = new Promise<void>((r) => (firstStarted = r));
+
+  const raceServer = createAdvisorServer({
+    runTurn: async (_session, input, signal) => {
+      if (input === "first") {
+        events.push("first:start");
+        firstStarted();
+        await new Promise<void>((r) => {
+          if (signal?.aborted) return r();
+          signal?.addEventListener("abort", () => r(), { once: true });
+        });
+        // The commit step: runs AFTER the abort check, and touches the same
+        // transcript directory the next turn is about to copy from.
+        await new Promise((r) => setTimeout(r, 50));
+        events.push("first:commit");
+        return { text: "partial", toolCalls: 1, outcome: "aborted" as const };
+      }
+      events.push("second:start");
+      return { text: "second answer", toolCalls: 1, outcome: "complete" as const };
+    },
+  });
+  await new Promise<void>((r) => raceServer.listen(0, "127.0.0.1", r));
+  const racePort = (raceServer.address() as AddressInfo).port;
+  const raceBase = `http://127.0.0.1:${racePort}`;
+
+  try {
+    const res = await fetch(`${raceBase}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "test-password" }).toString(),
+      redirect: "manual",
+    });
+    const cookie = cookieFrom(res);
+
+    const send = (message: string) =>
+      fetch(`${raceBase}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ message }),
+      });
+
+    const first = send("first").catch(() => undefined);
+    await started;
+    const second = await send("second");
+    await first;
+
+    assert.deepEqual(
+      events,
+      ["first:start", "first:commit", "second:start"],
+      "the second turn started while the aborted first turn was still committing",
+    );
+    // And the second turn still produced its answer — the wait must not have
+    // cost the caller the response.
+    assert.equal(second.status, 200);
+    assert.equal(((await second.json()) as { text: string }).text, "second answer");
+  } finally {
+    resetSessionsForTest();
+    raceServer.close();
+  }
+});
+
 // --- new outcomes must not render as finished answers ------------------------
 
 test("a malformed-tool-call turn never renders its prose as an answer", async () => {

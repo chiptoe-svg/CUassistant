@@ -5,10 +5,12 @@ import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/cl
 import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 
 import {
+  CREDENTIALED_MCP_PORT,
   advisorMcpServers,
   assertAdvisorMcpUrlSafe,
   createAdvisorMcpBridge,
 } from "../src/advisor-mcp.ts";
+import { MCP_HTTP_PORT } from "../src/config.ts";
 
 test("exactly the three intended servers are configured", () => {
   const servers = advisorMcpServers();
@@ -371,6 +373,53 @@ test("a substituted URL fails the process at startup, not at first use", async (
     /credentialed MCP server/,
     `the substituted URL was accepted at startup — output was: ${output}`,
   );
+});
+
+// --- final review I2: the guard must survive a hostile MCP_HTTP_PORT ---------
+//
+// The guard compared against MCP_HTTP_PORT, which is itself
+// `Number(process.env.MCP_HTTP_PORT || 8765)`. Its own threat model is "URLs come
+// from the environment, so a slot can be substituted" — and under that model the
+// same environment supplies the constant the guard checks against. Moving
+// MCP_HTTP_PORT out of the way reopened the hole exactly:
+//   MCP_HTTP_PORT=9999 ADVISOR_MCP_PUBLIC_URL=http://127.0.0.1:8765/
+// A child process is required: config.ts reads the port once at module load.
+
+test("8765 is refused even when MCP_HTTP_PORT has been moved elsewhere", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const run = promisify(execFile);
+
+  const result = await run("npx", ["tsx", "test/fixtures/advisor-mcp-startup.ts"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: {
+      ...process.env,
+      MCP_HTTP_PORT: "9999",
+      ADVISOR_MCP_PUBLIC_URL: "http://127.0.0.1:8765/",
+    },
+  }).catch((err: { stdout?: string; stderr?: string }) => err);
+
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  assert.doesNotMatch(
+    output,
+    /servers-ok/,
+    "the credentialed server was accepted into the advisor's tool array",
+  );
+  assert.match(
+    output,
+    /resolves to port 8765, the credentialed MCP server/,
+    `8765 was accepted once MCP_HTTP_PORT moved — output was: ${output}`,
+  );
+});
+
+// The configured port is still refused too: the literal is an ADDITION to the
+// check, not a replacement for it.
+test("the configured MCP_HTTP_PORT is still refused alongside the literal", () => {
+  assert.throws(
+    () => assertAdvisorMcpUrlSafe("cu_public", `http://127.0.0.1:${MCP_HTTP_PORT}/`),
+    /credentialed MCP server/,
+  );
+  assert.equal(CREDENTIALED_MCP_PORT, 8765, "the literal must name the real port");
 });
 
 // The same fixture with the shipped URLs must NOT throw, or the test above

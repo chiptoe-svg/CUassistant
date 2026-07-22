@@ -95,7 +95,10 @@ function sessionCookie(id: string): string {
  * to say so inside it. Rendering a truncated answer as a final one is exactly
  * what AdvisorTurnResult's outcome field exists to prevent.
  */
-const OUTCOME_NOTE: Record<Exclude<AdvisorTurnResult["outcome"], "complete">, string> = {
+const OUTCOME_NOTE: Record<
+  Exclude<AdvisorTurnResult["outcome"], "complete">,
+  string
+> = {
   aborted: "[Stopped — this answer is partial.]",
   round_cap: "[The tool-round limit was reached — this answer is partial.]",
   timeout: "[This turn ran out of time — this answer is partial.]",
@@ -190,7 +193,19 @@ export function createAdvisorServer(
         if (!message) return json(res, 400, { error: "message is required" });
 
         const controller = new AbortController();
-        inFlight.get(session.id)?.controller.abort();
+        // Abort the prior turn, then WAIT for it — the same reason /clear waits.
+        // A turn past its abort checks still runs its commit step, which does
+        // `rm(piSessionRoot)` then `cp(attemptRoot, piSessionRoot)`. Starting the
+        // new turn while that runs has it copying FROM a root that is being
+        // deleted and rewritten underneath it: ENOENT, or a half-copied
+        // conversation committed as history. Double-submitting in the UI reaches
+        // this.
+        const prior = inFlight.get(session.id);
+        if (prior) {
+          prior.controller.abort();
+          await prior.done;
+          if (inFlight.get(session.id) === prior) inFlight.delete(session.id);
+        }
         // A closed connection is a stop too — the advisor navigated away and
         // nobody will ever read the answer being paid for.
         res.on("close", () => {
@@ -274,8 +289,14 @@ export function createAdvisorServer(
       if (method === "POST" && url.pathname === "/upload") {
         // basename() keeps the write inside the session's own workDir; a
         // "../../.ssh/authorized_keys" name would otherwise escape it.
-        const name = path.basename(url.searchParams.get("name") ?? "upload.txt");
-        writeFileSync(path.join(session.workDir, name), await readBody(req), "utf8");
+        const name = path.basename(
+          url.searchParams.get("name") ?? "upload.txt",
+        );
+        writeFileSync(
+          path.join(session.workDir, name),
+          await readBody(req),
+          "utf8",
+        );
         log.info("advisor upload stored", {
           session: session.id,
           bytes: Number(req.headers["content-length"] ?? 0),

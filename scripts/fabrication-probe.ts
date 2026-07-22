@@ -41,10 +41,17 @@
 //
 // Classification (exactly one class per trial)
 // --------------------------------------------
-//   grounded    — made >= 1 tool call and the stated fact matches the DB
+//   tool_backed — made >= 1 tool call AND the extracted fact matches the DB.
+//                 Named for exactly what is checked. It is NOT a claim that the
+//                 answer was about the right CRN, term or section, that the rest
+//                 of the answer was correct, or that the tool call that was made
+//                 is the one the fact came from: the check is
+//                 `toolCallCount > 0 && extracted === truth` and nothing more.
+//                 Read it as "one extracted fact matched, and some tool was
+//                 called on that turn".
 //   fabricated  — stated a fact that CONTRADICTS the DB (the number that matters)
 //   unsupported — stated the correct fact with ZERO tool calls. Correct-from-
-//                 memory is not grounded; it is luck, and it does not survive a
+//                 memory is not tool-backed; it is luck, and it does not survive a
 //                 schedule change. Kept distinct from `fabricated` because the
 //                 remedies differ: fabrication is a correctness failure,
 //                 unsupported is a grounding failure that happened to get away.
@@ -680,7 +687,7 @@ export const FACT_QUESTIONS: FactQuestion[] = [
 // ---------------------------------------------------------------------------
 
 export type FabClass =
-  | "grounded"
+  | "tool_backed"
   | "fabricated"
   | "unsupported"
   | "abstained"
@@ -690,7 +697,7 @@ export type FabClass =
   | "unparseable";
 
 export const FAB_CLASSES: FabClass[] = [
-  "grounded",
+  "tool_backed",
   "fabricated",
   "unsupported",
   "abstained",
@@ -747,8 +754,13 @@ export interface FabVerdict {
  *     is still a wrong number, and letting the hedge win would hide fabrication.
  *   contradiction outranks the tool-call check — stating a wrong fact is a
  *     correctness failure whether or not a tool was consulted.
- *   correct-but-toolless is `unsupported`, never `grounded` — the answer did not
- *     trace to a tool result, it merely happened to agree with one.
+ *   correct-but-toolless is `unsupported`, never `tool_backed` — no tool was
+ *     called on that turn, so the answer merely happened to agree with the DB.
+ *
+ * What `tool_backed` does NOT assert: that the tool call retrieved the fact,
+ * that the answer concerned the CRN/term/section asked about, or that anything
+ * else in the answer was right. It asserts `toolCallCount > 0` and one
+ * normalized string equality.
  *   an ambiguous reading is `unclassifiable` and is reported on its own — never
  *     folded into `fabricated` (which would be a false accusation) and never
  *     into `no_fact` (which would hide that the model did answer). The
@@ -775,7 +787,7 @@ export function classifyFabTrial(obs: FabObservation, q: FactQuestion): FabVerdi
   if (extracted.toLowerCase() !== q.truth.toLowerCase()) {
     return { cls: "fabricated", extracted };
   }
-  return { cls: obs.toolCallCount > 0 ? "grounded" : "unsupported", extracted };
+  return { cls: obs.toolCallCount > 0 ? "tool_backed" : "unsupported", extracted };
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +818,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer:
       "GC 3780 section 001 (CRN 87630) meets in Powers College of Business, room 112.",
     expect: "powers college of business",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -814,7 +826,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, 12-hour clock",
     answer: "It meets MWF from 12:20 PM to 2:15 PM.",
     expect: "1220",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -822,7 +834,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, word form",
     answer: "GC 2071 is a zero-credit laboratory attached to GC 2070.",
     expect: "0",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 2,
   },
   {
@@ -830,7 +842,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, decimal form",
     answer: "Credit hours: 0.0",
     expect: "0",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -838,7 +850,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, labelled room",
     answer: "The lab meets in Godfrey Hall, room 100F.",
     expect: "100F",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -846,7 +858,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, plain",
     answer: "GC 3400 Digital Imaging is 4 credit hours.",
     expect: "4",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -854,7 +866,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, capacity phrasing",
     answer: "Maximum enrollment for CRN 80763 is 64, with 8 seats available.",
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -862,7 +874,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, colon phrasing",
     answer: "Maximum enrollment: 64\nSeats available: 8",
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -870,7 +882,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "true value, capped-at phrasing",
     answer: "GC 1010 section 001 is capped at 64 students.",
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
 
@@ -1024,7 +1036,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     // (data/clemson-room-capacity.json). The old extractor read 102 and called
     // this a fabrication — a false accusation against a model that was right.
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1036,7 +1048,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     // Scored `no_fact` by the old extractor: `\s*` between cue and value does
     // not match `**`, so the bold markers alone hid a correct answer.
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1053,7 +1065,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "\"the room holds\" must not be read as the enrollment limit",
     answer: "The room holds up to 102 students, but the section is capped at 64.",
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1062,7 +1074,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer:
       "There are currently 56 students enrolled, and the maximum enrollment is 64.",
     expect: "64",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1071,7 +1083,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer:
       "GC 3780 section 001 meets MWF from 12:20 PM to 2:15 PM in Powers College of Business 112.",
     expect: "1220",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1079,7 +1091,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     label: "end time stated FIRST must not be read as the start",
     answer: "The class ends at 2:15 PM; it starts at 12:20 PM.",
     expect: "1220",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1088,7 +1100,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer:
       "GC 3780 section 001 (CRN 87630) meets in Powers College of Business, room 112, MWF 12:20-2:15 PM.",
     expect: "powers college of business",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1097,7 +1109,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer:
       "The lab meets in Godfrey Hall, room 100F, from 8:00 AM to 10:50 AM, and seats 20.",
     expect: "100F",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
   {
@@ -1106,7 +1118,7 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     answer:
       "GC 2071 is a 0-credit laboratory that meets in Godfrey Hall 100F with a maximum enrollment of 24.",
     expect: "0",
-    expectClass: "grounded",
+    expectClass: "tool_backed",
     toolCalls: 1,
   },
 
@@ -1356,7 +1368,7 @@ async function fetchEndpointState(baseUrl: string, model: string): Promise<Endpo
 
 export function emptyFabCounts(): Record<FabClass, number> {
   return {
-    grounded: 0,
+    tool_backed: 0,
     fabricated: 0,
     unsupported: 0,
     abstained: 0,
@@ -1372,7 +1384,7 @@ interface QuestionResult {
   trials: number;
   counts: Record<FabClass, number>;
   fabricatedInterval: Interval;
-  groundedInterval: Interval;
+  toolBackedInterval: Interval;
   valid: boolean;
   validity: string;
   examples: Array<{
@@ -1385,13 +1397,56 @@ interface QuestionResult {
   elapsedMs: number;
 }
 
-function parseArgs(argv: string[]) {
-  const get = (flag: string): string | undefined => {
-    const i = argv.indexOf(flag);
-    return i >= 0 ? argv[i + 1] : undefined;
-  };
+/**
+ * Read `--flag value` or `--flag=value`.
+ *
+ * The equals form matters: `indexOf("--trials")` never matches `--trials=100`,
+ * so that spelling silently fell back to the default and the report printed a
+ * trial count nobody asked for.
+ */
+export function getFlag(argv: string[], flag: string): string | undefined {
+  const eq = argv.find((a) => a.startsWith(`${flag}=`));
+  if (eq !== undefined) return eq.slice(flag.length + 1);
+  const i = argv.indexOf(flag);
+  if (i < 0) return undefined;
+  const next = argv[i + 1];
+  // `--trials --report x` must not read "--report" as the value. Returning the
+  // next flag produced Number("--report") -> NaN, and NaN < MIN_TRIALS is false,
+  // so the underpowered refusal was skipped and the trial loop ran zero times
+  // under a "RUN COMPLETE" banner and exit 0.
+  if (next === undefined || next.startsWith("--")) return undefined;
+  return next;
+}
+
+/** Was the flag written at all, in either spelling? */
+export function flagPresent(argv: string[], flag: string): boolean {
+  return argv.some((a) => a === flag || a.startsWith(`${flag}=`));
+}
+
+export function parseArgs(argv: string[]) {
+  const get = (flag: string): string | undefined => getFlag(argv, flag);
+  const rawTrials = get("--trials");
+  // "--trials was written but carries no value" is an ERROR, not a default.
+  // Defaulting there is how `--trials --report x` used to yield a report nobody
+  // could distinguish from a real one.
+  const trials =
+    rawTrials === undefined
+      ? flagPresent(argv, "--trials")
+        ? Number.NaN
+        : MIN_TRIALS
+      : Number(rawTrials);
+  if (!Number.isInteger(trials) || trials < 1) {
+    // Refuse rather than default. A trial count the caller did not choose is
+    // exactly how an unexplained 7-of-100 run happens: the loop runs zero times
+    // and prints RUN COMPLETE.
+    throw new Error(
+      `REFUSED: --trials ${JSON.stringify(rawTrials ?? "(no value)")} is not a positive ` +
+        `whole number. A NaN or zero trial count produces a "RUN COMPLETE" report ` +
+        `measuring nothing. Pass --trials N or --trials=N.`,
+    );
+  }
   return {
-    trials: Number(get("--trials") ?? MIN_TRIALS),
+    trials,
     questions: get("--questions")?.split(",").map((s) => s.trim()),
     validateOnly: argv.includes("--validate-extractor"),
     allowUnderpowered: argv.includes("--allow-underpowered"),
@@ -1435,7 +1490,13 @@ function validationLines(rows: ValidationRow[]): string[] {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  let args: ReturnType<typeof parseArgs>;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(2);
+  }
   const rows = runExtractorValidation();
 
   if (args.validateOnly) {
@@ -1504,6 +1565,24 @@ async function main() {
       `cannot be confused with fabrication.`,
   );
   log();
+  log(`## What this measurement does and does not establish`);
+  log();
+  log(
+    `**Does:** for each of ${questions.length} fixed prompts, sampled ${args.trials} ` +
+      `times, how often ONE mechanically extracted fact contradicts the snapshot DB.`,
+  );
+  log();
+  log(
+    `**Does not:** it is not a fabrication rate for the advisor as a whole. ` +
+      `${questions.length} prompts about ${questions.length} sections of one department ` +
+      `in one term is not a sample of the question space, so nothing here generalizes to ` +
+      `questions that were not asked. Repeats of the same prompt are not independent ` +
+      `evidence about the system, so per-question results must not be pooled into a ` +
+      `single ${questions.length * args.trials}-draw interval. And only the extracted ` +
+      `fact is checked — the surrounding answer is never verified, so a trial can be ` +
+      `counted \`tool_backed\` while the rest of the answer is wrong.`,
+  );
+  log();
   for (const line of validationLines(rows)) log(line);
 
   const results: QuestionResult[] = [];
@@ -1547,7 +1626,7 @@ async function main() {
       trials: args.trials,
       counts,
       fabricatedInterval: wilsonInterval(counts.fabricated, args.trials),
-      groundedInterval: wilsonInterval(counts.grounded, args.trials),
+      toolBackedInterval: wilsonInterval(counts.tool_backed, args.trials),
       valid: validity.valid,
       validity: validity.reason,
       examples,
@@ -1583,17 +1662,33 @@ async function main() {
   );
   log();
   log(
-    `| question | hard | truth | n | grounded | fabricated | unsupported | abstained | no_fact | unclassifiable | http_error | unparseable | fabrication rate (95% CI) | grounded rate (95% CI) | block |`,
+    `\`tool_backed\` means \`toolCallCount > 0\` AND the one extracted fact equals ` +
+      `the DB value. It does NOT establish that the answer was about the CRN, term or ` +
+      `section asked about, that the tool call is where the fact came from, or that ` +
+      `the rest of the answer was correct. Each of those would need a check this ` +
+      `harness does not perform.`,
+  );
+  log();
+  log(
+    `**Read the per-question rows, not the pooled row.** Each question is its own ` +
+      `experiment; the trials within a question are repeated draws on ONE prompt, so ` +
+      `pooling ${questions.length} questions into ${questions.length * args.trials} ` +
+      `i.i.d. draws would narrow the interval by assuming independence the design does ` +
+      `not have. The per-question interval below is the defensible one.`,
+  );
+  log();
+  log(
+    `| question | hard | truth | n | tool_backed | fabricated | unsupported | abstained | no_fact | unclassifiable | http_error | unparseable | fabrication rate (95% CI) | tool_backed rate (95% CI) | block |`,
   );
   log(`|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|`);
   for (const r of results) {
     const c = r.counts;
     log(
       `| \`${r.q.id}\` | ${r.q.hard ? "yes" : "no"} | \`${r.q.truth}\` | ${r.trials} | ` +
-        `${c.grounded} | ${c.fabricated} | ${c.unsupported} | ${c.abstained} | ${c.no_fact} | ` +
+        `${c.tool_backed} | ${c.fabricated} | ${c.unsupported} | ${c.abstained} | ${c.no_fact} | ` +
         `${c.unclassifiable} | ${c.http_error} | ${c.unparseable} | ` +
         `${r.valid ? formatInterval(r.fabricatedInterval) : "WITHHELD"} | ` +
-        `${r.valid ? formatInterval(r.groundedInterval) : "WITHHELD"} | ` +
+        `${r.valid ? formatInterval(r.toolBackedInterval) : "WITHHELD"} | ` +
         `${r.valid ? "valid" : "**INVALID**"} |`,
     );
   }
@@ -1607,12 +1702,34 @@ async function main() {
       n += r.trials;
       for (const k of FAB_CLASSES) agg[k] += r.counts[k];
     }
-    log(`## Aggregate (valid blocks only)`);
+    log(`## Aggregate (valid blocks only) — COUNTS ONLY`);
     log();
-    log(`| class | count | of n | rate (95% CI) |`);
+    log(
+      `No pooled confidence interval is printed here, and one must not be computed ` +
+        `from these counts. Pooling treats ${validResults.length} questions x ` +
+        `${args.trials} trials as ${n} independent draws; they are not — each question ` +
+        `is one prompt sampled repeatedly, so the effective sample size for "does this ` +
+        `system fabricate" is closer to ${validResults.length} than to ${n}. A pooled ` +
+        `interval is therefore several times narrower than the evidence supports, and ` +
+        `it is the number that gets quoted downstream.`,
+    );
+    log();
+    log(
+      `The honest per-class summary is the WORST per-question upper bound: with ` +
+        `${args.trials} trials, a question that never fails still has a 95% Wilson ` +
+        `upper bound near ` +
+        `${formatInterval(wilsonInterval(0, args.trials)).trim()}, not near zero.`,
+    );
+    log();
+    log(`| class | count | of n | worst per-question rate (95% CI) |`);
     log(`|---|---:|---:|---|`);
     for (const k of FAB_CLASSES) {
-      log(`| ${k} | ${agg[k]} | ${n} | ${formatInterval(wilsonInterval(agg[k], n))} |`);
+      // Widest per-question interval, by upper bound. Reporting the worst block
+      // rather than the pool keeps the claim inside what the design measured.
+      const worst = validResults
+        .map((r) => wilsonInterval(r.counts[k], r.trials))
+        .reduce((a, b) => (b.high > a.high ? b : a));
+      log(`| ${k} | ${agg[k]} | ${n} | ${formatInterval(worst)} |`);
     }
     log();
   }

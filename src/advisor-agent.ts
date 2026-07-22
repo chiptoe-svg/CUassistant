@@ -104,20 +104,36 @@ const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, ChainDestination>> = {
   },
 };
 
-/** The host each chain entry will actually dial. */
-function dialledHost(name: string): string | undefined {
-  const raw =
-    name === "spark"
-      ? ADVISOR_BASE_URL
-      : name === "openai"
-        ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
-        : undefined;
+/**
+ * The host pi-ai will dial for a model, read off the MODEL OBJECT.
+ *
+ * pi-ai dials `model.baseUrl` (providers/openai-completions.js:386,
+ * openai-responses.js:169) and never reads OPENAI_BASE_URL or any other
+ * environment variable at dial time. So the only string that predicts the
+ * destination is the one on the model we are about to hand it; anything else is
+ * a configuration value that may or may not be what gets used.
+ */
+function modelHost(model: Model<never>): string | undefined {
+  const raw = (model as unknown as { baseUrl?: string }).baseUrl;
   if (!raw) return undefined;
   try {
     return new URL(raw).hostname;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The host each chain entry will actually dial.
+ *
+ * Derived from the same model object resolveProvider() builds, so the startup
+ * warning and the per-turn gate cannot disagree about the destination. Built
+ * WITHOUT the API-key check, because an unconfigured provider still has a known
+ * destination and the startup check should judge the chain, not the secrets.
+ */
+function dialledHost(name: string): string | undefined {
+  const model = providerModel(name);
+  return model ? modelHost(model) : undefined;
 }
 
 /**
@@ -162,6 +178,26 @@ export function assertAdvisorChainAuthorized(
   }
 }
 
+/**
+ * The gate as the turn loop applies it: on a RESOLVED target, checking the host
+ * off `target.model.baseUrl` — the field pi-ai actually dials.
+ *
+ * This exists as its own function because the ordering is the safety property.
+ * Asserting on a chain NAME before the provider is resolved checks a
+ * configuration string, and the string and the model object can disagree: the
+ * pi-ai registry supplies `openai`'s baseUrl and never consults OPENAI_BASE_URL,
+ * so a gate reading that variable would be validating something nobody dials
+ * while the real destination went unchecked.
+ */
+export function assertAdvisorTargetAuthorized(
+  target: ProviderTarget,
+  isAuthorized: (provider: string) => boolean = isEgressAuthorized,
+): void {
+  assertAdvisorChainAuthorized([target.name], isAuthorized, () =>
+    modelHost(target.model),
+  );
+}
+
 export async function initAdvisorTools(): Promise<void> {
   // Fail at startup on a misconfigured chain rather than at the first turn.
   // runAdvisorTurn re-checks each entry it actually reaches; this is the early
@@ -187,57 +223,69 @@ export async function shutdownAdvisorTools(): Promise<void> {
 // clemson-local / omlx-local providers). "openai" resolves through the real
 // registry.
 
-interface ProviderTarget {
+export interface ProviderTarget {
   name: string;
   model: Model<never>;
   apiKey: string;
 }
 
-function resolveProvider(name: string): ProviderTarget | null {
+/**
+ * The model object a chain entry dials, independent of whether its credential
+ * is present. resolveProvider() adds the key; the egress gate reads the host
+ * off this, so both see the same `baseUrl`.
+ */
+function providerModel(name: string): Model<never> | null {
   if (name === "spark") {
     return {
-      name,
-      apiKey: process.env.ADVISOR_API_KEY || "local",
-      model: {
-        id: ADVISOR_MODEL,
-        name: ADVISOR_MODEL,
-        api: "openai-completions",
-        provider: "openai",
-        baseUrl: ADVISOR_BASE_URL,
-        // The endpoint docs' canonical request for qwen3.6-35b-a3b carries
-        // `chat_template_kwargs: { enable_thinking: true }`. pi-ai emits
-        // exactly that itself — openai-completions.js:443-448 — but the branch
-        // is guarded by `compat.thinkingFormat === "qwen-chat-template" &&
-        // model.reasoning`. With reasoning:false and no thinkingFormat (what we
-        // shipped) the branch is dead and the flag never reaches the wire.
-        //
-        // These two fields turn pi-ai's own supported path on, rather than
-        // hand-rolling the parameter in the payload hook. The third input the
-        // branch needs is a truthy `options.reasoningEffort`, which comes from
-        // the harness's `thinkingLevel` (agent-harness.js:339) — set where the
-        // AgentHarness is constructed, below.
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 65536,
-        maxTokens: 8192,
-      } as unknown as Model<never>,
-    };
+      id: ADVISOR_MODEL,
+      name: ADVISOR_MODEL,
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: ADVISOR_BASE_URL,
+      // The endpoint docs' canonical request for qwen3.6-35b-a3b carries
+      // `chat_template_kwargs: { enable_thinking: true }`. pi-ai emits
+      // exactly that itself — openai-completions.js:443-448 — but the branch
+      // is guarded by `compat.thinkingFormat === "qwen-chat-template" &&
+      // model.reasoning`. With reasoning:false and no thinkingFormat (what we
+      // shipped) the branch is dead and the flag never reaches the wire.
+      //
+      // These two fields turn pi-ai's own supported path on, rather than
+      // hand-rolling the parameter in the payload hook. The third input the
+      // branch needs is a truthy `options.reasoningEffort`, which comes from
+      // the harness's `thinkingLevel` (agent-harness.js:339) — set where the
+      // AgentHarness is constructed, below.
+      reasoning: true,
+      compat: { thinkingFormat: "qwen-chat-template" },
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 65536,
+      maxTokens: 8192,
+    } as unknown as Model<never>;
   }
   if (name === "openai") {
-    if (!OPENAI_API_KEY) return null;
     const id = process.env.ADVISOR_OPENAI_MODEL || "gpt-5.4";
-    return {
-      name,
-      apiKey: OPENAI_API_KEY,
-      model: getModel("openai", id as never) as unknown as Model<never>,
-    };
+    return getModel("openai", id as never) as unknown as Model<never>;
   }
-  log.warn("advisor provider chain names an unknown provider", {
-    provider: name,
-  });
   return null;
+}
+
+function resolveProvider(name: string): ProviderTarget | null {
+  const model = providerModel(name);
+  if (!model) {
+    log.warn("advisor provider chain names an unknown provider", {
+      provider: name,
+    });
+    return null;
+  }
+  if (name === "openai" && !OPENAI_API_KEY) return null;
+  return {
+    name,
+    apiKey:
+      name === "spark"
+        ? process.env.ADVISOR_API_KEY || "local"
+        : OPENAI_API_KEY,
+    model,
+  };
 }
 
 // --- turn -------------------------------------------------------------------
@@ -835,7 +883,10 @@ async function runAttempt(
     // is a tool call rendered as prose. Committing that to the JSONL would put
     // a malformed example into every later turn's context, where it invites the
     // model to repeat the shape.
-    if (result.outcome !== "aborted" && result.outcome !== "malformed_tool_call") {
+    if (
+      result.outcome !== "aborted" &&
+      result.outcome !== "malformed_tool_call"
+    ) {
       await rm(session.piSessionRoot, { recursive: true, force: true });
       await cp(attemptRoot, session.piSessionRoot, { recursive: true });
       committed = true;
@@ -856,16 +907,20 @@ export async function runAdvisorTurn(
 
   const errors: string[] = [];
   for (const name of ADVISOR_PROVIDER_CHAIN) {
-    // The gate on the bytes actually about to leave. Re-checked per entry
-    // reached rather than once at startup, so a fallback is authorized on its
-    // own record and not on the primary's.
-    assertAdvisorChainAuthorized([name]);
-
+    // Resolve FIRST, then gate. The gate has to see the model object that pi-ai
+    // will dial — it reads `model.baseUrl` and nothing else — so checking before
+    // the target exists would be checking a configuration string instead of the
+    // destination. An unconfigured entry is skipped without a check because
+    // nothing is sent to it.
     const target = resolveProvider(name);
     if (!target) {
       errors.push(`${name}: not configured`);
       continue;
     }
+    // The gate on the bytes actually about to leave. Re-checked per entry
+    // reached rather than once at startup, so a fallback is authorized on its
+    // own record and not on the primary's.
+    assertAdvisorTargetAuthorized(target);
     try {
       const result = await runAttempt(target, session, input, signal);
       // A stopped turn is the caller's decision, not a provider failure. Do not
@@ -873,7 +928,9 @@ export async function runAdvisorTurn(
       return result;
     } catch (err) {
       if (signal?.aborted) throw err;
-      errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      errors.push(
+        `${name}: ${err instanceof Error ? err.message : String(err)}`,
+      );
       log.warn("advisor provider failed, trying next in chain", {
         session: session.id,
         advisorId: session.advisorId,
@@ -900,3 +957,9 @@ export const __runWithProviderForTest = runAttempt;
  * drift away from what the service actually sends.
  */
 export const __resolveProviderForTest = resolveProvider;
+
+/**
+ * Test seam: the host resolver the gate uses by default, so a test can prove it
+ * reads the model object rather than an environment variable pi-ai ignores.
+ */
+export const __dialledHostForTest = dialledHost;

@@ -828,6 +828,10 @@ const LIVE_MALFORMED = [
   '\n\n<parameter name="cu_public__list-clemson-terms">\n<parameter name="max">5</parameter>\n</parameter>\n</function>',
   'Let me look up the terms first.\n\n<tool_code>\n```json\n{"name": "cu_public__list-clemson-terms"}\n```',
   "I'll list terms.\n\n<cu_public__list-clemson-terms>\n{\"max\": 20}\n</cu_public__list-clemson-terms>",
+  // Captured live 2026-07-22: the ENTIRE content was the bare tool name, with
+  // no invocation punctuation at all. An earlier detector required a `{` or `<`
+  // nearby and missed this outright.
+  "cu_public__list-clemson-terms",
 ];
 
 test("every malformed shape captured live is detected", () => {

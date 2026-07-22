@@ -320,16 +320,19 @@ export function detectMalformedToolCall(
   if (toolCalls > 0) return false;
   if (!text) return false;
   if (MALFORMED_MARKERS.some((re) => re.test(text))) return true;
-  // An INTERNAL tool identifier (`cu_public__list-clemson-terms`) in prose that
-  // also carries invocation punctuation, with no tool actually called. A real
-  // answer talks about "the class search", not about the wire name of a tool;
-  // printing the wire name next to a brace or a bracket is the model narrating
-  // a call it never made. Both conditions are required so that merely naming a
-  // tool in a sentence is not enough to trip this.
-  return (
-    toolNames.some((name) => text.includes(name)) &&
-    (text.includes("{") || text.includes("<"))
-  );
+  // An INTERNAL tool identifier (`cu_public__list-clemson-terms`) appearing in
+  // the answer text when NO tool was called.
+  //
+  // An earlier version of this also required invocation punctuation (`{` or
+  // `<`) nearby, on the theory that a bare mention might be legitimate. Live
+  // verification killed that theory: a captured generation's entire content was
+  // the bare string `cu_public__list-clemson-terms`, which slipped through.
+  //
+  // The zero-tool-call condition above is what makes the bare check safe. A
+  // real answer speaks to an advisor about courses and never prints a tool's
+  // wire name; and a turn that legitimately narrates its tool use has
+  // toolCalls > 0 and returned before reaching here.
+  return toolNames.some((name) => text.includes(name));
 }
 
 // --- context budget ---------------------------------------------------------

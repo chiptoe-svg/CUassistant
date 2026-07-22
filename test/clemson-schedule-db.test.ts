@@ -41,7 +41,7 @@ const SNAP: ClemsonTermSnapshot = {
       instructors: [{ name: "Tonkin, Chip", email: "chip@clemson.edu", primary: true }],
       meetings: [
         { days: "MWF", beginTime: "1115", endTime: "1205",
-          building: "Jordan Hall", room: "G33", startDate: null, endDate: null, type: "Lecture" },
+          building: "Jordan Hall", room: "G33", roomCapacity: null, startDate: null, endDate: null, type: "Lecture" },
       ],
     },
     {
@@ -64,7 +64,7 @@ const SNAP: ClemsonTermSnapshot = {
       instructors: [],
       meetings: [
         { days: "TR", beginTime: "1100", endTime: "1215",
-          building: "Jordan Hall", room: "203", startDate: null, endDate: null, type: "Lecture" },
+          building: "Jordan Hall", room: "203", roomCapacity: null, startDate: null, endDate: null, type: "Lecture" },
       ],
     },
   ],

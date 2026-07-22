@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 
 import { STATE_DIR } from "./config.js";
 import { log } from "./log.js";
+import { roomCapacity } from "./clemson-room-capacity.js";
 import type {
   ClemsonMeeting,
   ClemsonSearchParams,
@@ -353,6 +354,7 @@ function buildSections(
           endTime: minsToHHMM(mg.endMin),
           building: mg.building,
           room: mg.room,
+          roomCapacity: roomCapacity(mg.building, mg.room),
           startDate: null, // not stored in DB — Banner value available on live results only
           endDate: null,
           type: mg.type,

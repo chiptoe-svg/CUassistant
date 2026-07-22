@@ -14,6 +14,7 @@
 // reset.
 
 import { log } from "./log.js";
+import { roomCapacity } from "./clemson-room-capacity.js";
 import {
   openScheduleDb,
   queryScheduleDb,
@@ -34,6 +35,8 @@ export interface ClemsonMeeting {
   endTime: string | null;
   building: string | null;
   room: string | null;
+  /** Seats in the room, from committed reference data; null when unknown. */
+  roomCapacity: number | null;
   startDate: string | null;
   endDate: string | null;
   type: string | null;
@@ -188,12 +191,15 @@ function mapMeeting(mf: Record<string, unknown>): ClemsonMeeting {
   const days = DAY_KEYS.filter(([k]) => mt[k])
     .map(([, d]) => d)
     .join("");
+  const building = str(mt.buildingDescription) ?? str(mt.building);
+  const room = str(mt.room);
   return {
     days,
     beginTime: str(mt.beginTime),
     endTime: str(mt.endTime),
-    building: str(mt.buildingDescription) ?? str(mt.building),
-    room: str(mt.room),
+    building,
+    room,
+    roomCapacity: roomCapacity(building, room),
     startDate: str(mt.startDate),
     endDate: str(mt.endDate),
     type: str(mt.meetingTypeDescription),
@@ -916,6 +922,13 @@ export interface ClemsonRoomAvailability {
   room: string;
   /** Day pattern evaluated, e.g. "MW" — free slots are open on ALL of these. */
   pattern: string;
+  /**
+   * Seats in the room, or null when unknown. Resolved from a matching meeting's
+   * canonical building name, since `building` above is the caller's search
+   * substring ("powers") rather than Banner's description ("Powers College of
+   * Business"). A room with no classes therefore has no capacity to report.
+   */
+  roomCapacity: number | null;
   window: { start: string; end: string };
   busy: ClemsonBusyBlock[];
   free: ClemsonFreeBlock[];
@@ -958,10 +971,14 @@ export async function getClemsonRoomAvailability(params: {
 
     type Interval = { s: number; e: number; course: string };
     const intervals: Interval[] = [];
+    // Banner's canonical building name for this room, learned from the first
+    // matching meeting — params.building is only a search substring.
+    let canonicalBuilding: string | null = null;
     for (const s of ts.sections) {
       for (const m of s.meetings) {
         if (!m.building || !m.building.toLowerCase().includes(bldg)) continue;
         if ((m.room || "") !== params.room) continue;
+        canonicalBuilding ??= m.building;
         // Only meetings that fall on a day in the pattern matter.
         const onPattern = pattern
           .split("")
@@ -1032,6 +1049,7 @@ export async function getClemsonRoomAvailability(params: {
       building: params.building,
       room: params.room,
       pattern,
+      roomCapacity: roomCapacity(canonicalBuilding, params.room),
       window: { start: fromMinutes(winStart), end: fromMinutes(winEnd) },
       busy,
       free: free.filter((f) => f.minutes >= minMinutes),

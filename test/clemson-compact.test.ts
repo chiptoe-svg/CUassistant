@@ -33,6 +33,7 @@ function section(over: Partial<ClemsonSection> = {}): ClemsonSection {
         endTime: "1415",
         building: "Daniel",
         room: "101",
+        roomCapacity: null,
         startDate: "2026-08-19",
         endDate: "2026-12-04",
         type: "Class",

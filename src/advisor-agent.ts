@@ -38,9 +38,12 @@ import { getModel, type Model } from "@earendil-works/pi-ai";
 
 import {
   ADVISOR_BASE_URL,
+  ADVISOR_MAX_REQUEST_TOKENS,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_MODEL,
   ADVISOR_PROVIDER_CHAIN,
+  ADVISOR_TEMPERATURE,
+  ADVISOR_TURN_TIMEOUT_MS,
   OPENAI_API_KEY,
 } from "./config.js";
 import { log } from "./log.js";
@@ -70,21 +73,65 @@ export function loadSystemPrompt(): string {
 //
 // ADVISOR_PROVIDER_CHAIN is env-settable, so this is the only thing standing
 // between a typo in a unit file and student context going somewhere undeclared.
-const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, string>> = {
-  spark: "clemson_spark_vllm",
-  openai: "openai_api",
+//
+// A chain NAME is only a label. Checking the label proves nothing about where
+// bytes go, because the URL each label dials is env-settable too:
+// `ADVISOR_BASE_URL=https://anything/v1` keeps the name "spark" and the policy
+// record "clemson_spark_vllm" while sending every prompt somewhere nobody
+// declared. So each entry carries the hosts its policy record actually
+// describes, and the gate checks the host that will be dialled.
+interface ChainDestination {
+  /** The provider record in policy/action-policy.yaml. */
+  policyProvider: string;
+  /**
+   * Hosts this policy record covers. `clemson_spark_vllm`'s basis names
+   * on-premises Clemson hardware at gcspark.clemson.edu; `openai_api`'s names
+   * the OpenAI API. Neither covers an arbitrary host, so neither list may grow
+   * without the corresponding policy record being rewritten and re-reviewed.
+   */
+  hosts: readonly string[];
+}
+
+const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, ChainDestination>> = {
+  spark: {
+    policyProvider: "clemson_spark_vllm",
+    hosts: ["gcspark.clemson.edu"],
+  },
+  openai: {
+    policyProvider: "openai_api",
+    hosts: ["api.openai.com"],
+  },
 };
+
+/** The host each chain entry will actually dial. */
+function dialledHost(name: string): string | undefined {
+  const raw =
+    name === "spark"
+      ? ADVISOR_BASE_URL
+      : name === "openai"
+        ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
+        : undefined;
+  if (!raw) return undefined;
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Throw unless every name in `chain` maps to a policy destination that is
- * authorized for content egress. FAIL CLOSED on an unmapped name.
+ * authorized for content egress AND will dial a host that destination covers.
+ * FAIL CLOSED on an unmapped name, an unauthorized record, or an unparseable
+ * or undeclared host.
  *
- * `isAuthorized` is injectable so tests can exercise the unauthorized branch
- * without editing the shipped policy file.
+ * `isAuthorized` and `resolveHost` are injectable so tests can exercise the
+ * failing branches without editing the shipped policy file or the environment.
  */
 export function assertAdvisorChainAuthorized(
   chain: readonly string[],
   isAuthorized: (provider: string) => boolean = isEgressAuthorized,
+  resolveHost: (name: string) => string | undefined = dialledHost,
 ): void {
   for (const name of chain) {
     const declared = CHAIN_EGRESS_PROVIDER[name];
@@ -93,9 +140,22 @@ export function assertAdvisorChainAuthorized(
         `advisor provider "${name}" has no destination declared in policy/action-policy.yaml; refusing to send content to an undeclared endpoint`,
       );
     }
-    if (!isAuthorized(declared)) {
+    if (!isAuthorized(declared.policyProvider)) {
       throw new Error(
-        `advisor provider "${name}" sends to egress provider "${declared}", which is not authorized in policy/action-policy.yaml`,
+        `advisor provider "${name}" sends to egress provider "${declared.policyProvider}", which is not authorized in policy/action-policy.yaml`,
+      );
+    }
+    // The gate on the URL, not on the label. Without this the two checks above
+    // pass for a chain that dials anywhere at all.
+    const host = resolveHost(name);
+    if (!host) {
+      throw new Error(
+        `advisor provider "${name}" has no resolvable endpoint host; refusing to send content to an endpoint that cannot be checked`,
+      );
+    }
+    if (!declared.hosts.includes(host)) {
+      throw new Error(
+        `advisor provider "${name}" would dial host "${host}", which is not covered by egress provider "${declared.policyProvider}" (declared: ${declared.hosts.join(", ")})`,
       );
     }
   }
@@ -143,7 +203,20 @@ function resolveProvider(name: string): ProviderTarget | null {
         api: "openai-completions",
         provider: "openai",
         baseUrl: ADVISOR_BASE_URL,
-        reasoning: false,
+        // The endpoint docs' canonical request for qwen3.6-35b-a3b carries
+        // `chat_template_kwargs: { enable_thinking: true }`. pi-ai emits
+        // exactly that itself — openai-completions.js:443-448 — but the branch
+        // is guarded by `compat.thinkingFormat === "qwen-chat-template" &&
+        // model.reasoning`. With reasoning:false and no thinkingFormat (what we
+        // shipped) the branch is dead and the flag never reaches the wire.
+        //
+        // These two fields turn pi-ai's own supported path on, rather than
+        // hand-rolling the parameter in the payload hook. The third input the
+        // branch needs is a truthy `options.reasoningEffort`, which comes from
+        // the harness's `thinkingLevel` (agent-harness.js:339) — set where the
+        // AgentHarness is constructed, below.
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 65536,
@@ -171,20 +244,184 @@ function resolveProvider(name: string): ProviderTarget | null {
 /**
  * How a turn ended.
  *
- * - `complete`  — the model finished its answer.
- * - `round_cap` — the tool-round cap stopped the loop; `text` is whatever the
+ * - `complete`   — the model finished its answer.
+ * - `round_cap`  — the tool-round cap stopped the loop; `text` is whatever the
  *   model had said by then and is NOT a finished answer.
- * - `aborted`   — the caller's AbortSignal fired; `text` is a partial answer.
+ * - `timeout`    — the wall-clock ceiling stopped the turn; `text` is partial.
+ * - `malformed_tool_call` — the endpoint emitted a tool call as prose instead
+ *   of as a tool call. `text` is NOT an answer; see detectMalformedToolCall.
+ * - `aborted`    — the caller's AbortSignal fired; `text` is a partial answer.
  *
  * Callers must distinguish these. A partial answer rendered as a final one is
  * the failure mode this type exists to prevent.
  */
-export type AdvisorTurnOutcome = "complete" | "round_cap" | "aborted";
+export type AdvisorTurnOutcome =
+  | "complete"
+  | "round_cap"
+  | "timeout"
+  | "malformed_tool_call"
+  | "aborted";
 
 export interface AdvisorTurnResult {
   text: string;
   toolCalls: number;
   outcome: AdvisorTurnOutcome;
+}
+
+// --- malformed tool-call generation -----------------------------------------
+
+/**
+ * Detect the degraded generation where the endpoint emits a tool call as PROSE:
+ * `finish_reason: "stop"`, zero structured tool calls, and a `<tool_call>` or
+ * `<some__tool-name>` block sitting in the content.
+ *
+ * Per the endpoint owners this is a known, rare SERVER-SIDE degradation that a
+ * server restart clears. It is not a prompt problem and not something the
+ * client can negotiate away.
+ *
+ * ============================ DO NOT PARSE THIS =============================
+ * It is obvious that the XML here could be parsed back into a real tool call,
+ * and a future editor WILL notice that and think it is an easy win. It is not
+ * sanctioned: the endpoint owners explicitly asked that this not be worked
+ * around by parsing, because a client that silently repairs the malformed
+ * output hides the degradation from the operators who can actually fix it, and
+ * makes the remedy (restart the server) look unnecessary.
+ *
+ * Detection exists to REPORT, never to recover. If you are about to add a
+ * parser here, take it up with the endpoint owners first.
+ * ============================================================================
+ *
+ * Why this matters more than a normal malformed response: the persona instructs
+ * the model to source every factual claim from a tool result. A turn where the
+ * model INTENDED to call a tool and no tool ran is precisely the turn whose
+ * prose is most likely to be invented — and it renders as a finished answer.
+ */
+export function detectMalformedToolCall(
+  text: string,
+  toolCalls: number,
+  toolNames: readonly string[],
+): boolean {
+  // A turn that really ran tools is not this failure, whatever else is in the
+  // prose — a legitimate answer may quote a tool name in angle brackets.
+  if (toolCalls > 0) return false;
+  if (!text) return false;
+  if (/<tool_call>/i.test(text)) return true;
+  return toolNames.some((name) => text.includes(`<${name}>`));
+}
+
+// --- context budget ---------------------------------------------------------
+
+/**
+ * Rough token estimate. Deliberately a character heuristic and not a tokenizer:
+ * the budget needs a cheap bound every request, not an exact count, and 4
+ * chars/token overestimates for English prose and JSON alike (i.e. errs toward
+ * trimming early, which is the safe direction).
+ */
+function estimateTokens(payload: unknown): number {
+  return Math.ceil(JSON.stringify(payload ?? "").length / 4);
+}
+
+interface PayloadMessage {
+  role?: string;
+  content?: unknown;
+  [k: string]: unknown;
+}
+
+const TRIMMED_MARKER =
+  "[tool result trimmed to fit the context budget — re-run the tool if you need this data]";
+
+/**
+ * Bring a chat-completions payload under `maxTokens`, or throw.
+ *
+ * Order matters. Tool results are the unbounded term — Task 6's schedule
+ * request made 8 tool calls, and a catalog query can return kilobytes — so they
+ * are trimmed FIRST, oldest first, since the newest result is the one the model
+ * is currently reasoning about. Conversation history goes only after every tool
+ * result has already been dropped.
+ *
+ * Two things this deliberately does NOT do:
+ *
+ *  - it does not keep a per-result floor. A floor that every result is entitled
+ *    to is a floor that GROWS the request as the tool count grows, which is the
+ *    opposite of a budget. A trimmed result becomes a marker, not a prefix.
+ *  - it does not give up quietly. If the payload is still over budget after
+ *    everything trimmable is gone, it throws. A silently degraded request
+ *    produces a confidently wrong answer; a thrown one produces an error the
+ *    advisor can see. Failing loudly beats failing subtly.
+ *
+ * The system prompt and the newest user message are never trimmed: a request
+ * without them is not a smaller version of the request, it is a different one.
+ */
+export function enforceContextBudget(
+  payload: Record<string, unknown>,
+  maxTokens: number,
+): Record<string, unknown> {
+  if (estimateTokens(payload) <= maxTokens) return payload;
+
+  const messages = Array.isArray(payload.messages)
+    ? ([...payload.messages] as PayloadMessage[])
+    : null;
+  if (!messages) {
+    throw new Error(
+      `advisor request is ${estimateTokens(payload)} tokens against a budget of ${maxTokens} and carries no trimmable messages`,
+    );
+  }
+
+  const next = { ...payload, messages };
+  const isTrimmedAlready = (m: PayloadMessage) => m.content === TRIMMED_MARKER;
+
+  // 1. Tool results, oldest first.
+  for (let i = 0; i < messages.length; i++) {
+    if (estimateTokens(next) <= maxTokens) return next;
+    const m = messages[i]!;
+    if (m.role !== "tool" || isTrimmedAlready(m)) continue;
+    messages[i] = { ...m, content: TRIMMED_MARKER };
+  }
+
+  // 2. History, oldest first, never the system prompt and never the last
+  //    message (the turn's own input).
+  for (let i = 0; i < messages.length - 1; i++) {
+    if (estimateTokens(next) <= maxTokens) return next;
+    if (messages[i]!.role === "system") continue;
+    messages.splice(i, 1);
+    i--;
+  }
+
+  const finalSize = estimateTokens(next);
+  if (finalSize > maxTokens) {
+    throw new Error(
+      `advisor request is ${finalSize} tokens after trimming every tool result and all history, against a budget of ${maxTokens}; refusing to send a request the model cannot answer`,
+    );
+  }
+  return next;
+}
+
+/**
+ * Strip a `tool_choice` that the endpoint cannot accept alongside thinking.
+ *
+ * HARD CONSTRAINT from the endpoint docs: `tool_choice: "required"` together
+ * with `chat_template_kwargs.enable_thinking: true` returns HTTP 400 on this
+ * stack. We never set tool_choice ourselves today, but pi-ai forwards
+ * `options.toolChoice` straight into the payload (openai-completions.js:435),
+ * so anything that later sets a thinking level plus a required tool choice —
+ * including a future harness default — would 400 every request.
+ *
+ * Dropping to "auto" rather than disabling thinking is deliberate: thinking is
+ * what the endpoint docs prescribe for this model, and "auto" still lets the
+ * model call tools.
+ */
+export function reconcileToolChoiceWithThinking(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const kwargs = payload.chat_template_kwargs as
+    | { enable_thinking?: unknown }
+    | undefined;
+  if (!kwargs?.enable_thinking) return payload;
+  if (payload.tool_choice !== "required") return payload;
+  log.warn(
+    "advisor dropped tool_choice=required: the endpoint rejects it with enable_thinking",
+  );
+  return { ...payload, tool_choice: "auto" };
 }
 
 /**
@@ -209,6 +446,9 @@ async function runWithProvider(
   piSessionRoot: string,
   input: string,
   signal?: AbortSignal,
+  // Injectable so a test can exercise the ceiling without waiting out the real
+  // one. Production always uses the configured value.
+  timeoutMs: number = ADVISOR_TURN_TIMEOUT_MS,
 ): Promise<AdvisorTurnResult> {
   const env = new NodeExecutionEnv({
     cwd: session.workDir,
@@ -224,6 +464,13 @@ async function runWithProvider(
     env,
     session: piSession,
     model: target.model,
+    // The third input pi-ai's `qwen-chat-template` branch needs. The harness
+    // turns thinkingLevel into `options.reasoning` (agent-harness.js:339),
+    // which openai-completions.js turns into `reasoningEffort`, which is what
+    // makes `chat_template_kwargs.enable_thinking` true rather than false.
+    // "off" — the harness default — would send enable_thinking:false, which is
+    // NOT what the endpoint docs prescribe for this model.
+    thinkingLevel: "medium",
     // bridge.tools plus EXACTLY ONE host tool. propose_schedule writes
     // nothing — it hands validated structured data back to the host, which
     // renders the document. Nothing else joins this array; "answers come from
@@ -237,48 +484,87 @@ async function runWithProvider(
     getApiKeyAndHeaders: async () => ({ apiKey: target.apiKey }),
   });
 
-  // Round cap. 0.75.4's AgentHarness exposes neither a maxRounds option nor the
-  // agent loop's shouldStopAfterTurn hook, so the bound is enforced through the
-  // one mechanism that actually ends the loop: `terminate` on ToolResultPatch.
+  // Round cap — enforced at the PROVIDER REQUEST, not at the tool result.
   //
-  // Blocking from the `tool_call` hook does NOT bound anything. agent-loop.js
-  // turns a blocked call into an error tool result, feeds it back, and requests
-  // again — the model can retry forever against a metered provider.
-  // `shouldTerminateToolBatch` (agent-loop.js:345) is the real exit, and it is
-  // true only when EVERY finalized call in the batch carries terminate. This
-  // hook fires per call and the predicate is round-based, so once the cap is
-  // hit every call in the batch sets it and the loop stops after this batch.
+  // The previous version bounded the loop only through `terminate` on
+  // ToolResultPatch, set from the `tool_result` hook. That hook is Pi's
+  // `afterToolCall`, and `afterToolCall` runs ONLY inside
+  // finalizeExecutedToolCall (agent-loop.js:439). A tool call whose preparation
+  // resolves as `kind: "immediate"` never reaches it (agent-loop.js:281-286,
+  // :300-312), and `prepareToolCall` returns `immediate` for two conditions the
+  // MODEL controls: an unknown tool name (:361-367) and arguments that fail
+  // schema validation (:406-412). Since `shouldTerminateToolBatch` (:344-345)
+  // requires EVERY call in the batch to carry terminate, a model that keeps
+  // hallucinating a tool name never sets it on any call and the loop never
+  // ends — measured at 63 provider requests against a cap of 8.
   //
-  // Returning only `terminate` leaves the real tool output intact:
-  // agent-loop.js:454 merges `afterResult.content ?? result.content`.
+  // That is not a hypothetical: the malformed generations that trigger it are a
+  // known server-side degradation we cannot prevent (see
+  // detectMalformedToolCall). The loop bound is the containment.
+  //
+  // So the cap is enforced where every path must pass regardless of how a tool
+  // call resolved: the provider request itself. Aborting is what actually ends
+  // the loop — a hook return value cannot.
   let rounds = 0;
   let toolCalls = 0;
   let hitRoundCap = false;
+  let hitTimeout = false;
   harness.on("before_provider_request", () => {
     rounds++;
+    if (rounds > ADVISOR_MAX_ROUNDS) {
+      hitRoundCap = true;
+      void harness.abort();
+    }
     return undefined;
   });
   harness.on("tool_call", () => {
     toolCalls++;
     return undefined;
   });
+  // Kept as the GRACEFUL bound for the ordinary path: it stops the loop after
+  // the current batch without an abort, so the turn ends with the tool output
+  // intact (agent-loop.js:454 merges `afterResult.content ?? result.content`).
+  // It is no longer the only bound, because it provably cannot cover calls that
+  // never reach afterToolCall.
   harness.on("tool_result", () => {
     if (rounds < ADVISOR_MAX_ROUNDS) return undefined;
     hitRoundCap = true;
     return { terminate: true };
   });
 
-  // temperature is not part of AgentHarnessStreamOptions in 0.75.4, so it is
-  // injected into the provider payload directly.
-  //
-  // Only for chat-completions providers. The openai fallback is
-  // `openai-responses` with a reasoning model, and the Responses API rejects
-  // `temperature` for those — injecting it unconditionally would 400 the
-  // fallback on every single request, i.e. exactly when it is needed.
+  // Wall-clock ceiling. The round cap bounds how many times the model is asked;
+  // nothing bounded how LONG one turn could take. A stalled provider held the
+  // request, the session's directories, and the advisor's browser tab open
+  // indefinitely — only a client disconnect ended it.
+  const deadline = setTimeout(() => {
+    hitTimeout = true;
+    log.warn("advisor turn exceeded its wall-clock ceiling", {
+      session: session.id,
+      provider: target.name,
+      timeoutMs,
+    });
+    void harness.abort();
+  }, timeoutMs);
+  deadline.unref?.();
+
   if (target.model.api === "openai-completions") {
-    harness.on("before_provider_payload", (event) => ({
-      payload: { ...(event.payload as Record<string, unknown>), temperature: 0 },
-    }));
+    harness.on("before_provider_payload", (event) => {
+      let payload = event.payload as Record<string, unknown>;
+      // temperature is not part of AgentHarnessStreamOptions in 0.75.4, so it
+      // is injected into the provider payload directly.
+      //
+      // Only for chat-completions providers. The openai fallback is
+      // `openai-responses` with a reasoning model, and the Responses API
+      // rejects `temperature` for those — injecting it unconditionally would
+      // 400 the fallback on every single request, i.e. exactly when it is
+      // needed. That gate is on model.api and must survive.
+      payload = { ...payload, temperature: ADVISOR_TEMPERATURE };
+      // Never let tool_choice:"required" ship next to enable_thinking:true.
+      payload = reconcileToolChoiceWithThinking(payload);
+      // Last, so it measures what would actually be sent.
+      payload = enforceContextBudget(payload, ADVISOR_MAX_REQUEST_TOKENS);
+      return { payload };
+    });
   }
 
   const onAbort = () => {
@@ -295,6 +581,12 @@ async function runWithProvider(
       .join("")
       .trim();
 
+    const malformed = detectMalformedToolCall(
+      text,
+      toolCalls,
+      (bridge?.tools ?? []).map((t) => t.name),
+    );
+
     // Metadata only. Prompt and response text may carry student information and
     // never reach the log.
     log.info("advisor turn complete", {
@@ -309,20 +601,53 @@ async function runWithProvider(
       totalTokens: reply.usage?.totalTokens,
       stopReason: reply.stopReason,
       hitRoundCap,
+      hitTimeout,
+      malformed,
     });
 
     if (reply.stopReason === "error") {
       throw new Error(reply.errorMessage || "provider returned an error");
     }
-    // harness.abort() makes prompt() RESOLVE with stopReason "aborted" and
-    // whatever text had streamed so far (agent-loop.js:107 returns early on it).
-    // Without its own branch a stopped turn is indistinguishable from a finished
-    // one, and the UI's stop control would render a truncated answer as final.
+
+    // The caller's own stop wins over every other reason the turn ended: the
+    // advisor pressed stop, and saying anything else misreports their action.
+    if (signal?.aborted) {
+      return { text, toolCalls, outcome: "aborted" };
+    }
+    // Our own aborts. harness.abort() makes prompt() RESOLVE with stopReason
+    // "aborted" and whatever text had streamed so far (agent-loop.js:107
+    // returns early on it), so the reason we aborted has to come from our own
+    // flags — the stopReason cannot tell these apart.
+    if (hitTimeout) return { text, toolCalls, outcome: "timeout" };
+    if (hitRoundCap) return { text, toolCalls, outcome: "round_cap" };
+    // Without its own branch a stopped turn is indistinguishable from a
+    // finished one, and the UI's stop control would render a truncated answer
+    // as final.
     if (reply.stopReason === "aborted") {
       return { text, toolCalls, outcome: "aborted" };
     }
-    return { text, toolCalls, outcome: hitRoundCap ? "round_cap" : "complete" };
+
+    if (malformed) {
+      // A distinct, greppable line: the remedy is an operator action (restart
+      // the endpoint), not a retry and not a prompt change, so this must not
+      // blend into the ordinary warn stream. Metadata only — the prose that
+      // triggered detection may carry student information.
+      log.error(
+        "advisor endpoint emitted a tool call as prose — KNOWN SERVER-SIDE DEGRADATION, RESTART THE MODEL SERVER (do not parse the output)",
+        {
+          session: session.id,
+          provider: target.name,
+          model: target.model.id,
+          baseUrl: target.model.baseUrl,
+          stopReason: reply.stopReason,
+        },
+      );
+      return { text, toolCalls, outcome: "malformed_tool_call" };
+    }
+
+    return { text, toolCalls, outcome: "complete" };
   } finally {
+    clearTimeout(deadline);
     signal?.removeEventListener("abort", onAbort);
   }
 }
@@ -343,6 +668,7 @@ async function runAttempt(
   session: AdvisorSession,
   input: string,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<AdvisorTurnResult> {
   const attemptRoot = mkdtempSync(path.join(tmpdir(), "advisor-pi-try-"));
   // Any schedule proposed during a discarded attempt is discarded with it, for
@@ -358,10 +684,16 @@ async function runAttempt(
       attemptRoot,
       input,
       signal,
+      timeoutMs,
     );
     // An aborted turn is discarded too: the advisor pressed stop, so the
     // half-finished exchange should not become permanent history.
-    if (result.outcome !== "aborted") {
+    //
+    // A malformed_tool_call turn is discarded for a different reason: its text
+    // is a tool call rendered as prose. Committing that to the JSONL would put
+    // a malformed example into every later turn's context, where it invites the
+    // model to repeat the shape.
+    if (result.outcome !== "aborted" && result.outcome !== "malformed_tool_call") {
       await rm(session.piSessionRoot, { recursive: true, force: true });
       await cp(attemptRoot, session.piSessionRoot, { recursive: true });
       committed = true;
@@ -419,3 +751,10 @@ export function setAdvisorBridgeForTest(
 
 /** Test seam: run a turn against an explicitly constructed provider target. */
 export const __runWithProviderForTest = runAttempt;
+
+/**
+ * Test seam: the REAL provider target, so tests of the model's wire
+ * configuration exercise the shipped fields rather than a copy of them that can
+ * drift away from what the service actually sends.
+ */
+export const __resolveProviderForTest = resolveProvider;

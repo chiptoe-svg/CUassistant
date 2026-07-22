@@ -105,6 +105,28 @@ export function sessionCount(): number {
   return sessions.size;
 }
 
+/**
+ * Remove every live session's directories. Called on SIGTERM/SIGINT.
+ *
+ * Without this, a restart stranded each live session's workDir and
+ * piSessionRoot in os.tmpdir() with nothing left to reap them — the sweeper
+ * lives in the process that just died. The plist sets KeepAlive=true, so
+ * restarts are routine, and those directories hold JSONL transcripts that can
+ * contain student information. "Nothing persists" has to survive a restart to
+ * mean anything.
+ *
+ * Synchronous on purpose: it runs from a signal handler, and an async unlink
+ * loses the race against process exit.
+ */
+export function disposeAllSessions(): number {
+  const n = sessions.size;
+  for (const [id, s] of sessions) {
+    sessions.delete(id);
+    disposeDirs(s);
+  }
+  return n;
+}
+
 /** Test seam: drop all sessions and their directories. */
 export function resetSessionsForTest(): void {
   for (const id of [...sessions.keys()]) clearSession(id);

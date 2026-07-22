@@ -4,7 +4,11 @@ import test from "node:test";
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 
-import { advisorMcpServers, createAdvisorMcpBridge } from "../src/advisor-mcp.ts";
+import {
+  advisorMcpServers,
+  assertAdvisorMcpUrlSafe,
+  createAdvisorMcpBridge,
+} from "../src/advisor-mcp.ts";
 
 test("exactly the three intended servers are configured", () => {
   const servers = advisorMcpServers();
@@ -187,4 +191,90 @@ test("close() closes every client (and transport) that was successfully opened",
     transports.every((t) => t.closed),
     "every opened transport should be closed",
   );
+});
+
+// --- MCP server identity ----------------------------------------------------
+//
+// The server array is fixed at three entries, so no FOURTH server can be added
+// — but each entry's URL comes from the environment, so a slot can be
+// SUBSTITUTED. `ADVISOR_MCP_PUBLIC_URL=http://127.0.0.1:8765/` puts the
+// credentialed server into the agent's tool array, and with MCP_AUTH_TOKEN
+// unset that server is loopback-open, so the substitution needs no credential.
+// send-outlook-mail, send-gmail, and calendar writes would join the tools the
+// advisor agent can call.
+
+test("an advisor MCP URL on the credentialed port is rejected", () => {
+  assert.throws(
+    () => assertAdvisorMcpUrlSafe("cu_public", "http://127.0.0.1:8765/"),
+    /credentialed MCP server/,
+    "substituting the credentialed server must fail closed",
+  );
+});
+
+// Matching on port regardless of host: a remote host on 8765 is not our server
+// either, and an advisor MCP URL has no business naming that port.
+test("the credentialed port is rejected on any host, not just loopback", () => {
+  assert.throws(
+    () => assertAdvisorMcpUrlSafe("cu_public", "http://example.com:8765/"),
+    /credentialed MCP server/,
+  );
+});
+
+test("the legitimate public and catalog URLs are accepted", () => {
+  assert.doesNotThrow(() =>
+    assertAdvisorMcpUrlSafe("cu_public", "http://127.0.0.1:8766/"),
+  );
+  assert.doesNotThrow(() =>
+    assertAdvisorMcpUrlSafe("cu_catalog", "http://127.0.0.1:8767/"),
+  );
+});
+
+test("an unparseable advisor MCP URL is rejected rather than ignored", () => {
+  assert.throws(
+    () => assertAdvisorMcpUrlSafe("cu_public", "not a url"),
+    /unparseable/,
+  );
+});
+
+// The check has to run when the server list is BUILT, which is what
+// createAdvisorMcpBridge does at startup — not lazily at the first tool call.
+//
+// Run in a CHILD PROCESS: the URLs are module-level constants read from the
+// environment at config load, so an in-process test cannot re-read them, and a
+// dynamic re-import gets the cached config module and silently tests nothing.
+test("a substituted URL fails the process at startup, not at first use", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const run = promisify(execFile);
+
+  const result = await run(
+    "npx",
+    ["tsx", "test/fixtures/advisor-mcp-startup.ts"],
+    {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: { ...process.env, ADVISOR_MCP_PUBLIC_URL: "http://127.0.0.1:8765/" },
+    },
+  ).catch((err: { stdout?: string; stderr?: string }) => err);
+
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  assert.match(
+    output,
+    /credentialed MCP server/,
+    `the substituted URL was accepted at startup — output was: ${output}`,
+  );
+});
+
+// The same fixture with the shipped URLs must NOT throw, or the test above
+// would pass on a fixture that fails for any reason at all.
+test("the fixture starts cleanly with the shipped URLs", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const run = promisify(execFile);
+
+  const { stdout } = await run(
+    "npx",
+    ["tsx", "test/fixtures/advisor-mcp-startup.ts"],
+    { cwd: new URL("..", import.meta.url).pathname },
+  );
+  assert.match(stdout, /servers-ok/);
 });

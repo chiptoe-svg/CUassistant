@@ -10,6 +10,7 @@ import {
   ADVISOR_MCP_PUBLIC_URL,
   ADVISOR_MCP_WIKI_TOKEN,
   ADVISOR_MCP_WIKI_URL,
+  MCP_HTTP_PORT,
 } from "./config.js";
 
 export interface McpServerConfig {
@@ -93,11 +94,52 @@ function mcpToolToPiTool(serverName: string, tool: McpTool, client: ClientLike):
 }
 
 /**
+ * Reject an advisor MCP URL that points at the CREDENTIALED server's port.
+ *
+ * The server array is fixed at three entries, so no fourth server can be added
+ * — but each entry's URL comes from the environment, so a slot can be
+ * SUBSTITUTED. `ADVISOR_MCP_PUBLIC_URL=http://127.0.0.1:8765/` puts the
+ * credentialed server (send-outlook-mail, send-gmail, calendar writes) into the
+ * agent's tool array, and when MCP_AUTH_TOKEN is unset that server is
+ * loopback-open, so the substitution needs no credential at all.
+ *
+ * The port is the identity check that matters: 8765 is where the credentialed
+ * server lives. Matching on port regardless of host fails closed — a remote
+ * host on 8765 is not our server either, and an advisor MCP URL has no business
+ * naming that port.
+ *
+ * Called from advisorMcpServers(), which createAdvisorMcpBridge() calls at
+ * startup, so a substituted URL kills the process before it accepts a request
+ * rather than surfacing on the first turn.
+ */
+export function assertAdvisorMcpUrlSafe(serverName: string, url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`advisor MCP server "${serverName}" has an unparseable URL`);
+  }
+  const port = parsed.port
+    ? Number(parsed.port)
+    : parsed.protocol === "https:"
+      ? 443
+      : 80;
+  if (port === MCP_HTTP_PORT) {
+    throw new Error(
+      `advisor MCP server "${serverName}" resolves to port ${port}, the credentialed MCP server; ` +
+        `the advisor agent must never be handed mail-send or calendar-write tools`,
+    );
+  }
+}
+
+/**
  * The agent's entire data surface. Three servers, declared in one place.
  *
  * 8765 is deliberately absent: it carries send-outlook-mail, send-gmail, and
  * calendar writes. Pi is handed an explicit tool array, so a server that is not
  * listed here contributes nothing — there is no inheritance path to close.
+ * What IS closable is substitution of one of these three URLs, which
+ * assertAdvisorMcpUrlSafe rejects.
  */
 export function advisorMcpServers(): Record<string, McpServerConfig> {
   const wiki: McpServerConfig = { url: ADVISOR_MCP_WIKI_URL };
@@ -106,11 +148,15 @@ export function advisorMcpServers(): Record<string, McpServerConfig> {
   if (ADVISOR_MCP_WIKI_TOKEN) {
     wiki.headers = { Authorization: `Bearer ${ADVISOR_MCP_WIKI_TOKEN}` };
   }
-  return {
+  const servers: Record<string, McpServerConfig> = {
     cu_public: { url: ADVISOR_MCP_PUBLIC_URL },
     cu_catalog: { url: ADVISOR_MCP_CATALOG_URL },
     gc_curriculum_wiki: wiki,
   };
+  for (const [name, config] of Object.entries(servers)) {
+    assertAdvisorMcpUrlSafe(name, config.url);
+  }
+  return servers;
 }
 
 export async function createAdvisorMcpBridge(

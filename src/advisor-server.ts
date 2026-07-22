@@ -31,6 +31,7 @@ import {
 import {
   clearSession,
   createSession,
+  disposeAllSessions,
   getSession,
   sweepExpired,
   type AdvisorSession,
@@ -94,19 +95,40 @@ function sessionCookie(id: string): string {
  * to say so inside it. Rendering a truncated answer as a final one is exactly
  * what AdvisorTurnResult's outcome field exists to prevent.
  */
+const OUTCOME_NOTE: Record<Exclude<AdvisorTurnResult["outcome"], "complete">, string> = {
+  aborted: "[Stopped — this answer is partial.]",
+  round_cap: "[The tool-round limit was reached — this answer is partial.]",
+  timeout: "[This turn ran out of time — this answer is partial.]",
+  // The text is a tool call rendered as prose, not an answer, so unlike the
+  // other outcomes it is suppressed entirely rather than annotated. Showing it
+  // invites the advisor to read invented prose as a sourced answer — the exact
+  // failure this outcome exists to prevent.
+  malformed_tool_call:
+    "[The model service returned a malformed response and this turn produced no answer. Please try again; if it repeats, the model server needs to be restarted.]",
+};
+
 function withOutcomeNote(result: AdvisorTurnResult): string {
   if (result.outcome === "complete") return result.text;
-  const note =
-    result.outcome === "aborted"
-      ? "[Stopped — this answer is partial.]"
-      : "[The tool-round limit was reached — this answer is partial.]";
+  const note = OUTCOME_NOTE[result.outcome];
+  if (result.outcome === "malformed_tool_call") return note;
   return result.text ? `${result.text}\n\n${note}` : note;
 }
 
 // In-flight turns, keyed by session id, so /stop can reach the AbortSignal that
 // Task 3 wired through the harness. Abort mid-tool-call is the reason a runner
 // is used at all; without this the stop control would be decorative.
-const inFlight = new Map<string, AbortController>();
+//
+// `done` is tracked alongside the controller because aborting is not the same
+// as having stopped. /clear used to abort and immediately remove piSessionRoot;
+// a turn already past its abort check would then finish non-aborted and run
+// `cp(attemptRoot, session.piSessionRoot)` (advisor-agent.ts), RECREATING the
+// directory after the session had left the map — a transcript on disk that
+// nothing would ever remove. Awaiting `done` closes that window.
+interface InFlightTurn {
+  controller: AbortController;
+  done: Promise<unknown>;
+}
+const inFlight = new Map<string, InFlightTurn>();
 
 export function createAdvisorServer(
   deps: { runTurn?: RunTurn } = {},
@@ -160,19 +182,30 @@ export function createAdvisorServer(
         if (!message) return json(res, 400, { error: "message is required" });
 
         const controller = new AbortController();
-        inFlight.get(session.id)?.abort();
-        inFlight.set(session.id, controller);
+        inFlight.get(session.id)?.controller.abort();
         // A closed connection is a stop too — the advisor navigated away and
         // nobody will ever read the answer being paid for.
         res.on("close", () => {
           if (!res.writableEnded) controller.abort();
         });
 
+        const turn = runTurn(session, message, controller.signal);
+        const entry: InFlightTurn = {
+          controller,
+          // Swallowed so awaiting `done` from /clear can never reject there;
+          // the real outcome is still awaited below.
+          done: turn.then(
+            () => undefined,
+            () => undefined,
+          ),
+        };
+        inFlight.set(session.id, entry);
+
         let result: AdvisorTurnResult;
         try {
-          result = await runTurn(session, message, controller.signal);
+          result = await turn;
         } finally {
-          if (inFlight.get(session.id) === controller) {
+          if (inFlight.get(session.id) === entry) {
             inFlight.delete(session.id);
           }
         }
@@ -204,14 +237,22 @@ export function createAdvisorServer(
       }
 
       if (method === "POST" && url.pathname === "/stop") {
-        const controller = inFlight.get(session.id);
-        controller?.abort();
-        return json(res, 200, { stopped: Boolean(controller) });
+        const entry = inFlight.get(session.id);
+        entry?.controller.abort();
+        return json(res, 200, { stopped: Boolean(entry) });
       }
 
       if (method === "POST" && url.pathname === "/clear") {
-        inFlight.get(session.id)?.abort();
-        inFlight.delete(session.id);
+        // Abort, then WAIT. A turn that is past its abort check still has to
+        // run its commit step, and that step recreates piSessionRoot. Clearing
+        // before it finishes leaves a transcript directory behind that no
+        // sweeper knows about, because the session is already out of the map.
+        const entry = inFlight.get(session.id);
+        if (entry) {
+          entry.controller.abort();
+          await entry.done;
+          inFlight.delete(session.id);
+        }
         clearSession(session.id);
         const fresh = createSession(session.advisorId);
         log.info("advisor session cleared", { session: fresh.id });
@@ -289,8 +330,18 @@ export async function startAdvisorServer(): Promise<http.Server> {
   // construction would pay listTools() latency every turn and churn
   // connections against the MCP servers.
   await initAdvisorTools();
-  process.on("SIGTERM", () => void shutdownAdvisorTools());
-  process.on("SIGINT", () => void shutdownAdvisorTools());
+  // Dispose sessions BEFORE closing the tool bridge, and synchronously: these
+  // handlers race process exit, and the directories hold JSONL transcripts that
+  // can contain student information. KeepAlive=true means restarts are routine,
+  // so a handler that only closes the bridge leaks a directory pair per live
+  // session per restart, with nothing left running to reap them.
+  const onSignal = () => {
+    const n = disposeAllSessions();
+    if (n > 0) log.info("advisor sessions disposed on shutdown", { count: n });
+    void shutdownAdvisorTools();
+  };
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
 
   const server = createAdvisorServer();
   await new Promise<void>((resolve) =>

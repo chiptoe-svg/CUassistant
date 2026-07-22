@@ -8,11 +8,19 @@ import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
-import { ADVISOR_MAX_ROUNDS } from "../src/config.ts";
 import {
+  ADVISOR_MAX_REQUEST_TOKENS,
+  ADVISOR_MAX_ROUNDS,
+  ADVISOR_TEMPERATURE,
+} from "../src/config.ts";
+import {
+  __resolveProviderForTest,
   __runWithProviderForTest,
   assertAdvisorChainAuthorized,
+  detectMalformedToolCall,
+  enforceContextBudget,
   loadSystemPrompt,
+  reconcileToolChoiceWithThinking,
   setAdvisorBridgeForTest,
 } from "../src/advisor-agent.ts";
 import type { AdvisorSession } from "../src/advisor-session.ts";
@@ -78,6 +86,21 @@ function startFakeProvider(opts: {
   /** Return a tool call for this many requests, then a plain answer. */
   toolCallsBeforeAnswer: number;
   onRequest?: (n: number) => void;
+  /**
+   * Name the model asks for. Defaults to "echo", the tool that exists. Naming a
+   * tool that does NOT exist drives agent-loop.js's `immediate` path
+   * (:361-367), which never reaches afterToolCall.
+   */
+  toolName?: string;
+  /**
+   * Raw arguments JSON. Defaults to a schema-valid object. Supplying arguments
+   * that fail validation drives the other `immediate` path (:406-412).
+   */
+  toolArguments?: string;
+  /** Content for the final (non-tool-call) message. */
+  answer?: string;
+  /** Delay before responding, to exercise the wall-clock ceiling. */
+  delayMs?: number;
 }): Promise<{
   url: string;
   count: () => number;
@@ -92,11 +115,15 @@ function startFakeProvider(opts: {
     opts.onRequest?.(mine);
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         bodies.push(JSON.parse(body));
       } catch {
         bodies.push(null);
+      }
+      if (opts.delayMs) {
+        await new Promise((r) => setTimeout(r, opts.delayMs));
+        if (res.writableEnded) return;
       }
       res.writeHead(200, {
         "content-type": "text/event-stream",
@@ -121,7 +148,10 @@ function startFakeProvider(opts: {
                 index: 0,
                 id: `call_${mine}`,
                 type: "function",
-                function: { name: "echo", arguments: '{"text":"ping"}' },
+                function: {
+                  name: opts.toolName ?? "echo",
+                  arguments: opts.toolArguments ?? '{"text":"ping"}',
+                },
               },
             ],
           },
@@ -131,7 +161,10 @@ function startFakeProvider(opts: {
       } else {
         send({
           index: 0,
-          delta: { role: "assistant", content: "final answer" },
+          delta: {
+            role: "assistant",
+            content: opts.answer ?? "final answer",
+          },
           finish_reason: null,
         });
         send({ index: 0, delta: {}, finish_reason: "stop" });
@@ -167,6 +200,19 @@ function fakeEchoTool(onExecute?: () => void): AgentTool {
         content: [{ type: "text", text: String(params.text) }],
         details: {},
       };
+    },
+  } as unknown as AgentTool;
+}
+
+/** A tool that exists only so its NAME is in the bridge's tool list. */
+function fakeNamedTool(name: string): AgentTool {
+  return {
+    name,
+    label: name,
+    description: "a tool that exists",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
     },
   } as unknown as AgentTool;
 }
@@ -249,7 +295,14 @@ test("temperature is injected for the chat-completions provider", async () => {
       "hello",
     );
     const first = provider.bodies()[0] as Record<string, unknown>;
-    assert.equal(first.temperature, 0, "spark must still get temperature 0");
+    // 0.6 is the endpoint docs' canonical value for qwen3.6-35b-a3b. 0 was our
+    // own invention.
+    assert.equal(
+      first.temperature,
+      ADVISOR_TEMPERATURE,
+      "spark must get the configured temperature",
+    );
+    assert.equal(ADVISOR_TEMPERATURE, 0.6, "the default must be the documented 0.6");
   } finally {
     setAdvisorBridgeForTest(null);
     await provider.close();
@@ -357,4 +410,407 @@ test("a failed provider attempt leaves the reusable session untouched", async ()
     rmSync(session.workDir, { recursive: true, force: true });
     rmSync(session.piSessionRoot, { recursive: true, force: true });
   }
+});
+
+// --- item 1: the round cap must bound EVERY tool-call resolution path --------
+//
+// The original cap was set from the `tool_result` hook, which is Pi's
+// `afterToolCall`. afterToolCall runs only inside finalizeExecutedToolCall
+// (agent-loop.js:439), so a call whose preparation resolves as
+// `kind: "immediate"` skips it entirely and never carries `terminate`. Since
+// shouldTerminateToolBatch (:344-345) needs terminate on EVERY call in the
+// batch, one such call per batch is enough to make the cap unreachable — a
+// reviewer measured 63 provider requests against a cap of 8.
+//
+// Both immediate conditions are MODEL-controlled, and the malformed generations
+// that produce them are a server-side degradation we cannot prevent, so this is
+// the only containment there is.
+
+test("the round cap bounds the loop when the model names a tool that does not exist", async () => {
+  // agent-loop.js:361-367 — `Tool ... not found` returns kind:"immediate".
+  const provider = await startFakeProvider({
+    toolCallsBeforeAnswer: 100,
+    toolName: "no_such_tool",
+  });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
+
+  try {
+    const result = await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "how many credits do I need?",
+    );
+    assert.ok(
+      provider.count() <= ADVISOR_MAX_ROUNDS + 1,
+      `provider was asked ${provider.count()} times for a cap of ${ADVISOR_MAX_ROUNDS} — an unknown tool name escapes the bound`,
+    );
+    assert.notEqual(
+      result.outcome,
+      "complete",
+      "a run stopped by the cap must not report a finished answer",
+    );
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+});
+
+test("the round cap bounds the loop when the model sends schema-invalid arguments", async () => {
+  // agent-loop.js:406-412 — validateToolArguments throws, caught into
+  // kind:"immediate". `text` is required and a number is not a string.
+  const provider = await startFakeProvider({
+    toolCallsBeforeAnswer: 100,
+    toolArguments: '{"text": 12345}',
+  });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
+
+  try {
+    const result = await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "how many credits do I need?",
+    );
+    assert.ok(
+      provider.count() <= ADVISOR_MAX_ROUNDS + 1,
+      `provider was asked ${provider.count()} times for a cap of ${ADVISOR_MAX_ROUNDS} — invalid arguments escape the bound`,
+    );
+    assert.notEqual(result.outcome, "complete");
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+});
+
+// A turn can be bounded in rounds and still run forever if each round is slow.
+test("a turn that outlives the wall-clock ceiling is stopped and reported as timeout", async () => {
+  const provider = await startFakeProvider({
+    toolCallsBeforeAnswer: 0,
+    delayMs: 5000,
+  });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
+
+  let outcome: string;
+  const started = Date.now();
+  try {
+    const result = await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "hello",
+      undefined,
+      50, // ceiling well under the provider's 5s delay
+    );
+    outcome = result.outcome;
+  } catch {
+    outcome = "threw";
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+
+  assert.notEqual(outcome, "complete", "a timed-out turn must not read as finished");
+  assert.equal(outcome, "timeout", "the ceiling must surface as its own outcome");
+  assert.ok(
+    Date.now() - started < 4500,
+    "the turn ran to the provider's delay — the ceiling did not fire",
+  );
+});
+
+// --- item 5: the wire configuration -----------------------------------------
+//
+// pi-ai emits chat_template_kwargs itself (openai-completions.js:443-448), but
+// only when `compat.thinkingFormat === "qwen-chat-template" && model.reasoning`
+// AND `options.reasoningEffort` is truthy. We shipped reasoning:false and no
+// thinkingFormat, so the branch was dead and enable_thinking never reached the
+// wire. This asserts on the PAYLOAD, not on the config, because the whole point
+// is that we once assumed the config implied the payload and were wrong.
+
+test("enable_thinking reaches the wire through pi-ai's own qwen-chat-template branch", async () => {
+  const provider = await startFakeProvider({ toolCallsBeforeAnswer: 0 });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({ tools: [fakeEchoTool()], close: async () => {} });
+
+  // The REAL shipped target, re-pointed at the fake endpoint, so this cannot
+  // pass against a copy of the model config that has drifted.
+  const target = __resolveProviderForTest("spark")!;
+  (target.model as unknown as { baseUrl: string }).baseUrl = provider.url;
+
+  try {
+    await __runWithProviderForTest(target as never, session, "hello");
+    const first = provider.bodies()[0] as Record<string, unknown>;
+    const kwargs = first.chat_template_kwargs as
+      | { enable_thinking?: unknown }
+      | undefined;
+    assert.ok(kwargs, "chat_template_kwargs never reached the wire");
+    assert.equal(
+      kwargs!.enable_thinking,
+      true,
+      "enable_thinking must be true — the endpoint docs' canonical request for this model",
+    );
+    assert.equal(first.temperature, 0.6, "temperature must be the documented 0.6");
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+});
+
+// HARD CONSTRAINT: tool_choice:"required" with enable_thinking:true is an
+// HTTP 400 on this stack. pi-ai forwards options.toolChoice straight through
+// (openai-completions.js:435), so the combination has to be unrepresentable.
+test("tool_choice=required can never ship alongside enable_thinking", () => {
+  const out = reconcileToolChoiceWithThinking({
+    tool_choice: "required",
+    chat_template_kwargs: { enable_thinking: true },
+  });
+  assert.notEqual(
+    out.tool_choice,
+    "required",
+    "required + enable_thinking is a 400 on this endpoint",
+  );
+  assert.equal(out.tool_choice, "auto");
+});
+
+test("tool_choice is left alone when thinking is off", () => {
+  const out = reconcileToolChoiceWithThinking({
+    tool_choice: "required",
+    chat_template_kwargs: { enable_thinking: false },
+  });
+  assert.equal(out.tool_choice, "required", "the guard must be narrow");
+});
+
+// --- item 6: the context budget ---------------------------------------------
+
+test("the context budget trims tool results before history", () => {
+  const big = "x".repeat(400_000); // ~100K tokens on the 4-chars heuristic
+  const payload = {
+    messages: [
+      { role: "system", content: "persona" },
+      { role: "user", content: "first question" },
+      { role: "tool", content: big },
+      { role: "user", content: "current question" },
+    ],
+  };
+  const out = enforceContextBudget(payload, ADVISOR_MAX_REQUEST_TOKENS);
+  const msgs = out.messages as { role: string; content: string }[];
+
+  assert.ok(
+    JSON.stringify(out).length / 4 <= ADVISOR_MAX_REQUEST_TOKENS,
+    "the payload is still over budget",
+  );
+  assert.ok(
+    !msgs.some((m) => m.content === big),
+    "the oversized tool result survived",
+  );
+  assert.equal(msgs[0]!.role, "system", "the persona must never be trimmed");
+  assert.equal(
+    msgs[msgs.length - 1]!.content,
+    "current question",
+    "the turn's own input must never be trimmed",
+  );
+});
+
+// A per-result floor is what makes a budget grow with the tool count. Eight
+// results each entitled to a slice is a bigger request than one — the opposite
+// of a cap.
+test("the budget holds when MANY tool results each want a share", () => {
+  const messages: { role: string; content: string }[] = [
+    { role: "system", content: "persona" },
+  ];
+  for (let i = 0; i < 30; i++) {
+    messages.push({ role: "tool", content: "y".repeat(80_000) });
+  }
+  messages.push({ role: "user", content: "current question" });
+
+  const out = enforceContextBudget({ messages }, ADVISOR_MAX_REQUEST_TOKENS);
+  assert.ok(
+    JSON.stringify(out).length / 4 <= ADVISOR_MAX_REQUEST_TOKENS,
+    "30 tool results blew the budget — a per-result floor is growing the request",
+  );
+});
+
+// Failing loudly beats a silently degraded request that gets a confidently
+// wrong answer.
+test("the budget throws rather than send an unshrinkable oversized request", () => {
+  assert.throws(
+    () =>
+      enforceContextBudget(
+        {
+          messages: [
+            { role: "system", content: "s" },
+            { role: "user", content: "z".repeat(400_000) },
+          ],
+        },
+        1000,
+      ),
+    /refusing to send/,
+    "an unshrinkable request must fail loudly, not quietly degrade",
+  );
+});
+
+test("a payload already inside the budget is passed through untouched", () => {
+  const payload = { messages: [{ role: "user", content: "hi" }] };
+  assert.equal(enforceContextBudget(payload, 45000), payload);
+});
+
+// --- item 7: the malformed-tool-call generation -----------------------------
+//
+// Observed live: finish_reason "stop", zero tool calls, and a raw
+// <cu_public__search-clemson-classes> block in the content. A known server-side
+// degradation cleared by a server restart. It was silent — outcome "complete",
+// prose rendered as a finished answer — which is the worst case, because the
+// persona tells the model to source every claim from a tool result, so a turn
+// where no tool ran is the turn most likely to be invented.
+
+test("a tool call emitted as prose is reported as a failure, not as an answer", async () => {
+  const provider = await startFakeProvider({
+    toolCallsBeforeAnswer: 0,
+    answer:
+      "<cu_public__search-clemson-classes>\n{\"subject\":\"CPSC\"}\n</cu_public__search-clemson-classes>",
+  });
+  const session = fakeSession();
+  setAdvisorBridgeForTest({
+    tools: [fakeNamedTool("cu_public__search-clemson-classes")],
+    close: async () => {},
+  });
+
+  try {
+    const result = await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "what CPSC classes are offered?",
+    );
+    assert.equal(
+      result.outcome,
+      "malformed_tool_call",
+      "the degradation must surface as its own outcome, not as `complete`",
+    );
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+});
+
+test("the <tool_call> XML signature is detected", () => {
+  assert.equal(
+    detectMalformedToolCall("<tool_call>{\"name\":\"x\"}</tool_call>", 0, []),
+    true,
+  );
+});
+
+test("a tool-name block is detected only for tools that exist", () => {
+  const text = "<cu_public__search-clemson-classes>{}</cu_public__search-clemson-classes>";
+  assert.equal(
+    detectMalformedToolCall(text, 0, ["cu_public__search-clemson-classes"]),
+    true,
+  );
+  assert.equal(
+    detectMalformedToolCall(text, 0, ["some_other_tool"]),
+    false,
+    "an arbitrary angle-bracket string must not be flagged",
+  );
+});
+
+// The detector must not fire on a turn that really ran tools — a legitimate
+// answer is allowed to mention a tool name.
+test("a turn that ran tools is never flagged as malformed", () => {
+  assert.equal(
+    detectMalformedToolCall("<tool_call> appears in this prose", 3, []),
+    false,
+  );
+});
+
+// The endpoint owners asked that this NOT be worked around by parsing the XML
+// back into a tool call. This pins the decision so a future editor has to
+// delete an explicit test to reverse it, rather than quietly adding a parser.
+test("the malformed generation is reported, never parsed back into a tool call", async () => {
+  const provider = await startFakeProvider({
+    toolCallsBeforeAnswer: 0,
+    answer: "<echo>\n{\"text\":\"ping\"}\n</echo>",
+  });
+  const session = fakeSession();
+  let executed = 0;
+  setAdvisorBridgeForTest({
+    tools: [fakeEchoTool(() => executed++)],
+    close: async () => {},
+  });
+
+  try {
+    const result = await __runWithProviderForTest(
+      sparkTarget(provider.url) as never,
+      session,
+      "hello",
+    );
+    assert.equal(result.outcome, "malformed_tool_call");
+    assert.equal(
+      executed,
+      0,
+      "the XML was parsed and the tool was run — the endpoint owners explicitly asked that this not be worked around",
+    );
+    assert.equal(result.toolCalls, 0);
+  } finally {
+    setAdvisorBridgeForTest(null);
+    await provider.close();
+    rmSync(session.workDir, { recursive: true, force: true });
+    rmSync(session.piSessionRoot, { recursive: true, force: true });
+  }
+});
+
+// --- item 4: the egress gate must check the DESTINATION ---------------------
+//
+// The gate mapped a chain NAME to a policy provider and did a string lookup.
+// ADVISOR_BASE_URL — the URL actually dialled — was never inspected, so
+// `ADVISOR_BASE_URL=https://anything/v1` passed cleanly while the comment
+// claimed the gate was all that stood between a typo in a unit file and student
+// context going somewhere undeclared.
+
+test("the egress gate rejects a chain entry that would dial an undeclared host", () => {
+  assert.throws(
+    () =>
+      assertAdvisorChainAuthorized(
+        ["spark"],
+        () => true,
+        () => "evil.example.com",
+      ),
+    /not covered by egress provider/,
+    "a redirected base URL must fail closed",
+  );
+});
+
+test("the egress gate rejects a chain entry whose host cannot be resolved", () => {
+  assert.throws(
+    () =>
+      assertAdvisorChainAuthorized(
+        ["spark"],
+        () => true,
+        () => undefined,
+      ),
+    /no resolvable endpoint host/,
+  );
+});
+
+test("the egress gate accepts the declared spark host", () => {
+  assert.doesNotThrow(() =>
+    assertAdvisorChainAuthorized(
+      ["spark"],
+      () => true,
+      () => "gcspark.clemson.edu",
+    ),
+  );
+});
+
+// The shipped default must pass its own gate, host check included.
+test("the shipped chain passes the host check with the shipped base URL", () => {
+  assert.doesNotThrow(() => assertAdvisorChainAuthorized(["spark", "openai"]));
 });

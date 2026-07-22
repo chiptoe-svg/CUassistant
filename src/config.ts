@@ -169,8 +169,52 @@ export const ADVISOR_PROVIDER_CHAIN = (
 export const ADVISOR_MODEL = process.env.ADVISOR_MODEL || "qwen3.6-35b-a3b";
 export const ADVISOR_BASE_URL =
   process.env.ADVISOR_BASE_URL || "http://gcspark.clemson.edu:8080/v1";
+/**
+ * Read a positive-number env var, falling back on anything that is not one.
+ *
+ * `Number(env || d)` is NOT safe here: a non-numeric value yields NaN, and
+ * EVERY comparison against NaN is false. A cap of NaN is a cap that never
+ * fires — an unbounded loop against a provider, on a typo in a unit file.
+ */
+function positiveNumberEnv(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 /** Max tool-call rounds per turn. Unattended service: must be bounded. */
-export const ADVISOR_MAX_ROUNDS = Number(process.env.ADVISOR_MAX_ROUNDS || 8);
+export const ADVISOR_MAX_ROUNDS = positiveNumberEnv(
+  process.env.ADVISOR_MAX_ROUNDS,
+  8,
+);
+/**
+ * Wall-clock ceiling for one turn. The round cap bounds how many times the
+ * model may be asked; this bounds how long a single turn may take regardless.
+ * Without it a stalled provider holds a session's directories and the request
+ * open indefinitely — only a client disconnect ends the turn.
+ */
+export const ADVISOR_TURN_TIMEOUT_MS = positiveNumberEnv(
+  process.env.ADVISOR_TURN_TIMEOUT_MS,
+  10 * 60 * 1000,
+);
+/**
+ * Sampling temperature for the chat-completions target. The endpoint docs for
+ * qwen3.6-35b-a3b give 0.6 as the canonical value; 0 was our own invention and
+ * is not what this model is tuned for.
+ */
+export const ADVISOR_TEMPERATURE = (() => {
+  const n = Number(process.env.ADVISOR_TEMPERATURE);
+  // 0 is a legitimate temperature, so this cannot use positiveNumberEnv.
+  return Number.isFinite(n) && n >= 0 ? n : 0.6;
+})();
+/**
+ * Ceiling on the estimated token size of one provider request. The window is
+ * 64K; requests are held near 45K so a long answer plus the model's own
+ * thinking still fit. Tool results are the unbounded term.
+ */
+export const ADVISOR_MAX_REQUEST_TOKENS = positiveNumberEnv(
+  process.env.ADVISOR_MAX_REQUEST_TOKENS,
+  45000,
+);
 export const ADVISOR_MCP_PUBLIC_URL =
   process.env.ADVISOR_MCP_PUBLIC_URL || "http://127.0.0.1:8766/";
 export const ADVISOR_MCP_CATALOG_URL =

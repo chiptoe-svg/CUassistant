@@ -315,3 +315,151 @@ test("an unauthenticated GET /export/schedule is rejected", async () => {
   const res = await fetch(`${base}/export/schedule`);
   assert.equal(res.status, 401);
 });
+
+// --- /clear must not race the in-flight turn --------------------------------
+//
+// /clear used to abort without awaiting, then remove piSessionRoot. A turn
+// already past its abort check finishes non-aborted and runs
+// `cp(attemptRoot, session.piSessionRoot)` (advisor-agent.ts), RECREATING the
+// directory after the session has left the map — a transcript on disk that
+// nothing will ever remove, because the sweeper only knows about sessions still
+// in the map.
+//
+// This models exactly that shape: a turn that keeps writing to piSessionRoot
+// after the abort signal fires.
+test("/clear waits for an in-flight turn that would recreate the session directory", async () => {
+  const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+  const path = await import("node:path");
+
+  let capturedDir = "";
+  let turnStarted: () => void;
+  const started = new Promise<void>((r) => (turnStarted = r));
+
+  const raceServer = createAdvisorServer({
+    runTurn: async (session, _input, signal) => {
+      capturedDir = session.piSessionRoot;
+      turnStarted();
+      // Wait for the abort, then do what the real commit step does: write the
+      // conversation back into piSessionRoot.
+      await new Promise<void>((r) => {
+        if (signal?.aborted) return r();
+        signal?.addEventListener("abort", () => r(), { once: true });
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      mkdirSync(session.piSessionRoot, { recursive: true });
+      writeFileSync(
+        path.join(session.piSessionRoot, "session.jsonl"),
+        '{"role":"user","text":"student information"}\n',
+      );
+      return { text: "partial", toolCalls: 1, outcome: "complete" as const };
+    },
+  });
+  await new Promise<void>((r) => raceServer.listen(0, "127.0.0.1", r));
+  const racePort = (raceServer.address() as AddressInfo).port;
+  const raceBase = `http://127.0.0.1:${racePort}`;
+
+  try {
+    const res = await fetch(`${raceBase}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "test-password" }).toString(),
+      redirect: "manual",
+    });
+    const cookie = cookieFrom(res);
+
+    const chat = fetch(`${raceBase}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ message: "hi" }),
+    }).catch(() => undefined);
+
+    await started;
+    await fetch(`${raceBase}/clear`, { method: "POST", headers: { Cookie: cookie } });
+    await chat;
+
+    assert.ok(capturedDir, "sanity: the turn never ran");
+    assert.equal(
+      existsSync(capturedDir),
+      false,
+      "the in-flight turn recreated piSessionRoot after /clear — a transcript nothing will ever remove",
+    );
+  } finally {
+    resetSessionsForTest();
+    raceServer.close();
+  }
+});
+
+// --- new outcomes must not render as finished answers ------------------------
+
+test("a malformed-tool-call turn never renders its prose as an answer", async () => {
+  const prose = "<cu_public__search-clemson-classes>{}</cu_public__search-clemson-classes>";
+  const mServer = createAdvisorServer({
+    runTurn: async () => ({
+      text: prose,
+      toolCalls: 0,
+      outcome: "malformed_tool_call" as const,
+    }),
+  });
+  await new Promise<void>((r) => mServer.listen(0, "127.0.0.1", r));
+  const mBase = `http://127.0.0.1:${(mServer.address() as AddressInfo).port}`;
+
+  try {
+    const res = await fetch(`${mBase}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "test-password" }).toString(),
+      redirect: "manual",
+    });
+    const cookie = cookieFrom(res);
+    const chat = await fetch(`${mBase}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const body = (await chat.json()) as { text: string; outcome: string };
+
+    assert.equal(body.outcome, "malformed_tool_call", "the outcome must reach the client");
+    assert.ok(
+      !body.text.includes(prose),
+      "the malformed tool-call prose was rendered to the advisor as an answer",
+    );
+    assert.match(body.text, /restarted|malformed/i, "the advisor must be told the turn failed");
+  } finally {
+    resetSessionsForTest();
+    mServer.close();
+  }
+});
+
+test("a timed-out turn is marked partial rather than final", async () => {
+  const tServer = createAdvisorServer({
+    runTurn: async () => ({
+      text: "as far as I got",
+      toolCalls: 1,
+      outcome: "timeout" as const,
+    }),
+  });
+  await new Promise<void>((r) => tServer.listen(0, "127.0.0.1", r));
+  const tBase = `http://127.0.0.1:${(tServer.address() as AddressInfo).port}`;
+
+  try {
+    const res = await fetch(`${tBase}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: "test-password" }).toString(),
+      redirect: "manual",
+    });
+    const cookie = cookieFrom(res);
+    const chat = await fetch(`${tBase}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const body = (await chat.json()) as { text: string; outcome: string };
+
+    assert.equal(body.outcome, "timeout");
+    assert.match(body.text, /partial/i, "a truncated answer must say so");
+  } finally {
+    resetSessionsForTest();
+    tServer.close();
+  }
+});

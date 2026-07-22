@@ -698,7 +698,204 @@ git commit -m "feat(advisor): Codex agent with isolated tool surface, persona, a
 
 ---
 
-### Task 3: Auth seam and HTTP server
+### Task 3: Chat UI with the buffer-and-gate accessibility pattern
+
+**Files:**
+- Create: `src/advisor-ui.ts`
+- Test: `test/advisor-ui.test.ts`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produced first because Task 4's server imports these two functions.
+- Produces: `renderLoginPage(error?: string): string`, `renderChatPage(): string`
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `test/advisor-ui.test.ts`:
+
+```ts
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { renderChatPage, renderLoginPage } from "../src/advisor-ui.ts";
+
+test("login page posts to /login and shows an error when given one", () => {
+  const page = renderLoginPage();
+  assert.match(page, /<form[^>]+action="\/login"[^>]+method="post"/);
+  assert.match(page, /type="password"/);
+  assert.doesNotMatch(page, /Incorrect password/);
+  assert.match(renderLoginPage("Incorrect password."), /Incorrect password\./);
+});
+
+// Live regions only announce changes detected AFTER they are in the
+// accessibility tree, so both must be present and empty in the initial HTML.
+test("both live regions are mounted empty in the initial markup", () => {
+  const page = renderChatPage();
+  assert.match(page, /id="status"[^>]*aria-live="polite"[^>]*><\/div>/);
+  assert.match(page, /id="answers"[^>]*aria-live="polite"[^>]*>/);
+});
+
+// Buffer and gate: streaming prose mutates the DOM dozens of times a second,
+// which screen readers were never designed for.
+test("the client fetches /chat once and does not stream tokens", () => {
+  const page = renderChatPage();
+  assert.match(page, /fetch\("\/chat"/);
+  assert.doesNotMatch(page, /EventSource|ReadableStream|text\/event-stream/);
+});
+
+test("every control has an accessible name", () => {
+  const page = renderChatPage();
+  for (const id of ["send", "clear", "export", "message"]) {
+    assert.match(
+      page,
+      new RegExp(`id="${id}"[^>]*(aria-label=|>)`),
+      `${id} needs an accessible name`,
+    );
+  }
+  assert.match(page, /<label[^>]+for="message"/);
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx tsx --test test/advisor-ui.test.ts`
+Expected: FAIL — `Cannot find module '../src/advisor-ui.ts'`
+
+- [ ] **Step 3: Implement the UI**
+
+Create `src/advisor-ui.ts`:
+
+```ts
+// HTML for the advisor chat, kept out of the server module so routing stays
+// readable.
+//
+// Accessibility: buffer and gate (Title II / WCAG 2.1 AA). Streaming prose
+// token-by-token mutates the DOM dozens of times a second, which produces
+// either stutter or repeated re-reading in a screen reader. So a low-bandwidth
+// STATUS region streams progress, and the ANSWER arrives once, complete.
+// Both regions are in the initial markup and empty: a live region only
+// announces changes detected after it is already in the accessibility tree.
+
+const STYLE = `
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem;
+         margin: 2rem auto; padding: 0 1rem; }
+  #answers article { border-top: 1px solid #8888; padding: 1rem 0; }
+  .role { font-weight: 600; }
+  #status { min-height: 1.5rem; color: #595959; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  textarea { width: 100%; min-height: 5rem; font: inherit; padding: .5rem; }
+  button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; }
+  :focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
+`;
+
+function page(title: string, inner: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title><style>${STYLE}</style></head>
+<body>${inner}</body></html>`;
+}
+
+export function renderLoginPage(error = ""): string {
+  return page(
+    "Advisor chat — sign in",
+    `<h1>Advisor chat</h1>
+${error ? `<p role="alert">${error}</p>` : ""}
+<form action="/login" method="post">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Sign in</button>
+</form>`,
+  );
+}
+
+export function renderChatPage(): string {
+  return page(
+    "Advisor chat",
+    `<h1>Advisor chat</h1>
+<p>Ask about schedules, room capacity, or GC requirements. Clear the session
+when you move to another student.</p>
+
+<div id="status" role="status" aria-live="polite"></div>
+<div id="answers" aria-live="polite" aria-atomic="false"></div>
+
+<form id="composer">
+  <label for="message">Your question</label>
+  <textarea id="message" name="message" required></textarea>
+  <button id="send" type="submit">Send</button>
+  <button id="clear" type="button">Clear session</button>
+  <button id="export" type="button">Export transcript</button>
+</form>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const status = $("status"), answers = $("answers");
+
+function addAnswer(role, text) {
+  const art = document.createElement("article");
+  const h = document.createElement("h2");
+  h.className = "role"; h.textContent = role;
+  const p = document.createElement("p"); p.textContent = text;
+  art.append(h, p); answers.append(art);
+}
+
+$("composer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const message = $("message").value.trim();
+  if (!message) return;
+  addAnswer("You", message);
+  $("message").value = "";
+  $("send").disabled = true;
+  status.textContent = "Checking the schedule\\u2026";
+  try {
+    const r = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "request failed");
+    addAnswer("Advisor chat", data.text);
+    status.textContent = "Response ready.";
+  } catch (err) {
+    status.textContent = "Something went wrong. Please try again.";
+  } finally {
+    $("send").disabled = false;
+    $("message").focus();   // focus stays on input, never yanked to the answer
+  }
+});
+
+$("clear").addEventListener("click", async () => {
+  await fetch("/clear", { method: "POST" });
+  answers.replaceChildren();
+  status.textContent = "Session cleared.";
+  $("message").focus();
+});
+
+$("export").addEventListener("click", () => { location.href = "/export"; });
+</script>`,
+  );
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx tsx --test test/advisor-ui.test.ts`
+Expected: PASS, 4 tests
+
+- [ ] **Step 5: Typecheck and commit**
+
+Run: `npm run typecheck`
+
+```bash
+git add src/advisor-ui.ts test/advisor-ui.test.ts
+git commit -m "feat(advisor): chat UI using the buffer-and-gate accessibility pattern"
+```
+
+---
+
+### Task 4: Auth seam and HTTP server
 
 **Files:**
 - Create: `src/advisor-auth.ts`
@@ -707,7 +904,7 @@ git commit -m "feat(advisor): Codex agent with isolated tool surface, persona, a
 - Modify: `package.json` (add `advisor` script)
 
 **Interfaces:**
-- Consumes: `createSession`, `getSession`, `clearSession`, `sweepExpired` from `src/advisor-session.ts`; `runAdvisorTurn` from `src/advisor-agent.ts`.
+- Consumes: `renderLoginPage`/`renderChatPage` from `src/advisor-ui.ts`; `createSession`, `getSession`, `clearSession`, `sweepExpired` from `src/advisor-session.ts`; `runAdvisorTurn` from `src/advisor-agent.ts`.
 - Produces:
   - `authenticate(req: IncomingMessage): { advisorId: string } | null`
   - `checkPassword(supplied: string): boolean`
@@ -972,202 +1169,6 @@ Run: `npm run typecheck`
 ```bash
 git add src/advisor-auth.ts src/advisor-server.ts test/advisor-auth.test.ts package.json
 git commit -m "feat(advisor): HTTP service with shared-password auth and advisorId seam"
-```
-
----
-
-### Task 4: Chat UI with the buffer-and-gate accessibility pattern
-
-**Files:**
-- Create: `src/advisor-ui.ts`
-- Test: `test/advisor-ui.test.ts`
-
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `renderLoginPage(error?: string): string`, `renderChatPage(): string`
-
-- [ ] **Step 1: Write the failing tests**
-
-Create `test/advisor-ui.test.ts`:
-
-```ts
-import assert from "node:assert/strict";
-import test from "node:test";
-
-import { renderChatPage, renderLoginPage } from "../src/advisor-ui.ts";
-
-test("login page posts to /login and shows an error when given one", () => {
-  const page = renderLoginPage();
-  assert.match(page, /<form[^>]+action="\/login"[^>]+method="post"/);
-  assert.match(page, /type="password"/);
-  assert.doesNotMatch(page, /Incorrect password/);
-  assert.match(renderLoginPage("Incorrect password."), /Incorrect password\./);
-});
-
-// Live regions only announce changes detected AFTER they are in the
-// accessibility tree, so both must be present and empty in the initial HTML.
-test("both live regions are mounted empty in the initial markup", () => {
-  const page = renderChatPage();
-  assert.match(page, /id="status"[^>]*aria-live="polite"[^>]*><\/div>/);
-  assert.match(page, /id="answers"[^>]*aria-live="polite"[^>]*>/);
-});
-
-// Buffer and gate: streaming prose mutates the DOM dozens of times a second,
-// which screen readers were never designed for.
-test("the client fetches /chat once and does not stream tokens", () => {
-  const page = renderChatPage();
-  assert.match(page, /fetch\("\/chat"/);
-  assert.doesNotMatch(page, /EventSource|ReadableStream|text\/event-stream/);
-});
-
-test("every control has an accessible name", () => {
-  const page = renderChatPage();
-  for (const id of ["send", "clear", "export", "message"]) {
-    assert.match(
-      page,
-      new RegExp(`id="${id}"[^>]*(aria-label=|>)`),
-      `${id} needs an accessible name`,
-    );
-  }
-  assert.match(page, /<label[^>]+for="message"/);
-});
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `npx tsx --test test/advisor-ui.test.ts`
-Expected: FAIL — `Cannot find module '../src/advisor-ui.ts'`
-
-- [ ] **Step 3: Implement the UI**
-
-Create `src/advisor-ui.ts`:
-
-```ts
-// HTML for the advisor chat, kept out of the server module so routing stays
-// readable.
-//
-// Accessibility: buffer and gate (Title II / WCAG 2.1 AA). Streaming prose
-// token-by-token mutates the DOM dozens of times a second, which produces
-// either stutter or repeated re-reading in a screen reader. So a low-bandwidth
-// STATUS region streams progress, and the ANSWER arrives once, complete.
-// Both regions are in the initial markup and empty: a live region only
-// announces changes detected after it is already in the accessibility tree.
-
-const STYLE = `
-  :root { color-scheme: light dark; }
-  body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem;
-         margin: 2rem auto; padding: 0 1rem; }
-  #answers article { border-top: 1px solid #8888; padding: 1rem 0; }
-  .role { font-weight: 600; }
-  #status { min-height: 1.5rem; color: #595959; }
-  label { display: block; font-weight: 600; margin-bottom: .25rem; }
-  textarea { width: 100%; min-height: 5rem; font: inherit; padding: .5rem; }
-  button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; }
-  :focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
-`;
-
-function page(title: string, inner: string): string {
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title><style>${STYLE}</style></head>
-<body>${inner}</body></html>`;
-}
-
-export function renderLoginPage(error = ""): string {
-  return page(
-    "Advisor chat — sign in",
-    `<h1>Advisor chat</h1>
-${error ? `<p role="alert">${error}</p>` : ""}
-<form action="/login" method="post">
-  <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="current-password" required>
-  <button type="submit">Sign in</button>
-</form>`,
-  );
-}
-
-export function renderChatPage(): string {
-  return page(
-    "Advisor chat",
-    `<h1>Advisor chat</h1>
-<p>Ask about schedules, room capacity, or GC requirements. Clear the session
-when you move to another student.</p>
-
-<div id="status" role="status" aria-live="polite"></div>
-<div id="answers" aria-live="polite" aria-atomic="false"></div>
-
-<form id="composer">
-  <label for="message">Your question</label>
-  <textarea id="message" name="message" required></textarea>
-  <button id="send" type="submit">Send</button>
-  <button id="clear" type="button">Clear session</button>
-  <button id="export" type="button">Export transcript</button>
-</form>
-
-<script>
-const $ = (id) => document.getElementById(id);
-const status = $("status"), answers = $("answers");
-
-function addAnswer(role, text) {
-  const art = document.createElement("article");
-  const h = document.createElement("h2");
-  h.className = "role"; h.textContent = role;
-  const p = document.createElement("p"); p.textContent = text;
-  art.append(h, p); answers.append(art);
-}
-
-$("composer").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const message = $("message").value.trim();
-  if (!message) return;
-  addAnswer("You", message);
-  $("message").value = "";
-  $("send").disabled = true;
-  status.textContent = "Checking the schedule\\u2026";
-  try {
-    const r = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || "request failed");
-    addAnswer("Advisor chat", data.text);
-    status.textContent = "Response ready.";
-  } catch (err) {
-    status.textContent = "Something went wrong. Please try again.";
-  } finally {
-    $("send").disabled = false;
-    $("message").focus();   // focus stays on input, never yanked to the answer
-  }
-});
-
-$("clear").addEventListener("click", async () => {
-  await fetch("/clear", { method: "POST" });
-  answers.replaceChildren();
-  status.textContent = "Session cleared.";
-  $("message").focus();
-});
-
-$("export").addEventListener("click", () => { location.href = "/export"; });
-</script>`,
-  );
-}
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `npx tsx --test test/advisor-ui.test.ts`
-Expected: PASS, 4 tests
-
-- [ ] **Step 5: Typecheck and commit**
-
-Run: `npm run typecheck`
-
-```bash
-git add src/advisor-ui.ts test/advisor-ui.test.ts
-git commit -m "feat(advisor): chat UI using the buffer-and-gate accessibility pattern"
 ```
 
 ---
@@ -1471,7 +1472,7 @@ git commit -m "feat(advisor): schema-validated schedule artifacts rendered host-
 - Modify: `CLAUDE.md` (note the new service)
 
 **Interfaces:**
-- Consumes: the `advisor` npm script from Task 3.
+- Consumes: the `advisor` npm script from Task 4.
 - Produces: nothing consumed by later tasks.
 
 - [ ] **Step 1: Create the launchd plist**
@@ -1569,15 +1570,15 @@ git commit -m "feat(advisor): launchd service on 8770"
 | `CODEX_HOME` isolation + per-session | 1 (dirs), 2 (config + test) |
 | Persona (`advisor/AGENTS.md`) and skills | 2 |
 | 8765 exclusion | 2 |
-| Sessions, clear, TTL, per-cookie isolation | 1, 3 |
-| Files in / transcript out | 3 |
+| Sessions, clear, TTL, per-cookie isolation | 1, 4 |
+| Files in / transcript out | 4 |
 | Artifacts, prose-vs-schema | 5 |
-| Auth + `advisorId` seam | 3 |
-| Accessibility | 4 |
+| Auth + `advisorId` seam | 4 |
+| Accessibility | 3 |
 | Metadata-only audit | 2 |
 | Testing | every task |
 | Deployment | 6 |
 
 **Known gap, deliberately deferred:** the spec's "re-verify against `check-schedule-conflicts` before rendering" is not implemented. Task 5 validates the schema and rejects malformed output, but does not re-run the conflict check on the proposed sections. That is a second validation layer worth adding once real advisor use shows whether the agent actually proposes conflicting sections — building it now would be speculative.
 
-**Type consistency:** `AdvisorSession` fields (`id`, `advisorId`, `workDir`, `codexHome`, `threadId`, `history`, `lastTouched`) are used identically in Tasks 1, 2, 3. `runAdvisorTurn` returns `{ text, toolCalls }` in Task 2 and is destructured that way in Tasks 3 and 5. `SESSION_COOKIE` is defined once in Task 3 and used only there.
+**Type consistency:** `AdvisorSession` fields (`id`, `advisorId`, `workDir`, `codexHome`, `threadId`, `history`, `lastTouched`) are used identically in Tasks 1, 2, 4. `runAdvisorTurn` returns `{ text, toolCalls }` in Task 2 and is destructured that way in Tasks 4 and 5. `SESSION_COOKIE` is defined once in Task 4 and used only there.

@@ -118,14 +118,123 @@ test("createAdvisorMcpBridge returns the union of tools from each connected serv
 
   const bridge = await createAdvisorMcpBridge(deps);
 
-  const expected = serverNames
-    .flatMap((name, i) => toolsByServer[i]!.map((t) => `${name}__${t.name}`))
-    .sort();
+  const expected = toolsByServer.flat().map((t) => t.name).sort();
   assert.deepEqual(
     bridge.tools.map((t) => t.name).sort(),
     expected,
   );
   assert.equal(bridge.tools.length, expected.length);
+
+  await bridge.close();
+});
+
+// --- bare tool names --------------------------------------------------------
+//
+// The Spark endpoint's quantized qwen3.6-35b-a3b degrades on
+// `<server>__<tool>` names: it emits <tool_call> XML into `content` with
+// finish_reason "stop" and zero structured tool_calls. Replaying a captured
+// payload, prefixes-stripped was the ONLY change that flipped 0/3 to 3/3 —
+// and it did so while making the tools block LARGER than a namespaced variant
+// that still failed, so size is not the mechanism. Namespacing here is
+// therefore a live outage, not a style choice.
+
+test("MCP tools are exposed under their bare names, with no server prefix", async () => {
+  const serverNames = Object.keys(advisorMcpServers());
+  const clients = serverNames.map((_name, i) => fakeClient({ tools: [fakeTool(`search_thing_${i}`)] }));
+  const { deps } = makeDeps(clients);
+
+  const bridge = await createAdvisorMcpBridge(deps);
+
+  assert.deepEqual(
+    bridge.tools.map((t) => t.name).sort(),
+    serverNames.map((_name, i) => `search_thing_${i}`).sort(),
+  );
+  for (const tool of bridge.tools) {
+    assert.doesNotMatch(
+      tool.name,
+      /__/,
+      `tool "${tool.name}" is namespaced; the endpoint stops emitting structured tool_calls`,
+    );
+  }
+
+  await bridge.close();
+});
+
+// The server qualifier is not lost, just moved off the wire: `label` is
+// UI-display metadata in pi-agent-core and is never serialized into the
+// request, so it keeps provenance readable without costing the model anything.
+test("the server qualifier survives on label, which never reaches the wire", async () => {
+  const serverNames = Object.keys(advisorMcpServers());
+  const clients = serverNames.map((_name, i) => fakeClient({ tools: [fakeTool(`labelled_${i}`)] }));
+  const { deps } = makeDeps(clients);
+
+  const bridge = await createAdvisorMcpBridge(deps);
+
+  assert.deepEqual(
+    bridge.tools.map((t) => t.label).sort(),
+    serverNames.map((name, i) => `${name}:labelled_${i}`).sort(),
+  );
+
+  await bridge.close();
+});
+
+// Dropping the prefix reintroduces the collision risk it was preventing. A
+// silently shadowed tool is worse than the collision: the agent would call one
+// server believing it called the other. It must fail loudly at startup, naming
+// both servers and the tool.
+test("two servers exposing the same tool name throws at startup, naming both servers", async () => {
+  const serverNames = Object.keys(advisorMcpServers());
+  assert.ok(serverNames.length >= 2, "test needs at least two configured servers");
+
+  const clients = serverNames.map(() => fakeClient({ tools: [fakeTool("get_courses")] }));
+  const { deps } = makeDeps(clients);
+
+  await assert.rejects(
+    () => createAdvisorMcpBridge(deps),
+    (err: Error) => {
+      assert.match(err.message, /collision/i);
+      assert.match(err.message, /get_courses/, "the colliding tool must be named");
+      assert.match(err.message, new RegExp(serverNames[0]!), "the first server must be named");
+      assert.match(err.message, new RegExp(serverNames[1]!), "the second server must be named");
+      return true;
+    },
+  );
+});
+
+// A collision must not be swallowed by the per-server skip-and-continue
+// handler that tolerates unreachable servers — that handler would turn a fatal
+// misconfiguration back into a silent shadow.
+test("a collision is fatal, not logged and skipped like an unreachable server", async () => {
+  const serverNames = Object.keys(advisorMcpServers());
+  const clients = serverNames.map(() => fakeClient({ tools: [fakeTool("get_courses")] }));
+  const { deps } = makeDeps(clients);
+
+  const originalConsoleError = console.error;
+  const loggedErrors: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args);
+  };
+  try {
+    await assert.rejects(() => createAdvisorMcpBridge(deps), /collision/i);
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.ok(
+    !loggedErrors.some((args) => String(args[0]).includes("skipping MCP server")),
+    "a collision must not be downgraded to a skipped-server log line",
+  );
+});
+
+// Distinct names across servers must NOT trip the guard, or the collision test
+// above would pass against a bridge that simply throws on every startup.
+test("distinct tool names across servers do not trip the collision guard", async () => {
+  const serverNames = Object.keys(advisorMcpServers());
+  const clients = serverNames.map((_name, i) => fakeClient({ tools: [fakeTool(`distinct_${i}`)] }));
+  const { deps } = makeDeps(clients);
+
+  const bridge = await createAdvisorMcpBridge(deps);
+  assert.equal(bridge.tools.length, serverNames.length);
 
   await bridge.close();
 });
@@ -155,7 +264,7 @@ test("a server that fails to connect is skipped, not fatal — the other servers
   }
 
   const expected = serverNames
-    .map((name, i) => (i === failingIndex ? null : `${name}__only_${i}`))
+    .map((_name, i) => (i === failingIndex ? null : `only_${i}`))
     .filter((name): name is string => name !== null)
     .sort();
   assert.deepEqual(bridge.tools.map((t) => t.name).sort(), expected);

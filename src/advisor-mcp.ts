@@ -51,9 +51,39 @@ async function loadToolsFromClient(serverName: string, client: ClientLike): Prom
   return listed.tools.map((tool) => mcpToolToPiTool(serverName, tool, client));
 }
 
+/**
+ * Expose each MCP tool under its BARE name — no `<server>__<tool>` prefix.
+ *
+ * The prefixing was inherited from nanoclaw, where it prevents collisions
+ * between servers. It also breaks the model. The Spark endpoint's quantized
+ * qwen3.6-35b-a3b degrades on double-underscore-namespaced tool names: it emits
+ * <tool_call> XML into `content` with finish_reason "stop" and zero structured
+ * tool_calls, i.e. the advisor never calls a tool at all.
+ *
+ * Established by replaying a captured wire payload, 3 trials each,
+ * non-streaming:
+ *
+ *   captured as-is (namespaced)   0/3    tools block 14918 chars
+ *   prefixes stripped             3/3    tools block 14735 chars  <-- only change
+ *   descriptions trimmed to 80ch  3/3    tools block  9965
+ *   first 12 tools (namespaced)   1/3    tools block 10401
+ *   first 8 tools (namespaced)    3/3
+ *
+ * Size is NOT the mechanism: the smaller 12-tool namespaced variant fails while
+ * the LARGER stripped variant is clean. The prefix is the only variable that
+ * flips it.
+ *
+ * `label` keeps the server qualifier: it is UI-display metadata in
+ * pi-agent-core and never reaches the wire, so it costs the model nothing while
+ * keeping tool provenance visible to a human reading the transcript.
+ *
+ * Dropping the prefix reintroduces the collision risk it was preventing. See
+ * the guard in createAdvisorMcpBridge, which fails startup loudly rather than
+ * letting one server silently shadow another's tool.
+ */
 function mcpToolToPiTool(serverName: string, tool: McpTool, client: ClientLike): AgentTool {
   return {
-    name: `${serverName}__${tool.name}`,
+    name: tool.name,
     label: `${serverName}:${tool.name}`,
     description: tool.description ?? `${tool.name} from ${serverName}`,
     parameters: Type.Unsafe(
@@ -165,8 +195,12 @@ export async function createAdvisorMcpBridge(
   const servers = advisorMcpServers();
   const runtimes: AdvisorMcpBridge[] = [];
   const tools: AgentTool[] = [];
+  // Tool name -> the server that contributed it, so a collision can name BOTH
+  // sides in the error.
+  const owners = new Map<string, string>();
 
   for (const [serverName, config] of Object.entries(servers)) {
+    let loaded: AgentTool[];
     // Isolate per-server failures: a down or misconfigured MCP server
     // (unreachable, 401, bad URL) must not crash the whole agent. Log and
     // skip it; the agent keeps the tools from the servers that did connect.
@@ -177,7 +211,7 @@ export async function createAdvisorMcpBridge(
       const client = deps.createClient();
 
       await client.connect(transport);
-      tools.push(...(await loadToolsFromClient(serverName, client)));
+      loaded = await loadToolsFromClient(serverName, client);
       runtimes.push({
         tools: [],
         async close() {
@@ -189,6 +223,35 @@ export async function createAdvisorMcpBridge(
       console.error(
         `[advisor-mcp] skipping MCP server "${serverName}": ${err instanceof Error ? err.message : String(err)}`,
       );
+      continue;
+    }
+
+    // Deliberately OUTSIDE the try above. A name collision is a configuration
+    // fault, not a per-server connection failure, and must kill startup rather
+    // than be swallowed by the skip-and-continue handler.
+    //
+    // Tools are exposed under bare names (see mcpToolToPiTool), so two servers
+    // offering the same tool name would leave one silently shadowing the other
+    // — strictly worse than the collision itself, because the agent would call
+    // one server believing it had called the other, and every answer built on
+    // that result would be confidently wrong with nothing in the transcript to
+    // show it.
+    //
+    // No collisions exist across the three servers today. The guard is here
+    // because gc_curriculum_wiki is currently skipped for want of a token, so
+    // its tool names have never actually been enumerated against the others.
+    for (const tool of loaded) {
+      const existing = owners.get(tool.name);
+      if (existing !== undefined) {
+        await Promise.allSettled(runtimes.map(async (runtime) => runtime.close()));
+        throw new Error(
+          `advisor MCP tool name collision: "${tool.name}" is exposed by both ` +
+            `"${existing}" and "${serverName}"; tools are exposed under bare names, so one ` +
+            `would silently shadow the other — rename the tool on one of the servers`,
+        );
+      }
+      owners.set(tool.name, serverName);
+      tools.push(tool);
     }
   }
 

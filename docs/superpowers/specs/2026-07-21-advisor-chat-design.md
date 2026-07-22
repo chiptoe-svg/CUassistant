@@ -1,7 +1,7 @@
 # Advisor Chat — Design
 
 **Date:** 2026-07-21
-**Status:** Approved (design); ready for implementation plan.
+**Status:** Implemented 2026-07-21.
 
 ## Goal
 

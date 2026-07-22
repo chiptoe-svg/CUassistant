@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CUassistant advisor chat service for launchd.
+
+  Runs the advisor chat HTTP server on 127.0.0.1:8770 (ADVISOR_PORT).
+  Advisors reach it through a reverse proxy (e.g. Caddy) that terminates
+  TLS; this service itself binds loopback only.
+
+  Security note: ADVISOR_PASSWORD MUST be injected at the environment
+  level by OneCLI vault (or equivalent secret manager) — do NOT write
+  the password into this plist. Secrets do not belong in plist files.
+  The service fails closed (every login attempt rejected) if
+  ADVISOR_PASSWORD is unset, which is correct — do not "fix" that by
+  hardcoding a password here.
+
+  This service consumes the public MCP servers (8766, 8767) over
+  loopback and adds no MCP tools of its own. It never talks to 8765
+  (the credentialed server). Tool/policy changes to those servers do
+  not require restarting this service — but restarting this service
+  ends every in-flight advisor conversation (sessions are in-memory).
+
+  Setup (one time):
+    1. Confirm NPM_PATH below matches `which npm` on this host.
+    2. Ensure ADVISOR_PASSWORD is set in the environment this launchd
+       job inherits (vault-injected), not in this file.
+    3. cp launchd/com.cuassistant.advisor.plist ~/Library/LaunchAgents/
+    4. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cuassistant.advisor.plist
+    5. launchctl list | grep advisor
+    6. curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8770/
+
+  To unload:
+    launchctl bootout gui/$(id -u)/com.cuassistant.advisor
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.cuassistant.advisor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/npm</string>
+    <string>run</string>
+    <string>advisor</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/admin/projects/CUassistant</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/admin</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key>
+  <string>/Users/admin/Library/Logs/cuassistant.advisor.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/admin/Library/Logs/cuassistant.advisor.err.log</string>
+</dict>
+</plist>

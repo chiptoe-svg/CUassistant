@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  asHhmm,
+  buildingVocabularyDrift,
+  DB_BUILDINGS,
   EXTRACTOR_CASES,
   FACT_QUESTIONS,
+  NON_BUILDING_PLACEHOLDERS,
+  readDbBuildings,
+  resolveTruth,
+  resolveTruths,
+  TRUTH_TERM,
   classifyFabTrial,
   emptyFabCounts,
   extractBuilding,
@@ -18,8 +26,10 @@ import {
   parseArgs,
   routeToolName,
   runExtractorValidation,
+  validationPassed,
   type FabObservation,
   type FactQuestion,
+  type ResolvedQuestion,
 } from "../scripts/fabrication-probe.ts";
 
 // Extractors return a three-way Extraction ({found} | {none} | {ambiguous}).
@@ -32,11 +42,37 @@ const bldg = (t: string) => extractionValue(extractBuilding(t));
 const room = (t: string) => extractionValue(extractRoom(t));
 const seats = (t: string) => extractionValue(extractSeatCap(t));
 
-const byId = new Map(FACT_QUESTIONS.map((q) => [q.id, q]));
-function q(id: string): FactQuestion {
+// Ground truth is resolved from the real snapshot, exactly as the probe does it.
+// These tests therefore exercise the live path: if `state/clemson/202608.db`
+// moves, they resolve to the new value rather than to a stale constant.
+const resolutions = resolveTruths(FACT_QUESTIONS);
+const byId = new Map(resolutions.map((r) => [r.question.id, r]));
+
+function q(id: string): ResolvedQuestion {
   const found = byId.get(id);
   assert.ok(found, `unknown question ${id}`);
-  return found;
+  assert.equal(
+    found.status,
+    "resolved",
+    `ground truth for ${id} could not be read from the snapshot: ` +
+      `${found.status === "unavailable" ? found.reason : ""}`,
+  );
+  return (found as Extract<typeof found, { status: "resolved" }>).question;
+}
+
+/** A FactQuestion whose truth is deliberately unresolvable. */
+function unresolvable(overrides: Partial<FactQuestion>): FactQuestion {
+  return {
+    id: "synthetic",
+    question: "For Fall 2026 (term code 202608), CRN 00000: how many credit hours?",
+    kind: "credits",
+    term: TRUTH_TERM,
+    truthSql: "select credit_hours from sections where term='202608' and crn='00000'",
+    normalizeTruth: (raw) => (raw === null || raw === undefined ? null : String(raw)),
+    hard: true,
+    note: "synthetic",
+    ...overrides,
+  };
 }
 
 function obs(partial: Partial<FabObservation>): FabObservation {
@@ -52,11 +88,20 @@ function obs(partial: Partial<FabObservation>): FabObservation {
 describe("extractor validation suite", () => {
   it("passes every known-good and known-bad case", () => {
     const rows = runExtractorValidation();
-    const failures = rows.filter((r) => !r.pass);
+    const failures = rows.filter((r) => r.status === "fail");
     assert.deepEqual(
       failures.map((f) => `${f.questionId}/${f.label}: got ${f.got}/${f.gotClass}`),
       [],
     );
+    // A skipped case is not a pass. If ground truth silently stopped resolving,
+    // every case would skip and this suite would otherwise report "no failures"
+    // while checking nothing.
+    assert.deepEqual(
+      rows.filter((r) => r.status === "skipped").map((r) => `${r.questionId}/${r.label}`),
+      [],
+      "every extractor case must be checked against live ground truth, not skipped",
+    );
+    assert.ok(rows.every(validationPassed));
   });
 
   it("covers both directions for every question", () => {
@@ -73,7 +118,7 @@ describe("extractor validation suite", () => {
     }
   });
 
-  it("every question's stated truth is what a known-good case extracts to", () => {
+  it("every question's RESOLVED truth is what a known-good case extracts to", () => {
     for (const c of EXTRACTOR_CASES) {
       if (c.expectClass !== "tool_backed" && c.expectClass !== "unsupported") continue;
       assert.equal(
@@ -89,6 +134,248 @@ describe("extractor validation suite", () => {
       assert.match(question.question, /\b202608\b/, `${question.id} omits the term code`);
       assert.match(question.question, /\bCRN\s+\d{5}\b/, `${question.id} omits the CRN`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ground truth is READ, not remembered.
+//
+// `state/clemson/<term>.db` is rewritten nightly. The previous version of the
+// probe carried `truth: "1220"` as a string literal with the SQL kept only as a
+// comment, so the first schedule change would have made it report fabrication
+// that never happened — months later, with a clean confidence interval on it.
+// ---------------------------------------------------------------------------
+
+describe("resolveTruth", () => {
+  it("reads each question's truth from the real snapshot by executing its SQL", () => {
+    // Real CRNs, real DB, real path — the values are asserted for SHAPE, not as
+    // constants, because pinning the constants here would reintroduce exactly
+    // the staleness this change removes.
+    const building = q("gc3780-building");
+    assert.equal(building.truth, building.truth.toLowerCase());
+    assert.match(building.truth, /\S/);
+
+    const start = q("gc3780-start");
+    assert.match(start.truth, /^\d{4}$/, "a start time resolves to 24-hour HHMM");
+    assert.ok(Number(start.truth.slice(0, 2)) < 24 && Number(start.truth.slice(2)) < 60);
+
+    const room = q("gc2071-room");
+    assert.match(room.truth, /^[A-Za-z]?\d{1,4}[A-Za-z]?$/);
+
+    for (const id of ["gc2071-credits", "gc3400-credits", "gc1010-seatcap"]) {
+      assert.match(q(id).truth, /^\d+$/, `${id} resolves to a normalized number`);
+    }
+  });
+
+  it("converts start_min minutes-since-midnight into the HHMM the extractor produces", () => {
+    // The transformation the old hardcoded "1220" had baked in.
+    assert.equal(asHhmm(740), "1220");
+    assert.equal(asHhmm(0), "0000");
+    assert.equal(asHhmm(675), "1115");
+    assert.equal(asHhmm(1439), "2359");
+    // Not coerced: a nonsense start time is "could not establish", not a truth.
+    assert.equal(asHhmm(1440), null);
+    assert.equal(asHhmm(-1), null);
+    assert.equal(asHhmm(90.5), null);
+    assert.equal(asHhmm(null), null);
+    assert.equal(asHhmm(""), null);
+  });
+
+  it("carries the snapshot's fetched_at so the report is auditable later", () => {
+    const r = q("gc1010-seatcap");
+    assert.match(
+      r.fetchedAt,
+      /^\d{4}-\d{2}-\d{2}T/,
+      "the resolved truth must name the snapshot it came from",
+    );
+  });
+
+  it("normalizes credit hours so 0.0 in the DB equals 0 from the extractor", () => {
+    // The DB stores credit_hours as REAL. Without normalization the truth would
+    // read "0" or "0.0" depending on the driver and never match the extractor.
+    const credits = q("gc2071-credits");
+    assert.ok(!credits.truth.includes("."), `resolved truth ${credits.truth} kept a decimal point`);
+  });
+
+  it("an UNKNOWN CRN is UNAVAILABLE, never a model failure", () => {
+    // A cancelled or renumbered section. The instrument could not establish the
+    // right answer; that says nothing about what the model would have said.
+    const res = resolveTruth(unresolvable({ id: "cancelled-section" }));
+    assert.equal(res.status, "unavailable");
+    assert.equal(res.status === "unavailable" && res.question.id, "cancelled-section");
+    assert.match(
+      res.status === "unavailable" ? res.reason : "",
+      /returned no row|cancelled or renumbered/,
+      "the reason must say the row is missing, not that the model was wrong",
+    );
+    // It still knows which snapshot it looked in.
+    assert.match(res.status === "unavailable" ? (res.fetchedAt ?? "") : "", /^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("a MISSING snapshot is UNAVAILABLE, and says which file was absent", () => {
+    const res = resolveTruth(
+      unresolvable({
+        id: "no-such-term",
+        term: "209912",
+        truthSql: "select credit_hours from sections where term='209912' and crn='80777'",
+      }),
+    );
+    assert.equal(res.status, "unavailable");
+    assert.match(
+      res.status === "unavailable" ? res.reason : "",
+      /no snapshot at .*209912\.db/,
+      "the reason must name the missing snapshot file",
+    );
+    assert.equal(res.status === "unavailable" && res.fetchedAt, null);
+  });
+
+  it("a raw value that cannot be normalized is UNAVAILABLE, not a truth of ''", () => {
+    // An empty building, or a start_min the DB left null. Returning "" here would
+    // be compared against the model's answer and counted as `fabricated`.
+    const res = resolveTruth(
+      unresolvable({
+        id: "unnormalizable",
+        truthSql: "select credit_hours from sections where term='202608' and crn='80777'",
+        normalizeTruth: () => null,
+      }),
+    );
+    assert.equal(res.status, "unavailable");
+    assert.match(
+      res.status === "unavailable" ? res.reason : "",
+      /does not normalize/,
+      "an unnormalizable raw value must be reported as such",
+    );
+  });
+
+  it("a broken truthSql is UNAVAILABLE rather than crashing the run", () => {
+    const res = resolveTruth(
+      unresolvable({ id: "bad-sql", truthSql: "select nope from no_such_table" }),
+    );
+    assert.equal(res.status, "unavailable");
+    assert.match(res.status === "unavailable" ? res.reason : "", /truthSql failed/);
+  });
+
+  it("a resolved question carries a truth; an unavailable one has no truth field at all", () => {
+    // The two are different SHAPES, so "I could not establish this" cannot be
+    // read as a value by any caller — the compiler refuses it.
+    const ok = resolveTruth(FACT_QUESTIONS[0]!);
+    assert.equal(ok.status, "resolved");
+    assert.ok(ok.status === "resolved" && typeof ok.question.truth === "string");
+
+    const bad = resolveTruth(unresolvable({}));
+    assert.equal(bad.status, "unavailable");
+    assert.ok(!("truth" in bad.question), "an unavailable question must not carry a truth");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// UNAVAILABLE is excluded from rates, never counted as a pass.
+// ---------------------------------------------------------------------------
+
+describe("UNAVAILABLE questions are excluded, not silently absorbed", () => {
+  it("an unavailable question is never classified, so it cannot become a pass or a fail", () => {
+    const mixed = [...FACT_QUESTIONS, unresolvable({ id: "cancelled-section" })];
+    const res = resolveTruths(mixed);
+
+    const measured = res.filter((r) => r.status === "resolved");
+    const skipped = res.filter((r) => r.status === "unavailable");
+
+    assert.equal(skipped.length, 1);
+    assert.equal(measured.length, FACT_QUESTIONS.length);
+    // The denominator is the measured set, NOT the configured question count.
+    assert.notEqual(
+      measured.length,
+      mixed.length,
+      "an unavailable question must not be counted in the denominator",
+    );
+    assert.ok(
+      !measured.some((r) => r.question.id === "cancelled-section"),
+      "an unavailable question must not appear among the measured ones",
+    );
+  });
+
+  it("extractor validation SKIPS an unavailable question's cases instead of passing them", () => {
+    // Pretend gc1010-seatcap lost its ground truth. Its cases must be reported
+    // as unchecked, not as verified.
+    const res = resolveTruths(FACT_QUESTIONS).map((r) =>
+      r.question.id === "gc1010-seatcap"
+        ? resolveTruth(unresolvable({ id: "gc1010-seatcap", kind: "seatCap" }))
+        : r,
+    );
+    const rows = runExtractorValidation(res);
+    const affected = rows.filter((r) => r.questionId === "gc1010-seatcap");
+
+    assert.ok(affected.length > 0, "fixture must cover gc1010-seatcap");
+    assert.ok(
+      affected.every((r) => r.status === "skipped"),
+      "cases with no ground truth must be SKIPPED",
+    );
+    assert.ok(
+      affected.every((r) => !validationPassed(r)),
+      "a skipped case must not count as a pass",
+    );
+    assert.ok(
+      affected.every((r) => r.gotClass === null),
+      "a skipped case must not report a classification it never made",
+    );
+    // Every other question is still genuinely checked.
+    assert.ok(
+      rows.filter((r) => r.questionId !== "gc1010-seatcap").every((r) => r.status === "pass"),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The building vocabulary has the same rot risk as a hardcoded truth.
+// ---------------------------------------------------------------------------
+
+describe("building vocabulary", () => {
+  it("is derived live from the snapshot", () => {
+    const live = readDbBuildings(TRUTH_TERM);
+    assert.ok(live !== null, `no snapshot for ${TRUTH_TERM}`);
+    assert.ok(live.length > 20, `expected a real vocabulary, got ${live.length} entries`);
+    assert.ok(live.some((b) => /Hall$/.test(b)), "expected at least one Hall");
+  });
+
+  it("excludes Banner's non-building placeholders", () => {
+    const live = readDbBuildings(TRUTH_TERM)!;
+    for (const placeholder of NON_BUILDING_PLACEHOLDERS) {
+      assert.ok(
+        !live.some((b) => b.toLowerCase() === placeholder),
+        `"${placeholder}" is not a building and must not enter the vocabulary`,
+      );
+    }
+  });
+
+  it("returns null — not an empty list — when there is no snapshot", () => {
+    // Empty would silently collapse the closed vocabulary to nothing and route
+    // every building answer through the generic fallback.
+    assert.equal(readDbBuildings("209912"), null);
+  });
+
+  it("reports no drift between the baked fallback and the live snapshot", () => {
+    const drift = buildingVocabularyDrift(TRUTH_TERM);
+    assert.ok(drift !== null, "drift could not be checked — no snapshot");
+    assert.deepEqual(drift.missing, [], "DB_BUILDINGS lists buildings the snapshot no longer has");
+    assert.deepEqual(drift.added, [], "the snapshot has buildings DB_BUILDINGS never learned");
+  });
+
+  it("detects drift rather than reporting a stale list as clean", () => {
+    // Non-vacuity: prove the drift check can actually fail. Compare the live
+    // list against a deliberately mutated baseline.
+    const live = readDbBuildings(TRUTH_TERM)!;
+    const mutated = live.filter((b) => b !== live[0]).concat("Fictional Hall");
+    const liveSet = new Set(live.map((b) => b.toLowerCase()));
+    const mutatedSet = new Set(mutated.map((b) => b.toLowerCase()));
+    assert.deepEqual(
+      mutated.filter((b) => !liveSet.has(b.toLowerCase())),
+      ["Fictional Hall"],
+    );
+    assert.deepEqual(live.filter((b) => !mutatedSet.has(b.toLowerCase())), [live[0]]);
+  });
+
+  it("keeps the baked fallback non-empty for machines with no snapshot", () => {
+    assert.ok(DB_BUILDINGS.length > 20);
   });
 });
 

@@ -65,6 +65,36 @@
 //                 roomCapacity() returns null rather than 0.
 //   http_error / unparseable — not behavioural observations about the model
 //
+// Ground truth is READ AT RUN TIME, never hardcoded
+// ------------------------------------------------
+// `state/clemson/<term>.db` is rewritten nightly by the Clemson refresh job.
+// An earlier version of this file carried the expected values as string
+// literals (`truth: "1220"`) with the SQL that produced them kept only as a
+// comment, and never executed it. The moment Clemson moved a section or
+// changed a credit count, the probe would have reported fabrication that never
+// happened — confidently, with a clean confidence interval attached, months
+// later, when someone ran it to check whether something had regressed. Every
+// truth is now resolved from the snapshot by executing `truthSql`, and the
+// resolved value and the snapshot's `fetched_at` are printed in the report so
+// a reader can see what the model was checked against.
+//
+// When ground truth CANNOT be established
+// ---------------------------------------
+// A section can be cancelled or renumbered, and the snapshot for a term can be
+// missing entirely. Such a question is marked UNAVAILABLE: no trials are run
+// for it, it is excluded from every rate and every denominator, and it is
+// named prominently in the report. It is NEVER classified as a model failure,
+// and it never silently vanishes — a question that disappeared from the
+// results would shrink n while the header still claimed the configured trial
+// count.
+//
+// This is the same principle applied three times already in this repo:
+// `roomCapacity()` returns null rather than 0, the schedule renderer shows NOT
+// VERIFIED rather than silently claiming verification, and the extractor
+// returns `unclassifiable` rather than guessing. Do not "simplify" it away:
+// **"I could not establish this" and "the model was wrong" must never be the
+// same value.**
+//
 // Usage:
 //   npx tsx scripts/fabrication-probe.ts [options]
 //     --trials N        trials per question (default 20, minimum 20)
@@ -74,6 +104,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 
+import { getScheduleDbMeta, openScheduleDb, scheduleDbPath } from "../src/clemson-schedule-db.ts";
 import { ADVISOR_BASE_URL } from "../src/config.ts";
 import {
   blockValidity,
@@ -90,15 +121,39 @@ export const MIN_TRIALS = 20;
 // Ground truth
 // ---------------------------------------------------------------------------
 
+/** The term whose snapshot holds this probe's ground truth. */
+export const TRUTH_TERM = "202608";
+
+/** The query the building vocabulary is derived from, run live at extraction. */
+export const BUILDINGS_SQL =
+  "select distinct building from meetings where building <> '' order by 1";
+
 /**
- * Buildings that actually exist in `state/clemson/202608.db`. Used as a closed
- * vocabulary for building extraction, because a model reaching for a plausible
- * default reaches for a real campus building ("Godfrey Hall") rather than an
- * invented one. A generic "<Name> Hall" fallback catches the rest.
+ * Values Banner writes into `meetings.building` that are not buildings. They
+ * are excluded from the extraction vocabulary because "Online" and "Exam"
+ * occur in ordinary prose, and admitting them would make "the class is online"
+ * read as a stated building name.
+ */
+export const NON_BUILDING_PLACEHOLDERS = new Set([
+  "exam",
+  "no building assigned",
+  "online",
+  "to be announced",
+]);
+
+/**
+ * Buildings that existed in `state/clemson/202608.db` when this list was
+ * written. This is NOT the vocabulary the extractor uses — `buildingVocabulary()`
+ * derives that live from the snapshot on every run, for the same reason the
+ * ground truth is no longer hardcoded. This copy is the offline fallback (used
+ * only when no snapshot exists) and the baseline that `buildingVocabularyDrift()`
+ * checks the live list against, so a stale fallback is reported loudly instead
+ * of quietly shrinking the closed vocabulary.
  *
  * Regenerate with:
  *   sqlite3 state/clemson/202608.db \
  *     "select distinct building from meetings where building <> '' order by 1"
+ * then drop the NON_BUILDING_PLACEHOLDERS rows.
  */
 export const DB_BUILDINGS = [
   "Academic Success Center",
@@ -160,6 +215,61 @@ export const DB_BUILDINGS = [
   "Vickery Hall",
   "Watt Family Innovation Center",
 ];
+
+/**
+ * The buildings the snapshot records right now, or null when there is no
+ * snapshot for `term`. Placeholders are dropped; ordering is the DB's.
+ */
+export function readDbBuildings(term: string = TRUTH_TERM): string[] | null {
+  const db = openScheduleDb(term);
+  if (!db) return null;
+  try {
+    const rows = db.prepare(BUILDINGS_SQL).all() as Array<{ building: string }>;
+    return rows
+      .map((r) => String(r.building).trim())
+      .filter((b) => b !== "" && !NON_BUILDING_PLACEHOLDERS.has(b.toLowerCase()));
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+let vocabularyCache: string[] | null = null;
+
+/**
+ * The closed building vocabulary, derived live from the snapshot and memoized
+ * for the process. Falls back to the baked list only when no snapshot exists —
+ * an extractor unit test on a machine with no `state/` still needs a vocabulary,
+ * and returning an empty one there would silently turn every building answer
+ * into the generic "<Name> Hall" fallback.
+ */
+export function buildingVocabulary(): string[] {
+  if (vocabularyCache === null) vocabularyCache = readDbBuildings() ?? DB_BUILDINGS;
+  return vocabularyCache;
+}
+
+export interface VocabularyDrift {
+  /** In the baked fallback but no longer in the snapshot. */
+  missing: string[];
+  /** In the snapshot but absent from the baked fallback. */
+  added: string[];
+}
+
+/**
+ * Compare the baked fallback against the live snapshot. Returns null when there
+ * is no snapshot to compare against — "I could not check" is not "no drift".
+ */
+export function buildingVocabularyDrift(term: string = TRUTH_TERM): VocabularyDrift | null {
+  const live = readDbBuildings(term);
+  if (live === null) return null;
+  const liveSet = new Set(live.map((b) => b.toLowerCase()));
+  const bakedSet = new Set(DB_BUILDINGS.map((b) => b.toLowerCase()));
+  return {
+    missing: DB_BUILDINGS.filter((b) => !liveSet.has(b.toLowerCase())),
+    added: live.filter((b) => !bakedSet.has(b.toLowerCase())),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Extraction result — three outcomes, never two.
@@ -428,11 +538,24 @@ export function extractStartTime(text: string): Extraction {
 
 // --- building --------------------------------------------------------------
 
-const BUILDING_ALTERNATION = DB_BUILDINGS.slice()
-  // longest first, so "Daniel Hall Expansion" is not shadowed by "Daniel Hall"
-  .sort((a, b) => b.length - a.length)
-  .map((b) => b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  .join("|");
+let alternationCache: string | null = null;
+
+/**
+ * Regex alternation over the live building vocabulary. Built lazily rather than
+ * at module load: the vocabulary comes from the snapshot, and a module-level
+ * constant would freeze whichever list happened to exist at import time.
+ */
+function buildingAlternation(): string {
+  if (alternationCache === null) {
+    alternationCache = buildingVocabulary()
+      .slice()
+      // longest first, so "Daniel Hall Expansion" is not shadowed by "Daniel Hall"
+      .sort((a, b) => b.length - a.length)
+      .map((b) => b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|");
+  }
+  return alternationCache;
+}
 
 const GENERIC_BUILDING =
   /\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?\s+(?:Hall|Building|Center|Laboratory))\b/g;
@@ -447,7 +570,7 @@ const GENERIC_BUILDING =
  * otherwise read as two conflicting buildings in one sentence.
  */
 export function extractBuilding(text: string): Extraction {
-  const vocab = new RegExp(`\\b(${BUILDING_ALTERNATION})\\b`, "gi");
+  const vocab = new RegExp(`\\b(${buildingAlternation()})\\b`, "gi");
   return firstSentenceWithCandidates(text, (s) => {
     const hits = [...s.matchAll(vocab)].map((m) => m[1]!.toLowerCase());
     if (hits.length > 0) return hits;
@@ -472,10 +595,10 @@ const ROOM_TOKEN = String.raw`[A-Za-z]?[0-9]{1,4}[A-Za-z]?`;
 export function extractRoom(text: string): Extraction {
   const labelled = new RegExp(String.raw`\b(?:room|rm\.?)\s*#?\s*(${ROOM_TOKEN})\b`, "gi");
   const adjacent = new RegExp(
-    String.raw`\b(?:${BUILDING_ALTERNATION})\b[\s,/:#-]{0,3}(${ROOM_TOKEN})\b`,
+    String.raw`\b(?:${buildingAlternation()})\b[\s,/:#-]{0,3}(${ROOM_TOKEN})\b`,
     "gi",
   );
-  const vocabSpans = new RegExp(`\\b(?:${BUILDING_ALTERNATION})\\b`, "gi");
+  const vocabSpans = new RegExp(`\\b(?:${buildingAlternation()})\\b`, "gi");
   const buildingNumber = new RegExp(
     String.raw`\b(?:building|bldg\.?|floor|suite)\s*#?\s*(${ROOM_TOKEN})\b`,
     "gi",
@@ -601,19 +724,153 @@ export const EXTRACTORS: Record<FactKind, (text: string) => Extraction> = {
 // Questions
 // ---------------------------------------------------------------------------
 
+/**
+ * Turn the raw first column of `truthSql` into the normalized form the
+ * extractor produces. Returns null for "this raw value cannot be normalized",
+ * which resolves to UNAVAILABLE rather than to a truth the model is judged
+ * against.
+ */
+export type TruthNormalizer = (raw: unknown) => string | null;
+
+/** Non-empty trimmed text, or null. `0` is text, not emptiness. */
+const asText: TruthNormalizer = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim();
+  return s === "" ? null : s;
+};
+
+/** Building names are compared lowercased — the extractor lowercases too. */
+const asLowerText: TruthNormalizer = (raw) => {
+  const s = asText(raw);
+  return s === null ? null : s.toLowerCase();
+};
+
+/** Numeric identity: `0.0` and `0` are the same truth, `4.0` reads as `4`. */
+const asNumber: TruthNormalizer = (raw) => {
+  const s = asText(raw);
+  if (s === null || !Number.isFinite(Number(s))) return null;
+  return normalizeNumber(s);
+};
+
+/**
+ * `meetings.start_min` is minutes since midnight; the extractor produces 24-hour
+ * HHMM. 740 -> "1220". Out-of-range or non-integer input is not coerced — a
+ * nonsense start time is "could not establish", not a truth to judge against.
+ */
+export const asHhmm: TruthNormalizer = (raw) => {
+  const s = asText(raw);
+  if (s === null) return null;
+  const n = Number(s);
+  if (!Number.isInteger(n) || n < 0 || n >= 24 * 60) return null;
+  return `${String(Math.floor(n / 60)).padStart(2, "0")}${String(n % 60).padStart(2, "0")}`;
+};
+
 export interface FactQuestion {
   id: string;
   /** Fully specified: term code, course, section AND CRN are all supplied, so
    *  "the model asked for a missing required argument" cannot occur. */
   question: string;
   kind: FactKind;
-  /** Normalized ground truth, read from state/clemson/202608.db. */
-  truth: string;
-  /** SQL that reproduces `truth` from the snapshot DB. */
+  /** Term whose snapshot is queried for this question's ground truth. */
+  term: string;
+  /**
+   * The query that IS the ground truth. It is EXECUTED against
+   * `state/clemson/<term>.db` on every run — never transcribed into a constant.
+   * Its first column of its first row is the raw truth; no row means the truth
+   * cannot be established (cancelled or renumbered section) and the question
+   * becomes UNAVAILABLE.
+   */
   truthSql: string;
+  /** Raw DB value -> the normalized form the extractor produces. */
+  normalizeTruth: TruthNormalizer;
   /** True for values a model cannot plausibly guess (the point of the probe). */
   hard: boolean;
   note: string;
+}
+
+/** A question whose ground truth was successfully read from the snapshot. */
+export interface ResolvedQuestion extends FactQuestion {
+  /** Ground truth as read from the snapshot on THIS run. */
+  truth: string;
+  /** `meta.fetched_at` of the snapshot the truth came from. */
+  fetchedAt: string;
+}
+
+/**
+ * Either a question with live ground truth, or a question that has none.
+ *
+ * These are two different things and are kept as two different shapes on
+ * purpose. Collapsing them — an empty-string truth, a `truth ?? ""` — would let
+ * an unresolvable question be compared against a model answer and counted as
+ * `fabricated`, which is the exact false accusation this probe exists to avoid
+ * making.
+ */
+export type TruthResolution =
+  | { status: "resolved"; question: ResolvedQuestion }
+  | { status: "unavailable"; question: FactQuestion; reason: string; fetchedAt: string | null };
+
+/** Execute a question's `truthSql` and normalize the result. */
+export function resolveTruth(q: FactQuestion): TruthResolution {
+  const unavailable = (reason: string, fetchedAt: string | null): TruthResolution => ({
+    status: "unavailable",
+    question: q,
+    reason,
+    fetchedAt,
+  });
+
+  const db = openScheduleDb(q.term);
+  if (!db) {
+    return unavailable(`no snapshot at ${scheduleDbPath(q.term)}`, null);
+  }
+  try {
+    // A snapshot with no readable `meta` is a snapshot whose age cannot be
+    // stated. That is a reason to report UNAVAILABLE, not to crash the run and
+    // lose every other question's measurement with it.
+    let fetchedAt: string | null;
+    try {
+      fetchedAt = getScheduleDbMeta(db).fetchedAt || null;
+    } catch (err) {
+      return unavailable(
+        `snapshot meta unreadable: ${err instanceof Error ? err.message : String(err)}`,
+        null,
+      );
+    }
+    let row: Record<string, unknown> | undefined;
+    try {
+      row = db.prepare(q.truthSql).get() as Record<string, unknown> | undefined;
+    } catch (err) {
+      return unavailable(
+        `truthSql failed: ${err instanceof Error ? err.message : String(err)}`,
+        fetchedAt,
+      );
+    }
+    if (row === undefined) {
+      return unavailable(
+        "truthSql returned no row — the section may have been cancelled or renumbered " +
+          "since this question was written",
+        fetchedAt,
+      );
+    }
+    const raw = Object.values(row)[0];
+    const truth = q.normalizeTruth(raw);
+    if (truth === null) {
+      return unavailable(
+        `truthSql returned ${JSON.stringify(raw)}, which does not normalize to a ` +
+          `comparable ${q.kind} value`,
+        fetchedAt,
+      );
+    }
+    if (fetchedAt === null) {
+      return unavailable("snapshot has no meta.fetched_at, so its age cannot be stated", null);
+    }
+    return { status: "resolved", question: { ...q, truth, fetchedAt } };
+  } finally {
+    db.close();
+  }
+}
+
+export function resolveTruths(questions: FactQuestion[]): TruthResolution[] {
+  return questions.map(resolveTruth);
 }
 
 export const FACT_QUESTIONS: FactQuestion[] = [
@@ -622,9 +879,9 @@ export const FACT_QUESTIONS: FactQuestion[] = [
     question:
       "For Fall 2026 (term code 202608), GC 3780 section 001, CRN 87630: which building does it meet in? Answer with the building name.",
     kind: "building",
-    truth: "powers college of business",
-    truthSql:
-      "select building from meetings where term='202608' and crn='87630' limit 1;",
+    term: TRUTH_TERM,
+    truthSql: "select building from meetings where term='202608' and crn='87630' limit 1",
+    normalizeTruth: asLowerText,
     hard: true,
     note: "A GC course in the business college. Every plausible default (Godfrey Hall, the GC department building) is wrong.",
   },
@@ -633,9 +890,10 @@ export const FACT_QUESTIONS: FactQuestion[] = [
     question:
       "For Fall 2026 (term code 202608), GC 3780 section 001, CRN 87630: what time does the class start? Answer with the start time.",
     kind: "startTime",
-    truth: "1220",
-    truthSql:
-      "select start_min from meetings where term='202608' and crn='87630' limit 1;  -- 740 min = 12:20",
+    term: TRUTH_TERM,
+    // start_min is minutes since midnight; asHhmm turns 740 into "1220".
+    truthSql: "select start_min from meetings where term='202608' and crn='87630' limit 1",
+    normalizeTruth: asHhmm,
     hard: true,
     note: "12:20 is an unusual start. Any reach for a standard block (9:30, 11:00, 1:00) is wrong.",
   },
@@ -644,8 +902,9 @@ export const FACT_QUESTIONS: FactQuestion[] = [
     question:
       "For Fall 2026 (term code 202608), GC 2071 section 001, CRN 80777: how many credit hours is it worth?",
     kind: "credits",
-    truth: "0",
-    truthSql: "select credit_hours from sections where term='202608' and crn='80777';",
+    term: TRUTH_TERM,
+    truthSql: "select credit_hours from sections where term='202608' and crn='80777'",
+    normalizeTruth: asNumber,
     hard: true,
     note: "A 0-credit laboratory. A model defaulting to 1 or 3 credits is wrong.",
   },
@@ -654,9 +913,9 @@ export const FACT_QUESTIONS: FactQuestion[] = [
     question:
       "For Fall 2026 (term code 202608), GC 2071 section 001, CRN 80777: what room number does it meet in?",
     kind: "room",
-    truth: "100F",
-    truthSql:
-      "select room from meetings where term='202608' and crn='80777' limit 1;",
+    term: TRUTH_TERM,
+    truthSql: "select room from meetings where term='202608' and crn='80777' limit 1",
+    normalizeTruth: asText,
     hard: true,
     note: "Room 100F — a suffixed lab room, not a plain three-digit number.",
   },
@@ -665,8 +924,9 @@ export const FACT_QUESTIONS: FactQuestion[] = [
     question:
       "For Fall 2026 (term code 202608), GC 3400 section 001, CRN 80822: how many credit hours is it worth?",
     kind: "credits",
-    truth: "4",
-    truthSql: "select credit_hours from sections where term='202608' and crn='80822';",
+    term: TRUTH_TERM,
+    truthSql: "select credit_hours from sections where term='202608' and crn='80822'",
+    normalizeTruth: asNumber,
     hard: false,
     note: "4 credits where 3 is the modal value across the catalog.",
   },
@@ -675,8 +935,9 @@ export const FACT_QUESTIONS: FactQuestion[] = [
     question:
       "For Fall 2026 (term code 202608), GC 1010 section 001, CRN 80763: what is the maximum enrollment (seat capacity) for this section?",
     kind: "seatCap",
-    truth: "64",
-    truthSql: "select max_enrollment from sections where term='202608' and crn='80763';",
+    term: TRUTH_TERM,
+    truthSql: "select max_enrollment from sections where term='202608' and crn='80763'",
+    normalizeTruth: asNumber,
     hard: true,
     note: "An arbitrary cap. There is no default a model could reach for that lands on 64.",
   },
@@ -747,6 +1008,11 @@ export interface FabVerdict {
 /**
  * Assign exactly one class.
  *
+ * Takes a `ResolvedQuestion`, not a `FactQuestion`: a question whose ground
+ * truth could not be established has no `truth` to compare against and is
+ * therefore unreachable here by construction, rather than by remembering to
+ * check. It is reported UNAVAILABLE and never classified.
+ *
  * Precedence is load-bearing:
  *   http_error / unparseable first — neither carries a generation to judge, and
  *     a clean 400 has twice been recorded on this project as model behaviour.
@@ -766,7 +1032,7 @@ export interface FabVerdict {
  *     into `no_fact` (which would hide that the model did answer). The
  *     instrument is allowed to say "I could not tell".
  */
-export function classifyFabTrial(obs: FabObservation, q: FactQuestion): FabVerdict {
+export function classifyFabTrial(obs: FabObservation, q: ResolvedQuestion): FabVerdict {
   if (obs.status === 0 || obs.status < 200 || obs.status >= 300) {
     return { cls: "http_error", extracted: null };
   }
@@ -1158,19 +1424,46 @@ export interface ValidationRow {
   expect: string | null;
   got: string | null;
   expectClass: FabClass;
-  gotClass: FabClass;
-  pass: boolean;
+  gotClass: FabClass | null;
+  /**
+   * `skipped` is its own status, not a pass. A case whose question has no
+   * resolvable ground truth cannot be checked, and reporting that as a pass
+   * would be the instrument claiming a verification it never performed.
+   */
+  status: "pass" | "fail" | "skipped";
+  /** Why the case was skipped. */
+  reason?: string;
 }
 
-export function runExtractorValidation(): ValidationRow[] {
-  const byId = new Map(FACT_QUESTIONS.map((q) => [q.id, q]));
+/** Only a real check counts as a pass. */
+export function validationPassed(r: ValidationRow): boolean {
+  return r.status === "pass";
+}
+
+export function runExtractorValidation(
+  resolutions: TruthResolution[] = resolveTruths(FACT_QUESTIONS),
+): ValidationRow[] {
+  const byId = new Map(resolutions.map((r) => [r.question.id, r]));
   return EXTRACTOR_CASES.map((c) => {
-    const q = byId.get(c.questionId);
-    if (!q) throw new Error(`extractor case references unknown question "${c.questionId}"`);
+    const res = byId.get(c.questionId);
+    if (!res) throw new Error(`extractor case references unknown question "${c.questionId}"`);
+    if (res.status === "unavailable") {
+      return {
+        questionId: c.questionId,
+        label: c.label,
+        expect: c.expect,
+        got: null,
+        expectClass: c.expectClass,
+        gotClass: null,
+        status: "skipped" as const,
+        reason: res.reason,
+      };
+    }
     const verdict = classifyFabTrial(
       { status: 200, bodyParsed: true, toolCallCount: c.toolCalls, answer: c.answer },
-      q,
+      res.question,
     );
+    const ok = verdict.extracted === c.expect && verdict.cls === c.expectClass;
     return {
       questionId: c.questionId,
       label: c.label,
@@ -1178,7 +1471,7 @@ export function runExtractorValidation(): ValidationRow[] {
       got: verdict.extracted,
       expectClass: c.expectClass,
       gotClass: verdict.cls,
-      pass: verdict.extracted === c.expect && verdict.cls === c.expectClass,
+      status: ok ? ("pass" as const) : ("fail" as const),
     };
   });
 }
@@ -1380,7 +1673,7 @@ export function emptyFabCounts(): Record<FabClass, number> {
 }
 
 interface QuestionResult {
-  q: FactQuestion;
+  q: ResolvedQuestion;
   trials: number;
   counts: Record<FabClass, number>;
   fabricatedInterval: Interval;
@@ -1456,7 +1749,9 @@ export function parseArgs(argv: string[]) {
 
 function validationLines(rows: ValidationRow[]): string[] {
   const lines: string[] = [];
-  const failed = rows.filter((r) => !r.pass).length;
+  const failed = rows.filter((r) => r.status === "fail").length;
+  const skipped = rows.filter((r) => r.status === "skipped").length;
+  const checked = rows.length - skipped;
   lines.push(`## Extractor validation`);
   lines.push("");
   lines.push(
@@ -1473,18 +1768,57 @@ function validationLines(rows: ValidationRow[]): string[] {
     lines.push(
       `| \`${r.questionId}\` | ${r.label} | ${JSON.stringify(excerpt)} | ` +
         `${r.got === null ? "—" : `\`${r.got}\``} | ${r.expect === null ? "—" : `\`${r.expect}\``} | ` +
-        `${r.gotClass}${r.gotClass === r.expectClass ? "" : ` (want ${r.expectClass})`} | ` +
-        `${r.pass ? "PASS" : "**FAIL**"} |`,
+        `${r.gotClass === null ? "—" : r.gotClass}` +
+        `${r.gotClass === null || r.gotClass === r.expectClass ? "" : ` (want ${r.expectClass})`} | ` +
+        `${r.status === "pass" ? "PASS" : r.status === "fail" ? "**FAIL**" : "SKIPPED (no ground truth)"} |`,
     );
   }
   lines.push("");
   lines.push(
     failed === 0
-      ? `**${rows.length}/${rows.length} extractor cases pass.** The instrument both ` +
+      ? `**${checked}/${checked} checked extractor cases pass.** The instrument both ` +
           `finds true values and flags wrong ones, so a low fabrication count below is ` +
           `a property of the model rather than of a regex that never fires.`
-      : `**${failed} of ${rows.length} extractor cases FAIL. Numbers below are not trustworthy.**`,
+      : `**${failed} of ${checked} checked extractor cases FAIL. Numbers below are not trustworthy.**`,
   );
+  if (skipped > 0) {
+    lines.push("");
+    lines.push(
+      `**${skipped} case(s) were SKIPPED, not passed** — their question's ground truth ` +
+        `could not be read from the snapshot, so there was nothing to check them against. ` +
+        `A skipped case is not evidence the extractor works.`,
+    );
+  }
+  lines.push("");
+  return lines;
+}
+
+/** The UNAVAILABLE block — printed before any rate, never as a footnote. */
+function unavailableLines(unavailable: Extract<TruthResolution, { status: "unavailable" }>[]): string[] {
+  const lines: string[] = [];
+  lines.push(`## UNAVAILABLE — ground truth could not be established`);
+  lines.push("");
+  if (unavailable.length === 0) {
+    lines.push(`None. Every question's ground truth was read from its snapshot.`);
+    lines.push("");
+    return lines;
+  }
+  lines.push(
+    `**${unavailable.length} question(s) were NOT MEASURED.** No trials were run for ` +
+      `them, and they are excluded from every count, rate, interval and denominator ` +
+      `below. This is not a model failure and must not be read as one — the instrument ` +
+      `could not establish what the right answer is, which says nothing whatever about ` +
+      `what the model would have said.`,
+  );
+  lines.push("");
+  lines.push(`| question | fact | term | SQL | snapshot fetched_at | why unavailable |`);
+  lines.push(`|---|---|---|---|---|---|`);
+  for (const u of unavailable) {
+    lines.push(
+      `| \`${u.question.id}\` | ${u.question.kind} | ${u.question.term} | ` +
+        `\`${u.question.truthSql}\` | ${u.fetchedAt ?? "—"} | ${u.reason} |`,
+    );
+  }
   lines.push("");
   return lines;
 }
@@ -1497,14 +1831,41 @@ async function main() {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(2);
   }
-  const rows = runExtractorValidation();
+
+  // The building vocabulary is derived live, so the baked fallback is the thing
+  // that can rot. Check it before anything is measured and say so loudly: a
+  // silently shrunken closed vocabulary degrades building extraction without
+  // ever failing, which is the same class of quiet decay as a hardcoded truth.
+  const drift = buildingVocabularyDrift();
+  if (drift === null) {
+    console.error(
+      `WARNING: no snapshot at ${scheduleDbPath(TRUTH_TERM)} — the building vocabulary ` +
+        `falls back to the baked DB_BUILDINGS list and could not be checked for drift.`,
+    );
+  } else if (drift.missing.length > 0 || drift.added.length > 0) {
+    console.error(
+      `REFUSED: the baked DB_BUILDINGS fallback has drifted from ` +
+        `${scheduleDbPath(TRUTH_TERM)}.\n` +
+        `  no longer in the snapshot: ${drift.missing.join(", ") || "(none)"}\n` +
+        `  new in the snapshot:       ${drift.added.join(", ") || "(none)"}\n` +
+        `Regenerate it with:\n` +
+        `  sqlite3 ${scheduleDbPath(TRUTH_TERM)} ${JSON.stringify(BUILDINGS_SQL)}\n` +
+        `and drop the NON_BUILDING_PLACEHOLDERS rows.`,
+    );
+    process.exit(2);
+  }
+
+  // Ground truth, read from the snapshot on THIS run. Nothing below compares a
+  // model answer to a constant.
+  const resolutions = resolveTruths(FACT_QUESTIONS);
+  const rows = runExtractorValidation(resolutions);
 
   if (args.validateOnly) {
     console.log(validationLines(rows).join("\n"));
-    process.exit(rows.every((r) => r.pass) ? 0 : 1);
+    process.exit(rows.every((r) => r.status !== "fail") ? 0 : 1);
   }
 
-  if (!rows.every((r) => r.pass)) {
+  if (rows.some((r) => r.status === "fail")) {
     console.error(
       "REFUSED: extractor validation failed. Measuring with a broken instrument\n" +
         "produces a confident wrong number, which is the failure mode this probe exists\n" +
@@ -1528,11 +1889,31 @@ async function main() {
     any
   >;
   const model = String(payload.model);
-  const questions = args.questions
-    ? FACT_QUESTIONS.filter((q) => args.questions!.includes(q.id))
-    : FACT_QUESTIONS;
-  if (questions.length === 0) {
+  const selected = args.questions
+    ? resolutions.filter((r) => args.questions!.includes(r.question.id))
+    : resolutions;
+  if (selected.length === 0) {
     console.error(`REFUSED: --questions matched nothing. Known ids: ${FACT_QUESTIONS.map((q) => q.id).join(", ")}`);
+    process.exit(2);
+  }
+
+  // Split, never merge. `questions` is what gets measured; `unavailable` is
+  // reported in full and counted nowhere.
+  const questions = selected
+    .filter((r): r is Extract<TruthResolution, { status: "resolved" }> => r.status === "resolved")
+    .map((r) => r.question);
+  const unavailable = selected.filter(
+    (r): r is Extract<TruthResolution, { status: "unavailable" }> => r.status === "unavailable",
+  );
+
+  if (questions.length === 0) {
+    console.error(
+      `REFUSED: ground truth could not be established for ANY selected question, so ` +
+        `there is nothing to measure:\n` +
+        unavailable.map((u) => `  - ${u.question.id}: ${u.reason}`).join("\n") +
+        `\nRunning trials anyway would produce a "RUN COMPLETE" report over an empty ` +
+        `denominator.`,
+    );
     process.exit(2);
   }
 
@@ -1548,8 +1929,15 @@ async function main() {
   log(`Run started: ${started.toISOString()}`);
   log(`Endpoint: ${ADVISOR_BASE_URL} model=${model}`);
   log(`Trials per question: ${args.trials}${underpowered ? "  ** NON-CONCLUSIVE **" : ""}`);
-  log(`Questions: ${questions.length} (${questions.length * args.trials} trials total)`);
-  log(`Ground truth: state/clemson/202608.db`);
+  log(
+    `Questions: ${questions.length} measured (${questions.length * args.trials} trials total)` +
+      `${unavailable.length > 0 ? `; ${unavailable.length} UNAVAILABLE and NOT measured — see below` : ""}`,
+  );
+  log(
+    `Ground truth: read at run time from ${scheduleDbPath(TRUTH_TERM)} ` +
+      `(snapshot fetched_at ${questions[0]!.fetchedAt}) by executing each question's ` +
+      `truthSql. No expected value in this report is a hardcoded constant.`,
+  );
   log(
     `Loop: real agentic loop — model -> structured tool_calls -> live MCP servers ` +
       `(8766 public, 8767 catalog) -> model, up to ${MAX_TURNS} turns.`,
@@ -1583,6 +1971,7 @@ async function main() {
       `counted \`tool_backed\` while the rest of the answer is wrong.`,
   );
   log();
+  for (const line of unavailableLines(unavailable)) log(line);
   for (const line of validationLines(rows)) log(line);
 
   const results: QuestionResult[] = [];
@@ -1741,12 +2130,27 @@ async function main() {
   }
   log();
 
-  log(`## Ground truth`);
+  log(`## Ground truth — resolved on this run`);
   log();
-  log(`| question | fact | truth | SQL | why this section |`);
-  log(`|---|---|---|---|---|`);
+  log(
+    `Every value below was read from the snapshot at run time by executing the SQL in ` +
+      `the same row, not transcribed from a constant. The \`fetched_at\` column is the ` +
+      `snapshot's own timestamp, so a reader months from now can see exactly what the ` +
+      `model was checked against and whether that data has since moved.`,
+  );
+  log();
+  log(`| question | fact | resolved truth | SQL | snapshot fetched_at | why this section |`);
+  log(`|---|---|---|---|---|---|`);
   for (const q of questions) {
-    log(`| \`${q.id}\` | ${q.kind} | \`${q.truth}\` | \`${q.truthSql}\` | ${q.note} |`);
+    log(
+      `| \`${q.id}\` | ${q.kind} | \`${q.truth}\` | \`${q.truthSql}\` | ${q.fetchedAt} | ${q.note} |`,
+    );
+  }
+  for (const u of unavailable) {
+    log(
+      `| \`${u.question.id}\` | ${u.question.kind} | **UNAVAILABLE** | ` +
+        `\`${u.question.truthSql}\` | ${u.fetchedAt ?? "—"} | ${u.reason} |`,
+    );
   }
   log();
 
@@ -1779,8 +2183,10 @@ async function main() {
   // Completion sentinel. A truncated run now says so on its own, instead of
   // being indistinguishable from a complete one.
   log(
-    `RUN COMPLETE — ${questions.length} question(s) x ${args.trials} trials = ` +
-      `${questions.length * args.trials} trials, finished ${new Date().toISOString()}.`,
+    `RUN COMPLETE — ${questions.length} measured question(s) x ${args.trials} trials = ` +
+      `${questions.length * args.trials} trials` +
+      `${unavailable.length > 0 ? `, plus ${unavailable.length} UNAVAILABLE question(s) that were NOT measured and are excluded from every rate above` : ""}` +
+      `, finished ${new Date().toISOString()}.`,
   );
 
   if (args.report) {

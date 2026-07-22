@@ -296,9 +296,10 @@ The session's `CODEX_HOME` holds three things, and together they are the entire 
 **Files:**
 - Create: `src/advisor-agent.ts`
 - Create: `advisor/AGENTS.md`
+- Read (not modified): `skills/*`, `/Users/admin/projects/gc_advisor/skills/*`
 - Test: `test/advisor-agent.test.ts`
 - Modify: `package.json` (add `@openai/codex-sdk` dependency)
-- Modify: `src/config.ts` (add `ADVISOR_SKILLS`)
+- Modify: `src/config.ts` (add `ADVISOR_SKILLS`, `ADVISOR_SKILL_ROOTS`)
 
 **Interfaces:**
 - Consumes: `AdvisorSession` from `src/advisor-session.ts`.
@@ -311,14 +312,29 @@ The session's `CODEX_HOME` holds three things, and together they are the entire 
 
 Run: `npm install @openai/codex-sdk@0.145.0`
 
-- [ ] **Step 2: Add the skills config value**
+- [ ] **Step 2: Add the skills config values**
 
 Append to the advisor section of `src/config.ts`:
 
 ```ts
-/** Skills copied from skills/ into each session's CODEX_HOME, comma-separated. */
+/**
+ * Directories searched for advisor skills, in order. gc_advisor owns the
+ * curriculum skills; this follows the existing GC catalog bridge above, which
+ * shells out to gc_advisor rather than copying its data — same principle,
+ * keeping each repo the single source of truth for what it owns.
+ */
+export const ADVISOR_SKILL_ROOTS = (
+  process.env.ADVISOR_SKILL_ROOTS ||
+  "/Users/admin/projects/CUassistant/skills,/Users/admin/projects/gc_advisor/skills"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+/** Skills materialised into each session's CODEX_HOME, comma-separated. */
 export const ADVISOR_SKILLS = (
-  process.env.ADVISOR_SKILLS || "clemson-schedule-advising"
+  process.env.ADVISOR_SKILLS ||
+  "clemson-schedule-advising,gc-curriculum-lookup,gc-advisor"
 )
   .split(",")
   .map((s) => s.trim())
@@ -459,7 +475,11 @@ test("the persona and skills are materialised into CODEX_HOME", () => {
     assert.match(agents, /petitions/i, "persona must state the exceptions boundary");
     assert.ok(
       existsSync(path.join(dir, "skills", "clemson-schedule-advising", "SKILL.md")),
-      "the advising skill must be present",
+      "the schedule skill must be present",
+    );
+    assert.ok(
+      existsSync(path.join(dir, "skills", "gc-curriculum-lookup", "SKILL.md")),
+      "the curriculum skill must be present (it lives in the gc_advisor repo)",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -530,6 +550,7 @@ import {
   ADVISOR_MODEL,
   ADVISOR_PROVIDER,
   ADVISOR_SKILLS,
+  ADVISOR_SKILL_ROOTS,
 } from "./config.js";
 import { buildChildEnv } from "./child-env.js";
 import { log } from "./log.js";
@@ -570,13 +591,16 @@ export function materializeCodexHome(
     path.join(codexHome, "AGENTS.md"),
   );
 
-  const skillsRoot = fileURLToPath(new URL("../skills", import.meta.url));
   for (const name of skills) {
-    const src = path.join(skillsRoot, name);
-    if (!existsSync(path.join(src, "SKILL.md"))) {
+    const src = ADVISOR_SKILL_ROOTS.map((root) => path.join(root, name)).find(
+      (dir) => existsSync(path.join(dir, "SKILL.md")),
+    );
+    if (!src) {
       // Loud, not silent: a renamed or deleted skill would otherwise produce an
       // agent that quietly knows less than the operator thinks it does.
-      throw new Error(`advisor skill not found: ${name} (looked in ${src})`);
+      throw new Error(
+        `advisor skill not found: ${name} (searched ${ADVISOR_SKILL_ROOTS.join(", ")})`,
+      );
     }
     cpSync(src, path.join(codexHome, "skills", name), { recursive: true });
   }

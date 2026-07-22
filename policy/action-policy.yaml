@@ -590,10 +590,15 @@ data_egress:
       basis: "on-host inference (Ollama); content does not leave the machine"
       authorized: true
 
-    - provider: local_vllm
-      scope: local
+    # NOT on-host. vLLM runs on the DGX Spark box (gcspark.clemson.edu:8080) and
+    # is reached over the campus network, in the clear — content leaves this
+    # machine, so it is declared external and named for the host it actually
+    # talks to. Basis is the hardware being Clemson-owned and Clemson-managed,
+    # not an absence of egress.
+    - provider: clemson_spark_vllm
+      scope: external
       sends: [subject, body]
-      basis: "on-host inference (vLLM on DGX Spark); content does not leave Clemson-managed hardware"
+      basis: "vLLM on Clemson-owned DGX Spark (gcspark.clemson.edu); on-premises Clemson-managed hardware, reached over the campus network via plaintext HTTP"
       authorized: true
 
   # Model backends that a CONSUMING AGENT (a paired MCP client) may attest to.

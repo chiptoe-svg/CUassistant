@@ -21,7 +21,10 @@
 // skills total ~6,500 tokens; inlining them would spend a tenth of a 64k window
 // on every turn.
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { cp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -36,7 +39,6 @@ import {
   ADVISOR_BASE_URL,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_MODEL,
-  ADVISOR_PROVIDER,
   ADVISOR_PROVIDER_CHAIN,
   OPENAI_API_KEY,
 } from "./config.js";
@@ -54,12 +56,54 @@ export function loadSystemPrompt(): string {
   );
 }
 
-export async function initAdvisorTools(): Promise<void> {
-  if (!isEgressAuthorized(ADVISOR_PROVIDER)) {
-    throw new Error(
-      `egress provider "${ADVISOR_PROVIDER}" is not authorized in policy/action-policy.yaml`,
-    );
+// --- egress authorization ---------------------------------------------------
+//
+// The chain names in ADVISOR_PROVIDER_CHAIN are internal labels ("spark",
+// "openai"); policy/action-policy.yaml declares destinations under its own
+// provider vocabulary. Every chain entry that we are about to send bytes to has
+// to resolve to a declared, authorized destination, so the mapping is explicit
+// and exhaustive. An entry with no mapping is a destination nobody reviewed —
+// that fails closed, exactly like an entry whose policy record says
+// `authorized: false`.
+//
+// ADVISOR_PROVIDER_CHAIN is env-settable, so this is the only thing standing
+// between a typo in a unit file and student context going somewhere undeclared.
+const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, string>> = {
+  spark: "clemson_spark_vllm",
+  openai: "openai_api",
+};
+
+/**
+ * Throw unless every name in `chain` maps to a policy destination that is
+ * authorized for content egress. FAIL CLOSED on an unmapped name.
+ *
+ * `isAuthorized` is injectable so tests can exercise the unauthorized branch
+ * without editing the shipped policy file.
+ */
+export function assertAdvisorChainAuthorized(
+  chain: readonly string[],
+  isAuthorized: (provider: string) => boolean = isEgressAuthorized,
+): void {
+  for (const name of chain) {
+    const declared = CHAIN_EGRESS_PROVIDER[name];
+    if (!declared) {
+      throw new Error(
+        `advisor provider "${name}" has no destination declared in policy/action-policy.yaml; refusing to send content to an undeclared endpoint`,
+      );
+    }
+    if (!isAuthorized(declared)) {
+      throw new Error(
+        `advisor provider "${name}" sends to egress provider "${declared}", which is not authorized in policy/action-policy.yaml`,
+      );
+    }
   }
+}
+
+export async function initAdvisorTools(): Promise<void> {
+  // Fail at startup on a misconfigured chain rather than at the first turn.
+  // runAdvisorTurn re-checks each entry it actually reaches; this is the early
+  // warning, not the gate.
+  assertAdvisorChainAuthorized(ADVISOR_PROVIDER_CHAIN);
   bridge = await createAdvisorMcpBridge();
   log.info("advisor tools ready", { tools: bridge.tools.length });
 }
@@ -123,35 +167,56 @@ function resolveProvider(name: string): ProviderTarget | null {
 // --- turn -------------------------------------------------------------------
 
 /**
- * Reuse this session's Pi conversation if one already exists under
- * `piSessionRoot`, so multi-turn context survives across requests. The root is
- * per-AdvisorSession and removed by clearSession, so nothing leaks between
- * advisors.
+ * How a turn ended.
+ *
+ * - `complete`  — the model finished its answer.
+ * - `round_cap` — the tool-round cap stopped the loop; `text` is whatever the
+ *   model had said by then and is NOT a finished answer.
+ * - `aborted`   — the caller's AbortSignal fired; `text` is a partial answer.
+ *
+ * Callers must distinguish these. A partial answer rendered as a final one is
+ * the failure mode this type exists to prevent.
+ */
+export type AdvisorTurnOutcome = "complete" | "round_cap" | "aborted";
+
+export interface AdvisorTurnResult {
+  text: string;
+  toolCalls: number;
+  outcome: AdvisorTurnOutcome;
+}
+
+/**
+ * Reuse the Pi conversation under `sessionsRoot` if one exists, so multi-turn
+ * context survives across requests. The root is per-AdvisorSession and removed
+ * by clearSession, so nothing leaks between advisors.
  */
 async function openOrCreatePiSession(
   env: NodeExecutionEnv,
-  session: AdvisorSession,
+  sessionsRoot: string,
+  cwd: string,
 ) {
-  const repo = new JsonlSessionRepo({
-    fs: env,
-    sessionsRoot: session.piSessionRoot,
-  });
-  const existing = await repo.list({ cwd: session.workDir });
+  const repo = new JsonlSessionRepo({ fs: env, sessionsRoot });
+  const existing = await repo.list({ cwd });
   if (existing.length > 0) return repo.open(existing[0]!);
-  return repo.create({ cwd: session.workDir });
+  return repo.create({ cwd });
 }
 
 async function runWithProvider(
   target: ProviderTarget,
   session: AdvisorSession,
+  piSessionRoot: string,
   input: string,
   signal?: AbortSignal,
-): Promise<{ text: string; toolCalls: number }> {
+): Promise<AdvisorTurnResult> {
   const env = new NodeExecutionEnv({
     cwd: session.workDir,
     shellEnv: process.env,
   });
-  const piSession = await openOrCreatePiSession(env, session);
+  const piSession = await openOrCreatePiSession(
+    env,
+    piSessionRoot,
+    session.workDir,
+  );
 
   const harness = new AgentHarness({
     env,
@@ -164,31 +229,48 @@ async function runWithProvider(
   });
 
   // Round cap. 0.75.4's AgentHarness exposes neither a maxRounds option nor the
-  // agent loop's shouldStopAfterTurn hook, so the bound is enforced by counting
-  // provider requests and blocking further tool calls once the cap is reached.
-  // Blocking rather than aborting lets the model still produce a final answer.
+  // agent loop's shouldStopAfterTurn hook, so the bound is enforced through the
+  // one mechanism that actually ends the loop: `terminate` on ToolResultPatch.
+  //
+  // Blocking from the `tool_call` hook does NOT bound anything. agent-loop.js
+  // turns a blocked call into an error tool result, feeds it back, and requests
+  // again — the model can retry forever against a metered provider.
+  // `shouldTerminateToolBatch` (agent-loop.js:345) is the real exit, and it is
+  // true only when EVERY finalized call in the batch carries terminate. This
+  // hook fires per call and the predicate is round-based, so once the cap is
+  // hit every call in the batch sets it and the loop stops after this batch.
+  //
+  // Returning only `terminate` leaves the real tool output intact:
+  // agent-loop.js:454 merges `afterResult.content ?? result.content`.
   let rounds = 0;
   let toolCalls = 0;
+  let hitRoundCap = false;
   harness.on("before_provider_request", () => {
     rounds++;
     return undefined;
   });
   harness.on("tool_call", () => {
-    if (rounds >= ADVISOR_MAX_ROUNDS) {
-      return {
-        block: true,
-        reason: `tool-round cap of ${ADVISOR_MAX_ROUNDS} reached; answer from what you already have or say the tools could not answer`,
-      };
-    }
     toolCalls++;
     return undefined;
+  });
+  harness.on("tool_result", () => {
+    if (rounds < ADVISOR_MAX_ROUNDS) return undefined;
+    hitRoundCap = true;
+    return { terminate: true };
   });
 
   // temperature is not part of AgentHarnessStreamOptions in 0.75.4, so it is
   // injected into the provider payload directly.
-  harness.on("before_provider_payload", (event) => ({
-    payload: { ...(event.payload as Record<string, unknown>), temperature: 0 },
-  }));
+  //
+  // Only for chat-completions providers. The openai fallback is
+  // `openai-responses` with a reasoning model, and the Responses API rejects
+  // `temperature` for those — injecting it unconditionally would 400 the
+  // fallback on every single request, i.e. exactly when it is needed.
+  if (target.model.api === "openai-completions") {
+    harness.on("before_provider_payload", (event) => ({
+      payload: { ...(event.payload as Record<string, unknown>), temperature: 0 },
+    }));
+  }
 
   const onAbort = () => {
     void harness.abort();
@@ -217,14 +299,61 @@ async function runWithProvider(
       outputTokens: reply.usage?.output,
       totalTokens: reply.usage?.totalTokens,
       stopReason: reply.stopReason,
+      hitRoundCap,
     });
 
     if (reply.stopReason === "error") {
       throw new Error(reply.errorMessage || "provider returned an error");
     }
-    return { text, toolCalls };
+    // harness.abort() makes prompt() RESOLVE with stopReason "aborted" and
+    // whatever text had streamed so far (agent-loop.js:107 returns early on it).
+    // Without its own branch a stopped turn is indistinguishable from a finished
+    // one, and the UI's stop control would render a truncated answer as final.
+    if (reply.stopReason === "aborted") {
+      return { text, toolCalls, outcome: "aborted" };
+    }
+    return { text, toolCalls, outcome: hitRoundCap ? "round_cap" : "complete" };
   } finally {
     signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * Run one attempt against a scratch COPY of the session's Pi conversation, and
+ * fold the copy back into `session.piSessionRoot` only if the turn completed.
+ *
+ * The harness persists the user message and every partial assistant/tool
+ * message as the turn runs. Prompting the same JSONL session again after a
+ * provider failure would therefore leave a duplicate user turn and an orphaned
+ * failed assistant turn behind — permanently, in every later turn's context.
+ * Attempts are isolated so a fallback starts from the same history spark saw,
+ * and a failed or aborted attempt leaves no trace.
+ */
+async function runAttempt(
+  target: ProviderTarget,
+  session: AdvisorSession,
+  input: string,
+  signal?: AbortSignal,
+): Promise<AdvisorTurnResult> {
+  const attemptRoot = mkdtempSync(path.join(tmpdir(), "advisor-pi-try-"));
+  try {
+    await cp(session.piSessionRoot, attemptRoot, { recursive: true });
+    const result = await runWithProvider(
+      target,
+      session,
+      attemptRoot,
+      input,
+      signal,
+    );
+    // An aborted turn is discarded too: the advisor pressed stop, so the
+    // half-finished exchange should not become permanent history.
+    if (result.outcome !== "aborted") {
+      await rm(session.piSessionRoot, { recursive: true, force: true });
+      await cp(attemptRoot, session.piSessionRoot, { recursive: true });
+    }
+    return result;
+  } finally {
+    await rm(attemptRoot, { recursive: true, force: true });
   }
 }
 
@@ -232,18 +361,26 @@ export async function runAdvisorTurn(
   session: AdvisorSession,
   input: string,
   signal?: AbortSignal,
-): Promise<{ text: string; toolCalls: number }> {
+): Promise<AdvisorTurnResult> {
   if (!bridge) throw new Error("advisor tools not initialised");
 
   const errors: string[] = [];
   for (const name of ADVISOR_PROVIDER_CHAIN) {
+    // The gate on the bytes actually about to leave. Re-checked per entry
+    // reached rather than once at startup, so a fallback is authorized on its
+    // own record and not on the primary's.
+    assertAdvisorChainAuthorized([name]);
+
     const target = resolveProvider(name);
     if (!target) {
       errors.push(`${name}: not configured`);
       continue;
     }
     try {
-      return await runWithProvider(target, session, input, signal);
+      const result = await runAttempt(target, session, input, signal);
+      // A stopped turn is the caller's decision, not a provider failure. Do not
+      // burn the fallback provider re-running work the advisor cancelled.
+      return result;
     } catch (err) {
       if (signal?.aborted) throw err;
       errors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
@@ -256,3 +393,13 @@ export async function runAdvisorTurn(
   }
   throw new Error(`all advisor providers failed — ${errors.join("; ")}`);
 }
+
+/** Test seam: install a fake tool bridge without standing up MCP servers. */
+export function setAdvisorBridgeForTest(
+  b: { tools: AgentTool[]; close(): Promise<void> } | null,
+): void {
+  bridge = b;
+}
+
+/** Test seam: run a turn against an explicitly constructed provider target. */
+export const __runWithProviderForTest = runAttempt;

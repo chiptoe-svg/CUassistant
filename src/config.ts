@@ -154,9 +154,12 @@ export const ADVISOR_PASSWORD = process.env.ADVISOR_PASSWORD || "";
 export const ADVISOR_SESSION_TTL_MS = Number(
   process.env.ADVISOR_SESSION_TTL_MS || 2 * 60 * 60 * 1000,
 );
-/** Egress provider name; must be authorized in policy/action-policy.yaml. */
-export const ADVISOR_PROVIDER = process.env.ADVISOR_PROVIDER || "local_vllm";
-/** Tried in order: on-prem first, paid fallback (mirrors ask_gc). */
+/**
+ * Tried in order: on-prem first, paid fallback (mirrors ask_gc). Every entry
+ * reached must map to an authorized destination in policy/action-policy.yaml —
+ * see CHAIN_EGRESS_PROVIDER in advisor-agent.ts. This list is what the egress
+ * gate checks; there is no separate provider setting.
+ */
 export const ADVISOR_PROVIDER_CHAIN = (
   process.env.ADVISOR_PROVIDER_CHAIN || "spark,openai"
 )

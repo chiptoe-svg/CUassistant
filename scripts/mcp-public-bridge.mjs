@@ -8,8 +8,8 @@
  *
  * Port map:
  *   8765  — credentialed MCP server (requires Authorization bearer)
- *   8766  — public MCP server (Clemson class schedule, no auth)
- *   8767  — catalog MCP server (GC curriculum/degree plan, no auth)
+ *   8766  — public MCP server (Clemson class schedule, requires bearer)
+ *   8767  — catalog MCP server (GC curriculum/degree plan, requires bearer)
  *   8011  — gc-alumni MCP server (GC alumni outcomes, no auth)
  *   10255 — OneCLI credential proxy (containers fetch API credentials through it)
  *
@@ -39,6 +39,12 @@
  * 8765 is credentialed and 10255 is a credential proxy. Binding all interfaces
  * would expose both to the campus LAN. Gateway-only is the entire point of this
  * file; widening the bind would trade a connectivity bug for a security hole.
+ *
+ * (8766/8767 now bind 0.0.0.0 themselves, in their own processes, behind a
+ * bearer each. That is deliberate and scoped to those two servers — it is not a
+ * reason to widen anything here. This forwarder is a raw TCP pipe: it copies
+ * bytes between sockets and never parses or rewrites HTTP, so Authorization
+ * headers pass through untouched and containers using it need no change.)
  */
 import net from 'net';
 import os from 'os';
@@ -61,7 +67,7 @@ const DECLARED_TTL_MS = 30_000;
 const PORTS = [
   8765, // cuassistant-credentialed MCP server
   8766, // cuassistant-public MCP server (Clemson class schedule)
-  8767, // cuassistant-catalog MCP server (GC curriculum, no auth)
+  8767, // cuassistant-catalog MCP server (GC curriculum)
   8011, // gc-alumni MCP server (GC alumni outcomes, no auth)
   10255, // OneCLI credential proxy
 ];

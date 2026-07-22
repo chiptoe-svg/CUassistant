@@ -29,10 +29,39 @@ test("the credentialed server is never configured", () => {
   assert.doesNotMatch(json, /8765/, "8765 must never appear");
 });
 
-test("the public and catalog servers carry no auth header", () => {
+// 8766/8767 are campus-reachable and now require a bearer each, so the advisor
+// must present one. As with the wiki, a missing token stays a missing header
+// (a clean 401) rather than the literal string "Bearer undefined".
+//
+// Asserted with a shape match, never an equality check against the token: a
+// failing `assert.equal` prints its actual value, which would dump a live key
+// into CI logs.
+test("the public and catalog servers carry a bearer only when configured", () => {
   const servers = advisorMcpServers();
-  assert.equal(servers.cu_public!.headers, undefined);
-  assert.equal(servers.cu_catalog!.headers, undefined);
+  for (const [name, token] of [
+    ["cu_public", process.env.MCP_PUBLIC_AUTH_TOKEN],
+    ["cu_catalog", process.env.MCP_CATALOG_AUTH_TOKEN],
+  ] as const) {
+    const headers = servers[name]!.headers;
+    if (token) {
+      assert.ok(headers, `${name} must send an Authorization header`);
+      assert.match(headers.Authorization!, /^Bearer \S+$/);
+      assert.doesNotMatch(headers.Authorization!, /undefined|null/);
+    } else {
+      assert.equal(headers, undefined, `${name} sends no header without a key`);
+    }
+  }
+});
+
+// The two servers must never end up sharing a key: that would make "revoke the
+// public key" silently leave the catalog server open to it.
+test("the public and catalog bearers are distinct", () => {
+  const servers = advisorMcpServers();
+  const pub = servers.cu_public!.headers?.Authorization;
+  const cat = servers.cu_catalog!.headers?.Authorization;
+  if (pub && cat) {
+    assert.ok(pub !== cat, "cu_public and cu_catalog must not share a bearer");
+  }
 });
 
 // The curriculum wiki returns 401 without a token. A missing token must be

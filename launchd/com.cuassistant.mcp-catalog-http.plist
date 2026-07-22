@@ -2,20 +2,31 @@
 <!--
   CUassistant GC CURRICULUM MCP server (HTTP) service for launchd.
 
-  Runs the PUBLIC (no credentials) curriculum HTTP MCP server on
-  127.0.0.1:8767, exposing read-only Clemson Graphic Communications
-  curriculum tools (catalog years + degree plans). The data is bridged from
-  the separate gc_advisor project via its query.py CLI, so gc_advisor must be
-  reachable on the same machine/mount. No MCP_AUTH_TOKEN applies — this server
-  is loopback-open by design; all data served is public. Do NOT add a bearer.
+  Runs the public-DATA curriculum HTTP MCP server, exposing read-only
+  Clemson Graphic Communications curriculum tools (catalog years + degree
+  plans). The data is bridged from the separate gc_advisor project via its
+  query.py CLI, so gc_advisor must be reachable on the same machine/mount.
+
+  AUTH (required): this server is CAMPUS-REACHABLE and authenticates every
+  request against MCP_CATALOG_AUTH_TOKEN — its own bearer, distinct from the
+  public server's key and from anything on 8765. The key lives in the repo's
+  gitignored .env; do NOT write it into this plist. With the key unset the
+  process refuses to start rather than serving open.
+
+  BIND: MCP_CATALOG_HTTP_HOST (default 127.0.0.1; set to 0.0.0.0 in .env for
+  campus reach). Deliberately NOT MCP_HTTP_HOST, which is shared with the
+  credentialed server on 8765 and must stay on loopback.
+
+  NOTE: the MCP HTTP transport performs no Host/Origin validation, so off
+  loopback the bearer is the ONLY gate — there is no rebinding protection.
 
   A containerized NanoClaw agent reaches it via host.docker.internal:8767
-  with no Authorization header. The credentialed (8765) and public class-
-  schedule (8766) servers are separate processes; see
+  and must now send `Authorization: Bearer <MCP_CATALOG_AUTH_TOKEN>`. The
+  credentialed server (8765) stays loopback-only; see
   com.cuassistant.mcp-http.plist and com.cuassistant.mcp-public-http.plist.
 
-  All HTTP servers are loopback-only. Ports (track in ~/.dev-ports.yaml):
-  mcp_credentialed 8765, mcp_public 8766, mcp_curriculum 8767.
+  Ports (track in ~/.dev-ports.yaml): mcp_credentialed 8765, mcp_public 8766,
+  mcp_curriculum 8767.
 
   gc_advisor bridge paths default to /Users/admin/projects/gc_advisor. If
   gc_advisor lives elsewhere, add GC_ADVISOR_PYTHON / GC_ADVISOR_QUERY /

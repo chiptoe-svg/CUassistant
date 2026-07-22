@@ -52,27 +52,41 @@ whether they hold credentials — not by vendor domain.
   tools; it never receives credentials directly. Do not mount the host's
   `.env` or token directories into any container.
 
-### `cuassistant-public` (no credentials)
+### `cuassistant-public` / `cuassistant-catalog` (public DATA, bearer required)
 
-- **What.** The Clemson class-schedule tools backed by Clemson's public
-  Banner Browse Classes API. No credentials, public data only.
+- **What.** 8766 serves the Clemson class-schedule tools (public Banner Browse
+  Classes API); 8767 serves the GC curriculum/degree-plan tools bridged from
+  gc_advisor. The DATA is public; access to the servers is not.
 - **Transports.** Dual.
-  - **Streamable HTTP** — `npm run mcp:public:http` (`MCP_TRANSPORT=http`).
-    Binds `${MCP_PUBLIC_HTTP_HOST:-127.0.0.1}:${MCP_PUBLIC_HTTP_PORT:-8766}`.
-    This is the path a containerized NanoClaw agent uses, reaching the host via
-    `host.docker.internal:8766`. No bearer required (public data; loopback-open).
-    A launchd service (`launchd/com.cuassistant.mcp-public-http.plist`) runs it
-    as a host daemon.
-  - **stdio** — `npm run mcp:public` (`tsx src/mcp-public.ts`). Retained for
-    local/dev use only. stdio-in-container cannot work because NanoClaw's
-    container has no host path, no CUassistant repo, and no node/tsx.
-- **Inbound auth.** None — public data, no bearer. The server is
-  **loopback-open** (`127.0.0.1` only; not network-exposed).
-- **Ops note.** Both HTTP servers are loopback-only. Their ports are tracked in
-  `~/.dev-ports.yaml` (cuassistant: `mcp_credentialed` 8765, `mcp_public` 8766).
-  To bring up both: `npm run mcp:http` (credentialed, 8765) and
-  `npm run mcp:public:http` (public, 8766) — or load their respective launchd
-  plists.
+  - **Streamable HTTP** — `npm run mcp:public:http` / `npm run mcp:catalog:http`
+    (`MCP_TRANSPORT=http`). Bind
+    `${MCP_PUBLIC_HTTP_HOST:-127.0.0.1}:${MCP_PUBLIC_HTTP_PORT:-8766}` and
+    `${MCP_CATALOG_HTTP_HOST:-127.0.0.1}:${MCP_CATALOG_HTTP_PORT:-8767}`.
+    launchd services run both as host daemons.
+  - **stdio** — `npm run mcp:public` / `npm run mcp:catalog`. Local/dev only.
+- **Inbound auth.** One bearer per server: `MCP_PUBLIC_AUTH_TOKEN` and
+  `MCP_CATALOG_AUTH_TOKEN`, in the gitignored `.env`. Each server's consumer
+  source is EMPTY (`load: () => []`), so its env key is the only credential it
+  accepts — the per-agent registry behind 8765 grants nothing here, and
+  revoking one server's key does not affect the other. Unset key ⇒ the process
+  refuses to start rather than serving open.
+- **Bind hosts are per server, by design.** `MCP_PUBLIC_HTTP_HOST` and
+  `MCP_CATALOG_HTTP_HOST` are separate from `MCP_HTTP_HOST`, which is shared
+  and would drag the credentialed server on 8765 off loopback with it. 8765
+  stays loopback-only.
+- **No rebinding protection off loopback.** `StreamableHTTPServerTransport` in
+  this SDK performs no Host/Origin validation (the DNS-rebinding feature exists
+  only in the `sse.js`/express paths, which these servers do not use). Once
+  bound to `0.0.0.0`, the bearer is the ONLY gate. There is no `allowedHosts`
+  knob to set.
+- **Clients.** All four must send the header: nanoclaw's
+  `config/default-mcp-servers.json`, the per-group `mcp_servers` copies stored
+  in nanoclaw's `container_configs` DB table (these do NOT re-read the default
+  file — patch them too), and this repo's advisor (`src/advisor-mcp.ts`). The
+  `scripts/mcp-public-bridge.mjs` forwarder is a raw TCP pipe and needs no
+  change; it never parses HTTP, so Authorization headers pass through.
+- **Ops note.** Ports tracked in `~/.dev-ports.yaml` (cuassistant:
+  `mcp_credentialed` 8765, `mcp_public` 8766, `mcp_curriculum` 8767).
 
 ## Deploying tool or policy changes — RESTART REQUIRED
 

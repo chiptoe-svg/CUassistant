@@ -11,8 +11,17 @@
 // bearer token; the matched consumer id is the audit identity; grant/revoke is
 // per-agent. The server FAILS CLOSED — it refuses to start over HTTP with no
 // authorized consumers, so an un-provisioned agent on the same host gets
-// nothing. The public server runs in "open" mode (no credentials, public data)
-// and is allowed only on a loopback bind.
+// nothing.
+//
+// The public (8766) and catalog (8767) servers use the same "registry" auth,
+// but with an EMPTY consumer source and a single per-server env key
+// (MCP_PUBLIC_AUTH_TOKEN / MCP_CATALOG_AUTH_TOKEN), so each accepts exactly one
+// bearer and revoking one does not affect the other or 8765. They are the only
+// servers permitted a non-loopback bind (MCP_PUBLIC_HTTP_HOST /
+// MCP_CATALOG_HTTP_HOST); 8765 stays on MCP_HTTP_HOST, loopback.
+//
+// "open" mode (no credentials) remains available for stdio/dev and is still
+// refused on a non-loopback bind by assertHttpAuthConfig.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -288,6 +297,20 @@ export type AuthConfig =
       envToken?: string;
       envTokenProvider?: string;
       onSeen?: (id: string) => void;
+      /**
+       * Override the consumer source. Defaults to the shared on-disk registry
+       * (state/mcp-consumers.json), which is what the credentialed server uses.
+       *
+       * The public (8766) and catalog (8767) servers pass `() => []` so their
+       * ONLY credential is their own envToken. Without this they would inherit
+       * every per-agent token minted for 8765 — which would both widen those
+       * tokens' reach and break per-server revocation, since removing a key
+       * from one server's env would leave the registry tokens still working.
+       * It is also what makes the fail-closed check meaningful for them: with
+       * an empty registry, a missing env key means zero consumers and
+       * resolveCredentialedAuth throws at startup instead of serving open.
+       */
+      load?: () => Consumer[];
     };
 
 export interface StartOptions {
@@ -298,7 +321,16 @@ export interface StartOptions {
   auth: AuthConfig;
 }
 
-export async function startMcpServer(opts: StartOptions): Promise<void> {
+/**
+ * Returns the http.Server when the HTTP transport is used (undefined for
+ * stdio). Callers in production ignore it; tests need it so a server that
+ * wrongly STARTS — the exact failure the fail-closed check exists to prevent —
+ * can be closed and reported as a failure, instead of holding the event loop
+ * open and hanging the run.
+ */
+export async function startMcpServer(
+  opts: StartOptions,
+): Promise<http.Server | undefined> {
   if ((opts.transport ?? "stdio") === "http") {
     const host = opts.httpHost ?? "127.0.0.1";
     const port = opts.httpPort ?? 8765;
@@ -309,12 +341,14 @@ export async function startMcpServer(opts: StartOptions): Promise<void> {
       authenticate = openAuthenticator;
       mode = "OPEN-loopback (no credentials, public data)";
     } else {
+      const load = opts.auth.load ?? loadConsumers;
       authenticate = resolveCredentialedAuth({
         envToken: opts.auth.envToken,
         envTokenProvider: opts.auth.envTokenProvider,
         onSeen: opts.auth.onSeen,
+        load,
       });
-      const count = loadConsumers().length + (opts.auth.envToken ? 1 : 0);
+      const count = load().length + (opts.auth.envToken ? 1 : 0);
       mode = `registry (${count} authorized consumer${count === 1 ? "" : "s"})`;
     }
     const httpServer = http.createServer(
@@ -327,7 +361,7 @@ export async function startMcpServer(opts: StartOptions): Promise<void> {
           .join(", ")}`,
       );
     });
-    return;
+    return httpServer;
   }
   const server = buildServer(opts.name);
   const transport = new StdioServerTransport();

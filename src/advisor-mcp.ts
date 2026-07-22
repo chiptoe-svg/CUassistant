@@ -10,7 +10,9 @@ import {
   ADVISOR_MCP_PUBLIC_URL,
   ADVISOR_MCP_WIKI_TOKEN,
   ADVISOR_MCP_WIKI_URL,
+  MCP_CATALOG_AUTH_TOKEN,
   MCP_HTTP_PORT,
+  MCP_PUBLIC_AUTH_TOKEN,
 } from "./config.js";
 
 export interface McpServerConfig {
@@ -206,16 +208,23 @@ export function assertAdvisorMcpUrlSafe(serverName: string, url: string): void {
  * assertAdvisorMcpUrlSafe rejects.
  */
 export function advisorMcpServers(): Record<string, McpServerConfig> {
-  const wiki: McpServerConfig = { url: ADVISOR_MCP_WIKI_URL };
   // Only attach the header when a token exists, so a missing token fails as a
   // clear 401 rather than being sent as the string "Bearer undefined".
-  if (ADVISOR_MCP_WIKI_TOKEN) {
-    wiki.headers = { Authorization: `Bearer ${ADVISOR_MCP_WIKI_TOKEN}` };
-  }
+  const bearer = (token: string): Record<string, string> | undefined =>
+    token ? { Authorization: `Bearer ${token}` } : undefined;
+  const withAuth = (url: string, token: string): McpServerConfig => {
+    const config: McpServerConfig = { url };
+    const headers = bearer(token);
+    if (headers) config.headers = headers;
+    return config;
+  };
+  // The advisor is a CLIENT of 8766/8767, which now require a bearer. Each
+  // server gets its own key — the same values the servers authenticate
+  // against, read from this repo's .env.
   const servers: Record<string, McpServerConfig> = {
-    cu_public: { url: ADVISOR_MCP_PUBLIC_URL },
-    cu_catalog: { url: ADVISOR_MCP_CATALOG_URL },
-    gc_curriculum_wiki: wiki,
+    cu_public: withAuth(ADVISOR_MCP_PUBLIC_URL, MCP_PUBLIC_AUTH_TOKEN),
+    cu_catalog: withAuth(ADVISOR_MCP_CATALOG_URL, MCP_CATALOG_AUTH_TOKEN),
+    gc_curriculum_wiki: withAuth(ADVISOR_MCP_WIKI_URL, ADVISOR_MCP_WIKI_TOKEN),
   };
   for (const [name, config] of Object.entries(servers)) {
     assertAdvisorMcpUrlSafe(name, config.url);

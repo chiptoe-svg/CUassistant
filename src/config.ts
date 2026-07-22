@@ -137,6 +137,31 @@ export const MCP_HTTP_PORT = Number(process.env.MCP_HTTP_PORT || 8765);
 export const MCP_PUBLIC_HTTP_PORT = Number(
   process.env.MCP_PUBLIC_HTTP_PORT || 8766,
 );
+
+// --- Public / catalog server bind hosts (DELIBERATELY NOT MCP_HTTP_HOST) ---
+// MCP_HTTP_HOST is shared by all three servers. Widening it to reach campus
+// would move the CREDENTIALED server (8765 — mail send, calendar writes) off
+// loopback as a side effect, which is never wanted. The public (8766) and
+// catalog (8767) servers therefore get their own bind variables, each
+// defaulting to loopback, so campus exposure is opted into per server.
+export const MCP_PUBLIC_HTTP_HOST =
+  process.env.MCP_PUBLIC_HTTP_HOST || "127.0.0.1";
+export const MCP_CATALOG_HTTP_HOST =
+  process.env.MCP_CATALOG_HTTP_HOST || "127.0.0.1";
+
+// Per-server bearer keys for the public and catalog servers. Each server
+// accepts ONLY its own key (the shared per-agent consumer registry is not
+// consulted — see mcp-public.ts), so rotating or revoking one has no effect on
+// the other, and neither grants anything on 8765.
+export const MCP_PUBLIC_AUTH_TOKEN = process.env.MCP_PUBLIC_AUTH_TOKEN || "";
+export const MCP_CATALOG_AUTH_TOKEN = process.env.MCP_CATALOG_AUTH_TOKEN || "";
+// Attested model backend for those keys; must be authorized in
+// policy/action-policy.yaml under agent_backends or auth is rejected.
+export const MCP_PUBLIC_AUTH_TOKEN_PROVIDER =
+  process.env.MCP_PUBLIC_AUTH_TOKEN_PROVIDER || "openai_api";
+export const MCP_CATALOG_AUTH_TOKEN_PROVIDER =
+  process.env.MCP_CATALOG_AUTH_TOKEN_PROVIDER || "openai_api";
+
 // When set, the HTTP transport requires `Authorization: Bearer <token>`.
 // When unset, the server is loopback-open (interim mode). The value is read
 // from the environment, which OneCLI can populate from its vault at spawn.

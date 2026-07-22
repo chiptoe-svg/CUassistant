@@ -2,17 +2,29 @@
 <!--
   CUassistant PUBLIC MCP server (HTTP) service for launchd.
 
-  Runs the PUBLIC (no credentials) HTTP MCP server on 127.0.0.1:8766,
-  exposing only the Clemson class-schedule tools (public Banner data).
-  No MCP_AUTH_TOKEN applies — this server is loopback-open by design;
-  all data served is public. Do NOT add a bearer to this server.
+  Runs the public-DATA HTTP MCP server, exposing only the Clemson
+  class-schedule tools (public Banner data).
+
+  AUTH (required): this server is CAMPUS-REACHABLE and authenticates every
+  request against MCP_PUBLIC_AUTH_TOKEN — its own bearer, distinct from the
+  catalog server's key and from anything on 8765. The key lives in the repo's
+  gitignored .env; do NOT write it into this plist. With the key unset the
+  process refuses to start rather than serving open.
+
+  BIND: MCP_PUBLIC_HTTP_HOST (default 127.0.0.1; set to 0.0.0.0 in .env for
+  campus reach). Deliberately NOT MCP_HTTP_HOST, which is shared with the
+  credentialed server on 8765 and must stay on loopback.
+
+  NOTE: the MCP HTTP transport performs no Host/Origin validation, so off
+  loopback the bearer is the ONLY gate — there is no rebinding protection.
 
   A containerized NanoClaw agent reaches it via host.docker.internal:8766
-  with no Authorization header. The credentialed server (port 8765) is a
-  separate process; see com.cuassistant.mcp-http.plist for that service.
+  and must now send `Authorization: Bearer <MCP_PUBLIC_AUTH_TOKEN>`. The
+  credentialed server (port 8765) is a separate, loopback-only process; see
+  com.cuassistant.mcp-http.plist.
 
-  Both HTTP servers are loopback-only. Ports are tracked in
-  ~/.dev-ports.yaml (cuassistant: mcp_credentialed 8765, mcp_public 8766).
+  Ports are tracked in ~/.dev-ports.yaml (cuassistant: mcp_credentialed 8765,
+  mcp_public 8766).
 
   Setup (one time):
     1. Edit this file: replace REPO_PATH with the absolute path to your

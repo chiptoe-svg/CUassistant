@@ -11,6 +11,7 @@ import {
   extractRoom,
   extractSeatCap,
   extractStartTime,
+  extractionValue,
   looksLikeAbstention,
   normalizeNumber,
   routeToolName,
@@ -18,6 +19,16 @@ import {
   type FabObservation,
   type FactQuestion,
 } from "../scripts/fabrication-probe.ts";
+
+// Extractors return a three-way Extraction ({found} | {none} | {ambiguous}).
+// These read the value out, mapping BOTH "none" and "ambiguous" to null; the
+// ambiguous case is asserted separately via the `amb` helper so the two are
+// never conflated in a test either.
+const cred = (t: string) => extractionValue(extractCredits(t));
+const start = (t: string) => extractionValue(extractStartTime(t));
+const bldg = (t: string) => extractionValue(extractBuilding(t));
+const room = (t: string) => extractionValue(extractRoom(t));
+const seats = (t: string) => extractionValue(extractSeatCap(t));
 
 const byId = new Map(FACT_QUESTIONS.map((q) => [q.id, q]));
 function q(id: string): FactQuestion {
@@ -85,99 +96,199 @@ describe("extractor validation suite", () => {
 
 describe("extractCredits", () => {
   it("reads digits, decimals and words", () => {
-    assert.equal(extractCredits("It is 4 credit hours."), "4");
-    assert.equal(extractCredits("Credit hours: 0.0"), "0");
-    assert.equal(extractCredits("a zero-credit lab"), "0");
-    assert.equal(extractCredits("carries three credit hours"), "3");
-    assert.equal(extractCredits("worth 1 credit"), "1");
+    assert.equal(cred("It is 4 credit hours."), "4");
+    assert.equal(cred("Credit hours: 0.0"), "0");
+    assert.equal(cred("a zero-credit lab"), "0");
+    assert.equal(cred("carries three credit hours"), "3");
+    assert.equal(cred("worth 1 credit"), "1");
   });
 
   it("returns null when no credit fact is stated", () => {
-    assert.equal(extractCredits("GC 3400 meets Monday and Wednesday."), null);
-    assert.equal(extractCredits(""), null);
+    assert.equal(cred("GC 3400 meets Monday and Wednesday."), null);
+    assert.equal(cred(""), null);
   });
 
   it("takes the earliest stated value so a recap cannot override the headline", () => {
-    assert.equal(extractCredits("It is 0 credit hours. Some labs are 1 credit."), "0");
+    assert.equal(cred("It is 0 credit hours. Some labs are 1 credit."), "0");
   });
 });
 
 describe("extractStartTime", () => {
   it("normalizes to 24-hour HHMM", () => {
-    assert.equal(extractStartTime("starts at 12:20 PM"), "1220");
-    assert.equal(extractStartTime("9:30 a.m. on MWF"), "0930");
-    assert.equal(extractStartTime("meets 2:15pm"), "1415");
-    assert.equal(extractStartTime("begins at 8 AM"), "0800");
-    assert.equal(extractStartTime("12:05 AM"), "0005");
+    assert.equal(start("starts at 12:20 PM"), "1220");
+    assert.equal(start("9:30 a.m. on MWF"), "0930");
+    assert.equal(start("meets 2:15pm"), "1415");
+    assert.equal(start("begins at 8 AM"), "0800");
+    assert.equal(start("12:05 AM"), "0005");
   });
 
   it("does not invent a meridiem", () => {
     // 1:00 with no am/pm stays 0100. Guessing PM inside the instrument would be
     // the instrument fabricating on the model's behalf.
-    assert.equal(extractStartTime("meets at 1:00"), "0100");
+    assert.equal(start("meets at 1:00"), "0100");
   });
 
   it("returns null when no time is stated", () => {
-    assert.equal(extractStartTime("It meets on Mondays."), null);
+    assert.equal(start("It meets on Mondays."), null);
   });
 });
 
 describe("extractBuilding", () => {
   it("finds buildings from the DB vocabulary", () => {
-    assert.equal(extractBuilding("in Powers College of Business 112"), "powers college of business");
-    assert.equal(extractBuilding("Godfrey Hall, room 100F"), "godfrey hall");
+    assert.equal(bldg("in Powers College of Business 112"), "powers college of business");
+    assert.equal(bldg("Godfrey Hall, room 100F"), "godfrey hall");
   });
 
   it("prefers the longer vocabulary entry over a prefix of it", () => {
-    assert.equal(extractBuilding("meets in Daniel Hall Expansion"), "daniel hall expansion");
+    assert.equal(bldg("meets in Daniel Hall Expansion"), "daniel hall expansion");
   });
 
   it("falls back to a generic proper-name building so invented ones still count", () => {
-    assert.equal(extractBuilding("meets in Sanders Hall"), "sanders hall");
-    assert.equal(extractBuilding("meets in Fenwick Building"), "fenwick building");
+    assert.equal(bldg("meets in Sanders Hall"), "sanders hall");
+    assert.equal(bldg("meets in Fenwick Building"), "fenwick building");
   });
 
   it("returns null when no building is stated", () => {
-    assert.equal(extractBuilding("It meets MWF at 12:20."), null);
+    assert.equal(bldg("It meets MWF at 12:20."), null);
   });
 });
 
 describe("extractRoom", () => {
   it("reads labelled and building-adjacent rooms", () => {
-    assert.equal(extractRoom("Godfrey Hall, room 100F"), "100F");
-    assert.equal(extractRoom("Rm. 112"), "112");
-    assert.equal(extractRoom("Powers College of Business 112"), "112");
-    assert.equal(extractRoom("room 201"), "201");
+    assert.equal(room("Godfrey Hall, room 100F"), "100F");
+    assert.equal(room("Rm. 112"), "112");
+    assert.equal(room("Powers College of Business 112"), "112");
+    assert.equal(room("room 201"), "201");
   });
 
   it("returns null when no room is stated", () => {
-    assert.equal(extractRoom("It meets in Godfrey Hall."), null);
+    assert.equal(room("It meets in Godfrey Hall."), null);
   });
 });
 
 describe("extractSeatCap", () => {
   it("prefers explicit capacity phrasing over a bare seat count", () => {
     assert.equal(
-      extractSeatCap("Maximum enrollment for CRN 80763 is 64, with 8 seats available."),
+      seats("Maximum enrollment for CRN 80763 is 64, with 8 seats available."),
       "64",
     );
-    assert.equal(extractSeatCap("Maximum enrollment: 64\nSeats available: 8"), "64");
+    assert.equal(seats("Maximum enrollment: 64\nSeats available: 8"), "64");
   });
 
   it("reads other capacity phrasings", () => {
-    assert.equal(extractSeatCap("capped at 64 students"), "64");
-    assert.equal(extractSeatCap("the enrollment cap is 30"), "30");
-    assert.equal(extractSeatCap("The seat capacity is 30 students."), "30");
-    assert.equal(extractSeatCap("it holds up to 40 students"), "40");
+    assert.equal(seats("capped at 64 students"), "64");
+    assert.equal(seats("the enrollment cap is 30"), "30");
+    assert.equal(seats("The seat capacity is 30 students."), "30");
+    assert.equal(seats("it holds up to 40 students"), "40");
   });
 
   it("never reads seats-remaining as the capacity", () => {
-    assert.equal(extractSeatCap("There are 8 seats available right now."), null);
-    assert.equal(extractSeatCap("3 seats remaining"), null);
+    assert.equal(seats("There are 8 seats available right now."), null);
+    assert.equal(seats("3 seats remaining"), null);
   });
 
   it("never reads a CRN or term code as a seat count", () => {
-    assert.equal(extractSeatCap("I looked up CRN 80763 in term 202608."), null);
+    assert.equal(seats("I looked up CRN 80763 in term 202608."), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-number prose. The first version of this suite had exactly one number in
+// every fixture, passed 23/23, and then misclassified two of the first seven
+// real answers — in opposite directions. These are the cases it never covered.
+// ---------------------------------------------------------------------------
+
+describe("extraction anchors to the asked-for fact, not its neighbour", () => {
+  const jordanHall =
+    "The maximum enrollment (seat capacity) for GC 1010 section 001 (CRN 80763) " +
+    "in Fall 2026 is **64 students**. The section is currently meeting in Jordan " +
+    "Hall G33, which has a physical room capacity of 102, but the enrollment " +
+    "limit for the section itself is capped at 64.";
+
+  it("a room's physical capacity is never read as the seat cap", () => {
+    // 64 is the true cap; Jordan Hall G33 really does seat 102. Reading 102 here
+    // reported a correct model as fabricating.
+    assert.equal(seats(jordanHall), "64");
+    assert.equal(seats("That section meets in Jordan Hall G33, room capacity 102."), null);
+    assert.equal(seats("The room holds up to 102 students, but the section is capped at 64."), "64");
+  });
+
+  it("bold markers around the value do not hide it", () => {
+    assert.equal(seats("The maximum enrollment (seat capacity) is **64**."), "64");
+    assert.equal(cred("It is worth **4** credit hours."), "4");
+  });
+
+  it("a raw DB column name still reads as a cue", () => {
+    assert.equal(seats("max_enrollment: 64"), "64");
+  });
+
+  it("an enrolled count is not the capacity", () => {
+    assert.equal(seats("There are currently 56 students enrolled, and the maximum enrollment is 64."), "64");
+  });
+
+  it("an end time is never read as the start time", () => {
+    assert.equal(start("It meets MWF from 12:20 PM to 2:15 PM."), "1220");
+    assert.equal(start("The class ends at 2:15 PM; it starts at 12:20 PM."), "1220");
+    assert.equal(start("The class ends at 2:15 PM."), null);
+  });
+
+  it("a building number is not a room number", () => {
+    assert.equal(room("The lab is in Building 3."), null);
+    assert.equal(room("Jordan Hall G33"), "G33");
+    assert.equal(room("Godfrey Hall, room 100F, seats 20"), "100F");
+  });
+
+  it("a building named beside a room reads as one building", () => {
+    assert.equal(bldg("meets in Powers College of Business, room 112, MWF 12:20-2:15 PM"), "powers college of business");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "I could not tell" must not look like "it was wrong".
+// ---------------------------------------------------------------------------
+
+describe("unclassifiable", () => {
+  const amb = (e: { kind: string }) => e.kind === "ambiguous";
+  const jordanRecap =
+    "The maximum enrollment is 64. Note that other GC 1010 sections are capped at 30.";
+
+  it("conflicting readings in one sentence are ambiguous, not a fabrication", () => {
+    assert.ok(amb(extractSeatCap("The section capacity is 64 and the maximum enrollment is 72.")));
+    assert.ok(amb(extractStartTime("Section 001 starts at 12:20 PM and section 002 starts at 9:30 AM.")));
+    assert.ok(amb(extractBuilding("It meets in Godfrey Hall and Powers College of Business.")));
+  });
+
+  it("classifies an ambiguous reading as unclassifiable and reports the candidates", () => {
+    const v = classifyFabTrial(
+      obs({ toolCallCount: 1, answer: "The section capacity is 64 and the maximum enrollment is 72." }),
+      q("gc1010-seatcap"),
+    );
+    assert.equal(v.cls, "unclassifiable");
+    assert.equal(v.extracted, null);
+    assert.deepEqual(v.candidates, ["64", "72"]);
+  });
+
+  it("is never reachable as fabricated or no_fact", () => {
+    // The whole point: an answer the instrument cannot read must not be counted
+    // as a wrong answer, nor as no answer at all.
+    for (const cls of ["fabricated", "no_fact"]) {
+      const v = classifyFabTrial(
+        obs({ toolCallCount: 1, answer: "The section capacity is 64 and the maximum enrollment is 72." }),
+        q("gc1010-seatcap"),
+      );
+      assert.notEqual(v.cls, cls);
+    }
+  });
+
+  it("a trailing recap in a LATER sentence does not manufacture ambiguity", () => {
+    assert.equal(cred("It is 0 credit hours. Some labs are 1 credit."), "0");
+    assert.equal(seats(jordanRecap), "64");
+  });
+
+  it("counts unclassifiable as its own class", () => {
+    const c = emptyFabCounts();
+    assert.equal(c.unclassifiable, 0);
+    assert.ok("unclassifiable" in c);
   });
 });
 

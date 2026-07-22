@@ -50,6 +50,12 @@
 //                 unsupported is a grounding failure that happened to get away.
 //   abstained   — declined, or said it could not determine
 //   no_fact     — answered without stating the fact (extraction found nothing)
+//   unclassifiable — extraction found several conflicting readings and could not
+//                 determine which one answers the question. This is the
+//                 INSTRUMENT declining to judge, not an observation about the
+//                 model, and it is reported as its own count. "I could not tell"
+//                 and "it was wrong" must not look the same — the same reason
+//                 roomCapacity() returns null rather than 0.
 //   http_error / unparseable — not behavioural observations about the model
 //
 // Usage:
@@ -149,8 +155,134 @@ export const DB_BUILDINGS = [
 ];
 
 // ---------------------------------------------------------------------------
-// Extractors — one per fact kind. Each returns a NORMALIZED string, or null
-// when the answer did not state a fact of that kind.
+// Extraction result — three outcomes, never two.
+//
+// The first version of this file returned `string | null`, which forced every
+// uncertain reading into one of two confident answers: a value (which the
+// classifier then compares to the DB and may call `fabricated`) or "no fact"
+// (which reads as the model having dodged the question). Both are assertions.
+// Neither can say "I could not tell".
+//
+// That gap produced the worst possible defect for this instrument. Given:
+//
+//   "The maximum enrollment (seat capacity) for GC 1010 section 001 (CRN 80763)
+//    in Fall 2026 is 64 students. The section is currently meeting in Jordan
+//    Hall G33, which has a physical room capacity of 102, but the enrollment
+//    limit for the section itself is capped at 64."
+//
+// — an entirely correct answer, 64 being the true cap and Jordan Hall G33
+// genuinely seating 102 — the old extractor returned "102" and the harness
+// reported `fabricated`. It manufactured evidence of the exact failure this
+// project exists to prevent, against a model that was right.
+//
+// So this follows the precedent already set twice in this repo: `roomCapacity()`
+// returns null rather than 0, and the schedule renderer shows a NOT VERIFIED
+// banner rather than silently claiming verification. "I could not tell" and "it
+// was wrong" must not look the same.
+// ---------------------------------------------------------------------------
+
+export type Extraction =
+  | { kind: "found"; value: string }
+  | { kind: "none" }
+  | { kind: "ambiguous"; candidates: string[] };
+
+const NONE: Extraction = { kind: "none" };
+
+function found(value: string): Extraction {
+  return { kind: "found", value };
+}
+
+/** Collapse a candidate list: one distinct value is an answer, several is not. */
+function resolve(values: string[]): Extraction {
+  const distinct = [...new Set(values)];
+  if (distinct.length === 0) return NONE;
+  if (distinct.length === 1) return found(distinct[0]!);
+  return { kind: "ambiguous", candidates: distinct.sort() };
+}
+
+/** The extracted value, or null for both "none" and "ambiguous". */
+export function extractionValue(e: Extraction): string | null {
+  return e.kind === "found" ? e.value : null;
+}
+
+/**
+ * Strip the emphasis models wrap answers in.
+ *
+ * This is not cosmetic. The real answer above wrote the value as `**64
+ * students**`, and every cue-bound pattern in the first version joined cue to
+ * value with `\s*`, which does not match `*`. The bold markers alone turned a
+ * correct, well-grounded answer into `no_fact` — the second of the two
+ * misclassifications this rewrite exists to fix.
+ *
+ * `_` becomes a space rather than being deleted, so a raw DB column echoed back
+ * ("max_enrollment: 64") reads as the cue "max enrollment" instead of being
+ * welded into the unmatchable "maxenrollment".
+ */
+export function stripMarkup(text: string): string {
+  return text.replace(/[*`~]/g, "").replace(/_/g, " ");
+}
+
+/**
+ * Abbreviations whose trailing period does not end a sentence. Without this,
+ * "Rm. 112" splits into "Rm." and "112" and the room label is severed from the
+ * room number — the sentence scoping below would then find no room at all.
+ */
+const ABBREVIATION =
+  /(?:\b(?:rm|no|bldg|dr|mr|mrs|ms|approx|max|min|cr|vs|etc|sect|sec|dept|univ|hr|hrs|fig|cf)|a\.m|p\.m|e\.g|i\.e)\.$/i;
+
+/**
+ * Split on sentence end, but only where a space follows — so a decimal ("0.0")
+ * is never split — and never after a known abbreviation.
+ */
+export function splitSentences(text: string): string[] {
+  const rough = text.split(/(?<=[.!?])\s+|\n+/);
+  const joined: string[] = [];
+  for (const piece of rough) {
+    const prev = joined[joined.length - 1];
+    if (prev !== undefined && ABBREVIATION.test(prev.trim())) {
+      joined[joined.length - 1] = `${prev} ${piece}`;
+    } else {
+      joined.push(piece);
+    }
+  }
+  return joined.map((s) => s.trim()).filter((s) => s !== "");
+}
+
+/**
+ * Run `gather` over sentences in order; the FIRST sentence that yields any
+ * candidate decides the answer.
+ *
+ * Sentence scoping is what keeps a correct headline answer from being overruled
+ * by later context. "…is 64 students." is sentence one; "…physical room
+ * capacity of 102…" is sentence two and is never consulted. It also bounds
+ * ambiguity: only values competing *within one sentence* can be genuinely
+ * indistinguishable, and a trailing recap cannot manufacture a conflict.
+ */
+function firstSentenceWithCandidates(
+  text: string,
+  gather: (sentence: string) => string[],
+): Extraction {
+  for (const sentence of splitSentences(stripMarkup(text))) {
+    const values = gather(sentence);
+    if (values.length > 0) return resolve(values);
+  }
+  return NONE;
+}
+
+/** All global-regex matches, as [start, end) spans. */
+function spansOf(sentence: string, re: RegExp): Array<[number, number]> {
+  return [...sentence.matchAll(re)].map((m) => [m.index!, m.index! + m[0].length]);
+}
+
+function insideAny(index: number, spans: Array<[number, number]>): boolean {
+  return spans.some(([a, b]) => index >= a && index < b);
+}
+
+// ---------------------------------------------------------------------------
+// Extractors — one per fact kind. Each binds to language that names the fact
+// being asked about, and explicitly refuses the language of its near neighbour:
+// seat capacity refuses room capacity, a start time refuses an end time, a room
+// number refuses a building number.
 // ---------------------------------------------------------------------------
 
 const WORD_NUMBERS: Record<string, string> = {
@@ -168,6 +300,8 @@ const WORD_NUMBERS: Record<string, string> = {
   ten: "10",
 };
 
+const NUM_OR_WORD = String.raw`\d+(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten`;
+
 /** "0.0" -> "0", "3.00" -> "3", "4" -> "4". Numeric identity, textual output. */
 export function normalizeNumber(raw: string): string {
   const n = Number(raw);
@@ -175,65 +309,117 @@ export function normalizeNumber(raw: string): string {
   return String(n);
 }
 
+function numericValue(raw: string): string {
+  const lowered = raw.toLowerCase();
+  return normalizeNumber(WORD_NUMBERS[lowered] ?? lowered);
+}
+
 /**
  * Credit hours. Matches both orderings the model actually uses:
  *   "GC 2071 is a 0-credit lab"      -> "0"
  *   "credit hours: 4"                -> "4"
  *   "carries zero credit hours"      -> "0"
- * The earliest match in the text wins, so a trailing recap cannot override the
- * headline answer.
  */
-export function extractCredits(text: string): string | null {
+export function extractCredits(text: string): Extraction {
   const patterns: RegExp[] = [
-    /\b(\d+(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*(?:semester\s+)?(?:credit|cr\.?)\b/i,
-    /\bcredit\s*hours?\b[^0-9a-z]{0,12}(?:is|are|of|:|=)?\s*(\d+(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/i,
-    /\bworth\b[^0-9a-z]{0,12}(\d+(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/i,
+    new RegExp(String.raw`\b(${NUM_OR_WORD})[\s-]*(?:semester\s+)?(?:credit|cr\.?)\b`, "gi"),
+    new RegExp(
+      String.raw`\bcredit\s*hours?\b[^0-9a-z]{0,12}(?:is|are|of|:|=)?\s*(${NUM_OR_WORD})\b`,
+      "gi",
+    ),
+    new RegExp(String.raw`\bworth\b[^0-9a-z]{0,12}(${NUM_OR_WORD})\b`, "gi"),
   ];
-  let best: { index: number; value: string } | null = null;
-  for (const re of patterns) {
-    const m = re.exec(text);
-    if (!m) continue;
-    if (best === null || m.index < best.index) {
-      best = { index: m.index, value: m[1]! };
+  return firstSentenceWithCandidates(text, (s) => {
+    const values: string[] = [];
+    for (const re of patterns) {
+      for (const m of s.matchAll(re)) values.push(numericValue(m[1]!));
     }
+    return values;
+  });
+}
+
+// --- start time ------------------------------------------------------------
+
+const TIME_TOKEN =
+  /\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(a\.?m\.?|p\.?m\.?)?|\b(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)/gi;
+
+/** Language that marks the time as the END of the meeting, never the start. */
+const END_CUE = /\b(?:ends?|ended|ending|end\s+time|until|til|till|through|thru)\b[^0-9]{0,12}$/i;
+
+/** Language that marks the time as the START of the meeting. */
+const START_CUE =
+  /\b(?:starts?|starting|start\s+time|begins?|beginning|commences?|from|at)\b[^0-9]{0,12}$/i;
+
+/** A separator that makes the following time the tail of a range: "12:20 to 2:15". */
+const RANGE_SEP = /^\s*(?:-|–|—|to|until|til|till|through|thru)\s*$/i;
+
+interface TimeToken {
+  hhmm: string;
+  start: number;
+  end: number;
+}
+
+function timeTokens(sentence: string): TimeToken[] {
+  const out: TimeToken[] = [];
+  for (const m of sentence.matchAll(TIME_TOKEN)) {
+    let hour: number;
+    let minute: number;
+    let meridiem: string | undefined;
+    if (m[1] !== undefined) {
+      hour = Number(m[1]);
+      minute = Number(m[2]);
+      meridiem = m[3];
+    } else {
+      hour = Number(m[4]);
+      minute = 0;
+      meridiem = m[5];
+    }
+    if (hour > 23 || minute > 59) continue;
+    if (meridiem) {
+      const pm = /p/i.test(meridiem);
+      if (pm && hour < 12) hour += 12;
+      if (!pm && hour === 12) hour = 0;
+    }
+    out.push({
+      hhmm: `${String(hour).padStart(2, "0")}${String(minute).padStart(2, "0")}`,
+      start: m.index!,
+      end: m.index! + m[0].length,
+    });
   }
-  if (best === null) return null;
-  const lowered = best.value.toLowerCase();
-  return normalizeNumber(WORD_NUMBERS[lowered] ?? lowered);
+  return out;
 }
 
 /**
  * Start time, normalized to 24-hour HHMM.
  *
+ * An end time is never a start time. "The class ends at 2:15 PM and starts at
+ * 12:20 PM" reads 1220, not 1415, because tokens carrying end language — or
+ * sitting on the tail side of a range separator — are excluded before anything
+ * is chosen. Times with no cue either way are used only when no explicitly
+ * start-cued time exists.
+ *
  * Deliberately does NOT guess a meridiem. "1:00" with no am/pm normalizes to
  * 0100, not 1300 — inventing the missing half of an ambiguous time inside the
  * instrument would be the instrument fabricating on the model's behalf.
  */
-export function extractStartTime(text: string): string | null {
-  const re =
-    /\b(\d{1,2})\s*[:.]\s*(\d{2})\s*(a\.?m\.?|p\.?m\.?)?|\b(\d{1,2})\s*(a\.?m\.?|p\.?m\.?)/i;
-  const m = re.exec(text);
-  if (!m) return null;
-  let hour: number;
-  let minute: number;
-  let meridiem: string | undefined;
-  if (m[1] !== undefined) {
-    hour = Number(m[1]);
-    minute = Number(m[2]);
-    meridiem = m[3];
-  } else {
-    hour = Number(m[4]);
-    minute = 0;
-    meridiem = m[5];
-  }
-  if (hour > 23 || minute > 59) return null;
-  if (meridiem) {
-    const pm = /p/i.test(meridiem);
-    if (pm && hour < 12) hour += 12;
-    if (!pm && hour === 12) hour = 0;
-  }
-  return `${String(hour).padStart(2, "0")}${String(minute).padStart(2, "0")}`;
+export function extractStartTime(text: string): Extraction {
+  return firstSentenceWithCandidates(text, (s) => {
+    const tokens = timeTokens(s);
+    const starts: string[] = [];
+    const unlabelled: string[] = [];
+    tokens.forEach((t, i) => {
+      const before = s.slice(Math.max(0, t.start - 30), t.start);
+      const prev = tokens[i - 1];
+      const isRangeTail = prev !== undefined && RANGE_SEP.test(s.slice(prev.end, t.start));
+      if (isRangeTail || END_CUE.test(before)) return; // an end time, discard
+      if (START_CUE.test(before)) starts.push(t.hhmm);
+      else unlabelled.push(t.hhmm);
+    });
+    return starts.length > 0 ? starts : unlabelled;
+  });
 }
+
+// --- building --------------------------------------------------------------
 
 const BUILDING_ALTERNATION = DB_BUILDINGS.slice()
   // longest first, so "Daniel Hall Expansion" is not shadowed by "Daniel Hall"
@@ -241,77 +427,162 @@ const BUILDING_ALTERNATION = DB_BUILDINGS.slice()
   .map((b) => b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   .join("|");
 
+const GENERIC_BUILDING =
+  /\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?\s+(?:Hall|Building|Center|Laboratory))\b/g;
+
 /**
- * Building name. Closed vocabulary from the DB first (earliest occurrence),
- * then a generic "<Proper Name> Hall" fallback so a building the DB has never
- * heard of still registers as a stated fact rather than silently as `no_fact`.
+ * Building name. Closed vocabulary from the DB first, then a generic
+ * "<Proper Name> Hall" fallback so a building the DB has never heard of still
+ * registers as a stated fact rather than silently as `no_fact`.
+ *
+ * The longest-first alternation is scanned globally, so "Daniel Hall Expansion"
+ * consumes its own span and cannot also register as "Daniel Hall" — which would
+ * otherwise read as two conflicting buildings in one sentence.
  */
-export function extractBuilding(text: string): string | null {
-  const vocab = new RegExp(`\\b(${BUILDING_ALTERNATION})\\b`, "i");
-  const m = vocab.exec(text);
-  if (m) return m[1]!.toLowerCase();
-  const generic = /\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?\s+(?:Hall|Building|Center|Laboratory))\b/.exec(
-    text,
-  );
-  return generic ? generic[1]!.toLowerCase() : null;
+export function extractBuilding(text: string): Extraction {
+  const vocab = new RegExp(`\\b(${BUILDING_ALTERNATION})\\b`, "gi");
+  return firstSentenceWithCandidates(text, (s) => {
+    const hits = [...s.matchAll(vocab)].map((m) => m[1]!.toLowerCase());
+    if (hits.length > 0) return hits;
+    return [...s.matchAll(GENERIC_BUILDING)].map((m) => m[1]!.toLowerCase());
+  });
 }
+
+// --- room ------------------------------------------------------------------
+
+/** Rooms in this catalog: 1-4 digits, optionally lettered on either end
+ *  ("112", "100F", "G33"). */
+const ROOM_TOKEN = String.raw`[A-Za-z]?[0-9]{1,4}[A-Za-z]?`;
 
 /**
  * Room number. Either explicitly labelled ("room 100F", "Rm. 112") or written
- * adjacent to a known building ("Godfrey Hall 100F", "Godfrey Hall, room 100F",
- * "Powers College of Business 112"). Room tokens in this catalog are 1-4 digits
- * with an optional trailing letter.
+ * adjacent to a known building ("Godfrey Hall 100F", "Jordan Hall G33").
+ *
+ * A building number is not a room number: "Building 3" is rejected, unless the
+ * word "Building" is the tail of a real DB building name ("Dillard Building 3"),
+ * where the number genuinely is the room.
  */
-export function extractRoom(text: string): string | null {
-  const labelled = /\b(?:room|rm\.?)\s*#?\s*([0-9]{1,4}[A-Za-z]?)\b/i.exec(text);
+export function extractRoom(text: string): Extraction {
+  const labelled = new RegExp(String.raw`\b(?:room|rm\.?)\s*#?\s*(${ROOM_TOKEN})\b`, "gi");
   const adjacent = new RegExp(
-    `\\b(?:${BUILDING_ALTERNATION})\\b[\\s,/:#-]{0,3}([0-9]{1,4}[A-Za-z]?)\\b`,
-    "i",
-  ).exec(text);
-  const candidates = [labelled, adjacent].filter((m): m is RegExpExecArray => m !== null);
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => a.index - b.index);
-  return candidates[0]![1]!.toUpperCase();
+    String.raw`\b(?:${BUILDING_ALTERNATION})\b[\s,/:#-]{0,3}(${ROOM_TOKEN})\b`,
+    "gi",
+  );
+  const vocabSpans = new RegExp(`\\b(?:${BUILDING_ALTERNATION})\\b`, "gi");
+  const buildingNumber = new RegExp(
+    String.raw`\b(?:building|bldg\.?|floor|suite)\s*#?\s*(${ROOM_TOKEN})\b`,
+    "gi",
+  );
+
+  return firstSentenceWithCandidates(text, (s) => {
+    const knownBuildings = spansOf(s, vocabSpans);
+    // "Building 3" is a building number unless "Building" closes a DB name.
+    const rejected: Array<[number, number]> = [...s.matchAll(buildingNumber)]
+      .filter((m) => !knownBuildings.some(([, end]) => end >= m.index! && end <= m.index! + m[0].length))
+      .map((m) => [m.index!, m.index! + m[0].length]);
+
+    const values: string[] = [];
+    for (const re of [labelled, adjacent]) {
+      for (const m of s.matchAll(re)) {
+        const valueIndex = m.index! + m[0].lastIndexOf(m[1]!);
+        if (insideAny(valueIndex, rejected)) continue;
+        values.push(m[1]!.toUpperCase());
+      }
+    }
+    return values;
+  });
+}
+
+// --- seat capacity ---------------------------------------------------------
+
+/**
+ * Language naming the SECTION's enrollment limit — the fact being asked about.
+ */
+const ENROLLMENT_CUE = new RegExp(
+  [
+    String.raw`\b(?:maximum|max\.?)\s+(?:enrollment|enrolment)`,
+    String.raw`\b(?:enrollment|enrolment)\s+(?:limit|cap|capacity|maximum|max)`,
+    String.raw`\bseat(?:ing)?\s+(?:cap|capacity|limit)`,
+    String.raw`\b(?:section|class)\s+(?:cap|capacity|limit)`,
+    String.raw`\bcapped\s+at`,
+    String.raw`\b(?:maximum|max\.?|limit)\s+of`,
+    String.raw`\b(?:maximum|max\.?)\s+seats?`,
+    String.raw`\bholds?\s+up\s+to`,
+  ].join("|"),
+  "gi",
+);
+
+/**
+ * Language naming the ROOM's physical capacity — a DIFFERENT fact that happens
+ * to be a number of people in the same sentence neighbourhood.
+ *
+ * This is the guard that the first version lacked. Its tier list contained
+ * `(?:enrollment|seat|room|class)\s*(?:cap|capacity|limit)`, so "physical room
+ * capacity of 102" matched, outranked the true answer, and reported a correct
+ * model as fabricating. Room capacity is now not merely deprioritised — it
+ * produces no candidate at all, and any enrollment cue that overlaps a room cue
+ * ("the room holds up to 102") is suppressed.
+ */
+const ROOM_CAPACITY_CUE = new RegExp(
+  [
+    String.raw`\b(?:physical\s+)?(?:room|classroom|building|lecture\s+hall)\s+(?:cap|capacity)`,
+    String.raw`\bphysical\s+cap(?:acity)?`,
+    String.raw`\bcapacity\s+of\s+the\s+(?:room|building|hall)`,
+    String.raw`\bthe\s+room\s+(?:holds?|seats?|fits?|accommodates?)`,
+    String.raw`\broom\s+(?:holds?|seats?|fits?|accommodates?)`,
+  ].join("|"),
+  "gi",
+);
+
+/** A bare seat count that is explicitly seats REMAINING, never the capacity. */
+const SEATS_REMAINING = /\b(\d{1,4})\s+seats?\b(?=\s*(?:available|open|left|remaining|free))/gi;
+const BARE_SEATS = /\b(\d{1,4})\s+(?:total\s+)?seats?\b(?!\s*(?:available|open|left|remaining|free))/gi;
+
+/** The value a cue points at: immediately adjacent, or joined by a connector. */
+function valueAfterCue(sentence: string, cueEnd: number, window = 90): string | null {
+  const tail = sentence.slice(cueEnd, cueEnd + window);
+  const immediate = /^[^0-9A-Za-z]{0,4}(\d{1,4})\b/.exec(tail);
+  if (immediate) return normalizeNumber(immediate[1]!);
+  const connected = /\b(?:is|are|of|at|to|equals?)\b\s*[:=-]?\s*(\d{1,4})\b|[:=]\s*(\d{1,4})\b/.exec(
+    tail,
+  );
+  if (connected) return normalizeNumber(connected[1] ?? connected[2]!);
+  return null;
 }
 
 /**
- * Seat capacity / maximum enrollment. Requires a capacity cue word, so an
- * incidental number ("Fall 2026", "CRN 80763") is never read as a seat count.
+ * Seat capacity / maximum enrollment.
  *
- * The tiers are tried IN ORDER and the first tier that matches wins — not the
- * earliest match across all tiers. "Maximum enrollment for CRN 80763 is 64,
- * with 8 seats available" is the case that forced this: an earliest-index rule
- * let the bare "8 seats" pattern beat the explicit capacity phrasing and report
- * seats-remaining as the cap. That case is in EXTRACTOR_CASES and it caught the
- * bug before any measurement ran.
- *
- * The bare "N seats" tier also refuses "N seats available/open/left/remaining",
- * which is a different fact from the capacity being asked about.
+ * Bound to enrollment language, so an incidental number ("Fall 2026",
+ * "CRN 80763"), a room's physical capacity, and a seats-remaining count are all
+ * refused. The bare "N seats" reading is a last resort used only when no cued
+ * value exists anywhere in the answer.
  */
-export function extractSeatCap(text: string): string | null {
-  const tiers: RegExp[] = [
-    // explicit cue, value immediately after
-    /\b(?:maximum|max\.?)\s*(?:enrollment|enrolment|capacity|seats?)\b\s*(?:is|of|are|at|=|:|-)?\s*(\d{1,4})\b/i,
-    // explicit cue, value after intervening words but joined by a connector
-    /\b(?:maximum|max\.?)\s*(?:enrollment|enrolment|capacity|seats?)\b[\s\S]{0,48}?\b(?:is|of|are|at|=|:)\s*(\d{1,4})\b/i,
-    /\b(?:enrollment|seat|room|class)\s*(?:cap|capacity|limit)\b\s*(?:is|of|are|at|=|:|-)?\s*(\d{1,4})\b/i,
-    /\b(?:enrollment|seat|room|class)\s*(?:cap|capacity|limit)\b[\s\S]{0,48}?\b(?:is|of|are|at|=|:)\s*(\d{1,4})\b/i,
-    /\bcapped\s+at\s*(\d{1,4})\b/i,
-    /\bmaximum\s+of\s+(\d{1,4})\b/i,
-    /\bholds?\s+(?:up\s+to\s+)?(\d{1,4})\s+students?\b/i,
-    // last resort: a bare seat count, but never a seats-REMAINING count
-    /\b(\d{1,4})\s+(?:total\s+)?seats?\b(?!\s*(?:available|open|left|remaining|free))/i,
-  ];
-  for (const re of tiers) {
-    const m = re.exec(text);
-    if (m) return normalizeNumber(m[1]!);
-  }
-  return null;
+export function extractSeatCap(text: string): Extraction {
+  const cued = firstSentenceWithCandidates(text, (s) => {
+    const roomSpans = spansOf(s, ROOM_CAPACITY_CUE);
+    const values: string[] = [];
+    for (const m of s.matchAll(ENROLLMENT_CUE)) {
+      if (insideAny(m.index!, roomSpans)) continue; // "the room holds up to 102"
+      const v = valueAfterCue(s, m.index! + m[0].length);
+      if (v !== null) values.push(v);
+    }
+    return values;
+  });
+  if (cued.kind !== "none") return cued;
+
+  return firstSentenceWithCandidates(text, (s) => {
+    const remaining = spansOf(s, SEATS_REMAINING);
+    const roomSpans = spansOf(s, ROOM_CAPACITY_CUE);
+    return [...s.matchAll(BARE_SEATS)]
+      .filter((m) => !insideAny(m.index!, remaining) && !insideAny(m.index!, roomSpans))
+      .map((m) => normalizeNumber(m[1]!));
+  });
 }
 
 export type FactKind = "credits" | "startTime" | "building" | "room" | "seatCap";
 
-export const EXTRACTORS: Record<FactKind, (text: string) => string | null> = {
+export const EXTRACTORS: Record<FactKind, (text: string) => Extraction> = {
   credits: extractCredits,
   startTime: extractStartTime,
   building: extractBuilding,
@@ -414,6 +685,7 @@ export type FabClass =
   | "unsupported"
   | "abstained"
   | "no_fact"
+  | "unclassifiable"
   | "http_error"
   | "unparseable";
 
@@ -423,6 +695,7 @@ export const FAB_CLASSES: FabClass[] = [
   "unsupported",
   "abstained",
   "no_fact",
+  "unclassifiable",
   "http_error",
   "unparseable",
 ];
@@ -458,6 +731,10 @@ export interface FabObservation {
 export interface FabVerdict {
   cls: FabClass;
   extracted: string | null;
+  /** Set only for `unclassifiable`: the competing readings that could not be
+   *  told apart. Printed in the report so the reader sees what was in conflict
+   *  rather than a bare count. */
+  candidates?: string[];
 }
 
 /**
@@ -472,6 +749,10 @@ export interface FabVerdict {
  *     correctness failure whether or not a tool was consulted.
  *   correct-but-toolless is `unsupported`, never `grounded` — the answer did not
  *     trace to a tool result, it merely happened to agree with one.
+ *   an ambiguous reading is `unclassifiable` and is reported on its own — never
+ *     folded into `fabricated` (which would be a false accusation) and never
+ *     into `no_fact` (which would hide that the model did answer). The
+ *     instrument is allowed to say "I could not tell".
  */
 export function classifyFabTrial(obs: FabObservation, q: FactQuestion): FabVerdict {
   if (obs.status === 0 || obs.status < 200 || obs.status >= 300) {
@@ -480,13 +761,17 @@ export function classifyFabTrial(obs: FabObservation, q: FactQuestion): FabVerdi
   if (!obs.bodyParsed) {
     return { cls: "unparseable", extracted: null };
   }
-  const extracted = EXTRACTORS[q.kind](obs.answer);
-  if (extracted === null) {
+  const extraction = EXTRACTORS[q.kind](obs.answer);
+  if (extraction.kind === "ambiguous") {
+    return { cls: "unclassifiable", extracted: null, candidates: extraction.candidates };
+  }
+  if (extraction.kind === "none") {
     return {
       cls: looksLikeAbstention(obs.answer) ? "abstained" : "no_fact",
       extracted: null,
     };
   }
+  const extracted = extraction.value;
   if (extracted.toLowerCase() !== q.truth.toLowerCase()) {
     return { cls: "fabricated", extracted };
   }
@@ -713,6 +998,146 @@ export const EXTRACTOR_CASES: ExtractorCase[] = [
     expectClass: "fabricated",
     toolCalls: 0,
   },
+
+  // =========================================================================
+  // MULTI-NUMBER ANSWERS
+  //
+  // Every case above this line contains exactly ONE number of the asked-for
+  // kind. That is why the first version of this suite passed 23/23 and then
+  // misclassified two of the first seven real answers: real prose states
+  // several numbers, and the suite never covered the case that breaks the
+  // extractor. A fixture set where every case has one number cannot certify an
+  // extractor that runs on real prose.
+  //
+  // The first two cases below are verbatim generations from that run.
+  // =========================================================================
+
+  {
+    questionId: "gc1010-seatcap",
+    label: "REGRESSION: seat cap beside the room's physical capacity (verbatim)",
+    answer:
+      "The maximum enrollment (seat capacity) for GC 1010 section 001 (CRN 80763) " +
+      "in Fall 2026 is **64 students**. The section is currently meeting in Jordan " +
+      "Hall G33, which has a physical room capacity of 102, but the enrollment " +
+      "limit for the section itself is capped at 64.",
+    // Entirely correct: the cap is 64, and Jordan Hall G33 really does seat 102
+    // (data/clemson-room-capacity.json). The old extractor read 102 and called
+    // this a fabrication — a false accusation against a model that was right.
+    expect: "64",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc1010-seatcap",
+    label: "REGRESSION: correct value inside bold markers (verbatim)",
+    answer:
+      "For GC 1010 section 001 (CRN 80763) in Fall 2026, the maximum enrollment " +
+      "(seat capacity) is **64**.",
+    // Scored `no_fact` by the old extractor: `\s*` between cue and value does
+    // not match `**`, so the bold markers alone hid a correct answer.
+    expect: "64",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc1010-seatcap",
+    label: "room capacity ALONE states no seat cap",
+    answer: "That section meets in Jordan Hall G33, which has a room capacity of 102.",
+    // The asked-for fact was never stated. `no_fact`, not `fabricated`.
+    expect: null,
+    expectClass: "no_fact",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc1010-seatcap",
+    label: "\"the room holds\" must not be read as the enrollment limit",
+    answer: "The room holds up to 102 students, but the section is capped at 64.",
+    expect: "64",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc1010-seatcap",
+    label: "enrolled count stated beside the capacity",
+    answer:
+      "There are currently 56 students enrolled, and the maximum enrollment is 64.",
+    expect: "64",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc3780-start",
+    label: "start and end time in one range",
+    answer:
+      "GC 3780 section 001 meets MWF from 12:20 PM to 2:15 PM in Powers College of Business 112.",
+    expect: "1220",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc3780-start",
+    label: "end time stated FIRST must not be read as the start",
+    answer: "The class ends at 2:15 PM; it starts at 12:20 PM.",
+    expect: "1220",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc3780-building",
+    label: "building and room in one answer",
+    answer:
+      "GC 3780 section 001 (CRN 87630) meets in Powers College of Business, room 112, MWF 12:20-2:15 PM.",
+    expect: "powers college of business",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc2071-room",
+    label: "room stated with building, time and capacity around it",
+    answer:
+      "The lab meets in Godfrey Hall, room 100F, from 8:00 AM to 10:50 AM, and seats 20.",
+    expect: "100F",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc2071-credits",
+    label: "credit hours among a room number and a seat cap",
+    answer:
+      "GC 2071 is a 0-credit laboratory that meets in Godfrey Hall 100F with a maximum enrollment of 24.",
+    expect: "0",
+    expectClass: "grounded",
+    toolCalls: 1,
+  },
+
+  // --- unclassifiable: the instrument is allowed to say "I could not tell" ---
+  //
+  // Reported as its own count, never folded into `fabricated` (a false
+  // accusation) or `no_fact` (which would hide that the model did answer).
+  {
+    questionId: "gc1010-seatcap",
+    label: "two conflicting capacities, neither identifiable as the answer",
+    answer: "The section capacity is 64 and the maximum enrollment is 72.",
+    expect: null,
+    expectClass: "unclassifiable",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc3780-start",
+    label: "two sections, two start times",
+    answer: "Section 001 starts at 12:20 PM and section 002 starts at 9:30 AM.",
+    expect: null,
+    expectClass: "unclassifiable",
+    toolCalls: 1,
+  },
+  {
+    questionId: "gc3780-building",
+    label: "two buildings named in one sentence",
+    answer: "It meets in Godfrey Hall and Powers College of Business.",
+    expect: null,
+    expectClass: "unclassifiable",
+    toolCalls: 1,
+  },
 ];
 
 export interface ValidationRow {
@@ -936,6 +1361,7 @@ export function emptyFabCounts(): Record<FabClass, number> {
     unsupported: 0,
     abstained: 0,
     no_fact: 0,
+    unclassifiable: 0,
     http_error: 0,
     unparseable: 0,
   };
@@ -949,7 +1375,13 @@ interface QuestionResult {
   groundedInterval: Interval;
   valid: boolean;
   validity: string;
-  examples: Array<{ cls: FabClass; extracted: string | null; answer: string; tools: number }>;
+  examples: Array<{
+    cls: FabClass;
+    extracted: string | null;
+    candidates?: string[];
+    answer: string;
+    tools: number;
+  }>;
   elapsedMs: number;
 }
 
@@ -1089,18 +1521,22 @@ async function main() {
       if (
         verdict.cls === "fabricated" ||
         verdict.cls === "unsupported" ||
+        verdict.cls === "unclassifiable" ||
         examples.filter((e) => e.cls === verdict.cls).length < 1
       ) {
         examples.push({
           cls: verdict.cls,
           extracted: verdict.extracted,
+          candidates: verdict.candidates,
           answer: obs.answer.slice(0, 600),
           tools: obs.toolCallCount,
         });
       }
       process.stderr.write(
         `[${q.id} ${i + 1}/${args.trials}] ${verdict.cls}` +
-          `${verdict.extracted === null ? "" : ` (${verdict.extracted})`} tools=${obs.toolCallCount}\n`,
+          `${verdict.extracted === null ? "" : ` (${verdict.extracted})`}` +
+          `${verdict.candidates ? ` (candidates ${verdict.candidates.join(" | ")})` : ""}` +
+          ` tools=${obs.toolCallCount} ${Math.round((Date.now() - t0) / 1000)}s\n`,
       );
     }
 
@@ -1117,6 +1553,21 @@ async function main() {
       examples,
       elapsedMs: Date.now() - t0,
     });
+
+    // Checkpoint after every question.
+    //
+    // The previous run of this probe was SIGTERM'd by a 2-minute foreground
+    // timeout at trial 22 of 100, and because the report was only written after
+    // ALL questions finished, it left no summary table, no intervals and no
+    // validity block — a run that did 22% of the work and looked like a short
+    // successful one. Partial evidence on disk beats none, and the sentinel
+    // written at the end of main() is what distinguishes the two.
+    if (args.report) {
+      writeFileSync(
+        args.report,
+        [...out, "", `_RUN INCOMPLETE — checkpoint after \`${q.id}\`._`, ""].join("\n"),
+      );
+    }
   }
 
   // ---- results -------------------------------------------------------------
@@ -1125,19 +1576,22 @@ async function main() {
   log(
     `\`fabricated\` is the number that matters. \`unsupported\` is a separate ` +
       `failure: the fact was right but no tool was called, so it is luck rather than ` +
-      `grounding and will not survive a schedule change.`,
+      `grounding and will not survive a schedule change. \`unclassifiable\` is not a ` +
+      `model failure at all — it is the instrument declining to judge an answer whose ` +
+      `reading it could not determine, and it is never folded into \`fabricated\` or ` +
+      `\`no_fact\`.`,
   );
   log();
   log(
-    `| question | hard | truth | n | grounded | fabricated | unsupported | abstained | no_fact | http_error | unparseable | fabrication rate (95% CI) | grounded rate (95% CI) | block |`,
+    `| question | hard | truth | n | grounded | fabricated | unsupported | abstained | no_fact | unclassifiable | http_error | unparseable | fabrication rate (95% CI) | grounded rate (95% CI) | block |`,
   );
-  log(`|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|`);
+  log(`|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|`);
   for (const r of results) {
     const c = r.counts;
     log(
       `| \`${r.q.id}\` | ${r.q.hard ? "yes" : "no"} | \`${r.q.truth}\` | ${r.trials} | ` +
         `${c.grounded} | ${c.fabricated} | ${c.unsupported} | ${c.abstained} | ${c.no_fact} | ` +
-        `${c.http_error} | ${c.unparseable} | ` +
+        `${c.unclassifiable} | ${c.http_error} | ${c.unparseable} | ` +
         `${r.valid ? formatInterval(r.fabricatedInterval) : "WITHHELD"} | ` +
         `${r.valid ? formatInterval(r.groundedInterval) : "WITHHELD"} | ` +
         `${r.valid ? "valid" : "**INVALID**"} |`,
@@ -1191,7 +1645,9 @@ async function main() {
     }
     for (const e of r.examples.slice(0, 8)) {
       log(
-        `- **${e.cls}** (extracted \`${e.extracted ?? "—"}\`, truth \`${r.q.truth}\`, ` +
+        `- **${e.cls}** (extracted \`${e.extracted ?? "—"}\`` +
+          `${e.candidates ? `, competing readings \`${e.candidates.join("` / `")}\`` : ""}` +
+          `, truth \`${r.q.truth}\`, ` +
           `${e.tools} tool call${e.tools === 1 ? "" : "s"}): ${JSON.stringify(e.answer)}`,
       );
     }
@@ -1201,6 +1657,13 @@ async function main() {
   log(
     `_This harness reports counts, intervals and raw generations. It does not ` +
       `interpret its own output._`,
+  );
+  log();
+  // Completion sentinel. A truncated run now says so on its own, instead of
+  // being indistinguishable from a complete one.
+  log(
+    `RUN COMPLETE — ${questions.length} question(s) x ${args.trials} trials = ` +
+      `${questions.length * args.trials} trials, finished ${new Date().toISOString()}.`,
   );
 
   if (args.report) {
@@ -1213,5 +1676,10 @@ const invokedDirectly =
   process.argv[1] !== undefined &&
   import.meta.url.endsWith(process.argv[1].split("/").pop() ?? " ");
 if (invokedDirectly) {
-  await main();
+  // Fail loudly and non-zero. A measurement harness that dies quietly is worse
+  // than one that crashes: the caller reads a partial result as a whole one.
+  await main().catch((err: unknown) => {
+    console.error(`FABRICATION PROBE FAILED: ${err instanceof Error ? err.stack : String(err)}`);
+    process.exit(1);
+  });
 }

@@ -69,6 +69,7 @@ when you move to another student.</p>
   <label for="message">Your question</label>
   <textarea id="message" name="message" required></textarea>
   <button id="send" type="submit">Send</button>
+  <button id="stop" type="button" disabled>Stop</button>
   <button id="clear" type="button">Clear session</button>
   <button id="export" type="button">Export transcript</button>
 </form>
@@ -92,6 +93,7 @@ $("composer").addEventListener("submit", async (e) => {
   addAnswer("You", message);
   $("message").value = "";
   $("send").disabled = true;
+  $("stop").disabled = false;   // a turn is now in flight — stop can reach it
   status.textContent = "Checking the schedule\\u2026";
   try {
     const r = await fetch("/chat", {
@@ -101,13 +103,34 @@ $("composer").addEventListener("submit", async (e) => {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "request failed");
-    addAnswer("Advisor chat", data.text);
-    status.textContent = "Response ready.";
+    // An aborted turn is a partial answer, not a finished one (Task 3). It
+    // gets a distinct label and status so it is never mistaken for a
+    // completed response.
+    if (data.outcome === "aborted") {
+      addAnswer("Advisor chat \\u2014 stopped", data.text);
+      status.textContent = "Stopped.";
+    } else {
+      addAnswer("Advisor chat", data.text);
+      status.textContent = "Response ready.";
+    }
   } catch (err) {
     status.textContent = "Something went wrong. Please try again.";
   } finally {
     $("send").disabled = false;
+    $("stop").disabled = true;
     $("message").focus();   // focus stays on input, never yanked to the answer
+  }
+});
+
+$("stop").addEventListener("click", async () => {
+  $("stop").disabled = true;
+  status.textContent = "Stopping\\u2026";
+  try {
+    const r = await fetch("/stop", { method: "POST" });
+    const data = await r.json();
+    status.textContent = data.stopped ? "Stop requested." : "Nothing to stop.";
+  } catch (err) {
+    status.textContent = "Could not stop.";
   }
 });
 

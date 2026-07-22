@@ -58,6 +58,7 @@ async function runChatSubmit(responseBody: unknown) {
     composer: makeElement(),
     message: makeElement({ value: "What room fits 30 students?" }),
     send: makeElement(),
+    stop: makeElement({ disabled: true }),
     clear: makeElement(),
     export: makeElement(),
   };
@@ -128,7 +129,7 @@ test("the client fetches /chat once and appends the answer exactly once", async 
 
 test("every control has an accessible name", () => {
   const page = renderChatPage();
-  for (const id of ["send", "clear", "export", "message"]) {
+  for (const id of ["send", "stop", "clear", "export", "message"]) {
     assert.match(
       page,
       new RegExp(`id="${id}"[^>]*(aria-label=|>)`),
@@ -136,4 +137,43 @@ test("every control has an accessible name", () => {
     );
   }
   assert.match(page, /<label[^>]+for="message"/);
+});
+
+// The stop control exists to reach the real, working /stop endpoint (Task 5)
+// and the abort path through the Pi harness (Task 3). Its enabled state must
+// be honest: disabled while there is nothing to abort.
+test("the stop control is present and disabled at rest", () => {
+  const page = renderChatPage();
+  assert.match(
+    page,
+    /<button id="stop"[^>]*disabled[^>]*>[^<]*<\/button>/,
+    "stop button must be disabled in the initial markup, before any turn is in flight",
+  );
+});
+
+// AdvisorTurnResult's "aborted" outcome exists specifically so a partial
+// answer is never mistaken for a finished one. The UI must carry that
+// distinction through to what the advisor sees, not just what the server
+// stuffed into the text field.
+test("an aborted turn is not rendered as a complete answer", async () => {
+  const { elements } = await runChatSubmit({
+    text: "Room capacity is\n\n[Stopped — this answer is partial.]",
+    outcome: "aborted",
+  });
+
+  const assistantArticle = elements.answers.children.find((article) =>
+    article.children.some((child) => child.tagName === "h2"),
+  );
+  const heading = assistantArticle?.children.find((child) => child.tagName === "h2");
+
+  assert.notEqual(
+    heading?.textContent,
+    "Advisor chat",
+    "an aborted answer must not carry the same label as a completed one",
+  );
+  assert.notEqual(
+    elements.status.textContent,
+    "Response ready.",
+    "the status region must not announce a stopped turn as a ready response",
+  );
 });

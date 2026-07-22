@@ -117,6 +117,13 @@ The SDK runs the loop; the CLI it spawns provides isolation:
 - `workingDirectory` — the session's temp directory, holding uploaded files.
   Created on session start, `rm -rf` on clear or expiry.
 - `baseUrl` / `model` — from env; local vLLM by default, OpenAI as fallback.
+- `webSearchMode: "disabled"` — **answers come from the MCP tools or not at
+  all.** Web search is the quiet way "retrieve, don't generate" fails: Clemson
+  course and requirement pages exist publicly, are frequently outdated, and are
+  not versioned by catalog year. An answer sourced from a stale web page is
+  indistinguishable in tone from one sourced from `8767`, and the advisor has no
+  way to tell them apart. The snapshot in `state/clemson/` is the authority.
+- `approvalPolicy: "never"` — an unattended web service has no one to prompt.
 - `isEgressAuthorized()` gates every call and fails closed, per existing
   convention.
 
@@ -177,6 +184,20 @@ established with `--output-schema`: **the agent returns structured JSON; the hos
 renders it.** For a proposed schedule that means CRNs, meeting times, rooms,
 credits, and conflict status — validated against the schema, and re-checkable
 against `check-schedule-conflicts` before anything is rendered.
+
+**Prose is the default; schema is the exception.** `outputSchema` lives on
+`TurnOptions`, not `ThreadOptions`, so it is chosen per turn on the same thread
+with the same history. Ordinary conversation runs with no schema at all and the
+agent answers in prose, because this is a chat tool and most turns are
+discussion — clarifying what the student needs, explaining why a section does not
+fit, thinking out loud about tradeoffs. Constraining every response to JSON would
+buy nothing and cost the thing the interface is for.
+
+An artifact is a second, explicit turn: the advisor asks for the schedule as a
+document, and *that* turn carries the schema. Two consequences worth having —
+documents are never produced by surprise, and the artifact turn can be validated
+and re-verified against the tools before rendering, which a turn of prose cannot
+be.
 
 Three benefits beyond preserving the sandbox: formatting is deterministic
 because a template produces it; output is validatable in a way a
@@ -257,6 +278,9 @@ useful when `advisorId` carries real values in Phase 2.
   named nowhere in this repo, so a reviewer reading only this code sees a
   correct tool list.
 - **Egress gate** — an unauthorized provider is refused, failing closed.
+- **Turn modes** — a conversational turn carries no `outputSchema` and returns
+  prose; an artifact turn carries one and returns JSON. Both run on the same
+  thread, so history is shared.
 - **Artifacts** — schema-invalid agent output is rejected rather than rendered;
   a valid schedule renders deterministically.
 - **Auth seam** — `authenticate()` returning null denies; sessions carry

@@ -17,11 +17,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ADVISOR_HTTP_HOST,
   ADVISOR_PASSWORD,
   ADVISOR_PORT,
   ADVISOR_SESSION_TTL_MS,
 } from "./config.js";
 import { log } from "./log.js";
+import { isLoopbackHost } from "./mcp-tools/server.js";
 import {
   SESSION_COOKIE,
   authenticate,
@@ -46,6 +48,72 @@ import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
 import { renderSchedule } from "./advisor-artifacts.js";
 
 const MAX_BODY_BYTES = 5_000_000;
+
+/**
+ * Fail closed: the only thing standing between this service and the network is
+ * the shared password, so a non-loopback bind without one must not start.
+ * Mirrors assertHttpAuthConfig in mcp-tools/server.ts, and deliberately reuses
+ * its isLoopbackHost so there is exactly one host classifier in the codebase.
+ */
+export function assertAdvisorAuthConfig(expected: string, host: string): void {
+  if (!expected && !isLoopbackHost(host)) {
+    throw new Error(
+      `ADVISOR_PASSWORD is required when ADVISOR_HTTP_HOST is not loopback (got "${host}")`,
+    );
+  }
+}
+
+// --- /login rate limit -------------------------------------------------
+//
+// Shape lifted from gc_alumni/ask_gc/app.py (_rate_ok): a per-IP deque of
+// timestamps, pruned to a sliding window. Applied to /login ONLY. /chat is
+// deliberately exempt — an advisor mid-conversation must never be throttled for
+// using the tool normally, and the thing worth slowing down is password
+// guessing, not advising.
+const LOGIN_RATE_N = 15;
+const LOGIN_RATE_WINDOW_MS = 60_000;
+/** Bound on tracked IPs, so a spray of forged X-Forwarded-For cannot grow this map without limit. */
+const LOGIN_RATE_MAX_IPS = 5_000;
+const loginHits = new Map<string, number[]>();
+
+/**
+ * Client IP, X-Forwarded-For first element then the socket address — matching
+ * ask_gc, since this may end up behind Caddy.
+ *
+ * X-Forwarded-For is CLIENT-CONTROLLED when no trusted proxy sets it, so an
+ * attacker can rotate the header and get a fresh bucket each time. This is a
+ * usability limiter (it stops accidental hammering and casual guessing), not a
+ * security boundary — do not count it as one when reasoning about the password.
+ */
+export function clientIp(req: http.IncomingMessage): string {
+  const fwd = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(fwd) ? fwd[0] : fwd;
+  const first = raw?.split(",")[0]?.trim();
+  return first || req.socket.remoteAddress || "?";
+}
+
+export function loginRateOk(ip: string, now: number = Date.now()): boolean {
+  if (loginHits.size > LOGIN_RATE_MAX_IPS) {
+    for (const [k, v] of loginHits) {
+      if (v.length === 0 || now - v[v.length - 1]! > LOGIN_RATE_WINDOW_MS) {
+        loginHits.delete(k);
+      }
+    }
+  }
+  let dq = loginHits.get(ip);
+  if (!dq) {
+    dq = [];
+    loginHits.set(ip, dq);
+  }
+  while (dq.length > 0 && now - dq[0]! > LOGIN_RATE_WINDOW_MS) dq.shift();
+  if (dq.length >= LOGIN_RATE_N) return false;
+  dq.push(now);
+  return true;
+}
+
+export function resetLoginRateLimitForTest(): void {
+  loginHits.clear();
+}
 
 /** Server-authored, fixed strings. Nothing from a request is ever rendered. */
 const LOGIN_FAILED = "Incorrect password.";
@@ -162,6 +230,12 @@ export function createAdvisorServer(
       }
 
       if (method === "POST" && url.pathname === "/login") {
+        if (!loginRateOk(clientIp(req))) {
+          log.warn("advisor login rate-limited");
+          return json(res, 429, {
+            error: "too many sign-in attempts — wait a minute and try again",
+          });
+        }
         const form = new URLSearchParams(await readBody(req));
         if (!checkPassword(form.get("password") ?? "")) {
           // Only fixed, server-authored strings reach renderLoginPage. The
@@ -347,6 +421,10 @@ export function createAdvisorServer(
 }
 
 export async function startAdvisorServer(): Promise<http.Server> {
+  // First, before any work: a non-loopback bind with no password must not get
+  // as far as opening a socket.
+  assertAdvisorAuthConfig(ADVISOR_PASSWORD, ADVISOR_HTTP_HOST);
+
   setInterval(
     () => {
       const n = sweepExpired();
@@ -364,21 +442,41 @@ export async function startAdvisorServer(): Promise<http.Server> {
   // can contain student information. KeepAlive=true means restarts are routine,
   // so a handler that only closes the bridge leaks a directory pair per live
   // session per restart, with nothing left running to reap them.
+  //
+  // The handler must also EXIT. Nothing else here does: the listening socket
+  // keeps the loop alive, so a handler that only cleans up leaves a process
+  // still serving 8770 with every session disposed and the MCP bridge closed —
+  // a zombie that accepts requests it can no longer answer, and that holds the
+  // port against the restart launchd is in the middle of performing. Under
+  // KeepAlive that presents as an EADDRINUSE restart loop.
+  let shuttingDown = false;
   const onSignal = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     const n = disposeAllSessions();
     if (n > 0) log.info("advisor sessions disposed on shutdown", { count: n });
     void shutdownAdvisorTools();
+    // Sessions — the part that matters for student data — are already gone by
+    // here, synchronously. The bridge teardown is best-effort, so exit on a
+    // short timer rather than waiting on a promise that could hang.
+    setTimeout(() => process.exit(0), 500);
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
 
   const server = createAdvisorServer();
   await new Promise<void>((resolve) =>
-    // 127.0.0.1 only. There is no per-advisor identity behind this door yet,
-    // so the network boundary is doing real work.
-    server.listen(ADVISOR_PORT, "127.0.0.1", resolve),
+    // Bind host is configurable (ADVISOR_HTTP_HOST, default 127.0.0.1) so the
+    // pilot can serve campus on 0.0.0.0. Anything off loopback is gated by
+    // assertAdvisorAuthConfig above: there is still no per-advisor identity
+    // behind this door, only the shared password, so the password is what makes
+    // widening the bind permissible at all.
+    server.listen(ADVISOR_PORT, ADVISOR_HTTP_HOST, resolve),
   );
-  log.info("advisor chat listening", { port: ADVISOR_PORT });
+  log.info("advisor chat listening", {
+    port: ADVISOR_PORT,
+    host: ADVISOR_HTTP_HOST,
+  });
   return server;
 }
 

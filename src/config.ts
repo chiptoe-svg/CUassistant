@@ -200,9 +200,7 @@ export const MCP_CATALOG_HTTP_PORT = Number(
 // --- Token portal (Google OAuth2 → bearer token issuance) ---
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
-export const TOKEN_PORTAL_PORT = Number(
-  process.env.TOKEN_PORTAL_PORT || 8769,
-);
+export const TOKEN_PORTAL_PORT = Number(process.env.TOKEN_PORTAL_PORT || 8769);
 // Base URL must be HTTPS for production. Defaults to localhost for dev.
 export const TOKEN_PORTAL_BASE_URL =
   process.env.TOKEN_PORTAL_BASE_URL ||
@@ -210,6 +208,12 @@ export const TOKEN_PORTAL_BASE_URL =
 
 // --- Advisor chat service (port 8770) ---
 export const ADVISOR_PORT = Number(process.env.ADVISOR_PORT || 8770);
+/**
+ * Bind host. Defaults to loopback; set to 0.0.0.0 to serve campus.
+ * A non-loopback value without ADVISOR_PASSWORD refuses to start — see
+ * assertAdvisorAuthConfig in advisor-server.ts.
+ */
+export const ADVISOR_HTTP_HOST = process.env.ADVISOR_HTTP_HOST || "127.0.0.1";
 export const ADVISOR_PASSWORD = process.env.ADVISOR_PASSWORD || "";
 export const ADVISOR_SESSION_TTL_MS = Number(
   process.env.ADVISOR_SESSION_TTL_MS || 2 * 60 * 60 * 1000,

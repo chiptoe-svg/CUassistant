@@ -2,16 +2,21 @@
 <!--
   CUassistant advisor chat service for launchd.
 
-  Runs the advisor chat HTTP server on 127.0.0.1:8770 (ADVISOR_PORT).
-  Advisors reach it through a reverse proxy (e.g. Caddy) that terminates
-  TLS; this service itself binds loopback only.
+  Runs the advisor chat HTTP server on ADVISOR_PORT (8770). The bind
+  host is ADVISOR_HTTP_HOST, default 127.0.0.1; the campus pilot sets it
+  to 0.0.0.0 in the gitignored .env, which config.ts loads relative to
+  WorkingDirectory below. It is deliberately NOT set here — a bind host
+  that reaches the network is a deployment decision, and this file is
+  checked in.
 
-  Security note: ADVISOR_PASSWORD MUST be injected at the environment
-  level by OneCLI vault (or equivalent secret manager) — do NOT write
-  the password into this plist. Secrets do not belong in plist files.
-  The service fails closed (every login attempt rejected) if
-  ADVISOR_PASSWORD is unset, which is correct — do not "fix" that by
-  hardcoding a password here.
+  Security note: ADVISOR_PASSWORD MUST come from the environment —
+  vault-injected, or the gitignored .env — and NOT from this plist.
+  Secrets do not belong in plist files. The service fails closed if
+  ADVISOR_PASSWORD is unset: on loopback every login attempt is
+  rejected, and on a non-loopback ADVISOR_HTTP_HOST the process refuses
+  to start at all rather than serve an unauthenticated door to the LAN
+  (assertAdvisorAuthConfig, src/advisor-server.ts). Both are correct —
+  do not "fix" either by hardcoding a password here.
 
   This service consumes the public MCP servers (8766, 8767) over
   loopback and adds no MCP tools of its own. It never talks to 8765

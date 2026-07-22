@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import test, { after, beforeEach } from "node:test";
 import type { AddressInfo } from "node:net";
 
 // config.ts reads env at module load, so the password has to be in place
 // before advisor-server pulls it in. Hence the dynamic import.
 process.env.ADVISOR_PASSWORD = "test-password";
 
-const { createAdvisorServer } = await import("../src/advisor-server.ts");
-const { resetSessionsForTest, sessionCount } = await import(
-  "../src/advisor-session.ts"
-);
+const { createAdvisorServer, resetLoginRateLimitForTest } =
+  await import("../src/advisor-server.ts");
+
+const { resetSessionsForTest, sessionCount } =
+  await import("../src/advisor-session.ts");
+
+// Every test here logs in, all from loopback, so they share one /login rate
+// bucket and would otherwise start 429ing partway through the file. The limiter
+// itself is covered in advisor-lan.test.ts; here it is just noise.
+beforeEach(() => resetLoginRateLimitForTest());
 
 // Stand-in for runAdvisorTurn. Records the sessions it saw so the isolation
 // test can prove two cookies never share one conversation.
@@ -19,7 +25,8 @@ let turnBehaviour: "complete" | "aborted" | "throw" = "complete";
 const server = createAdvisorServer({
   runTurn: async (session, input) => {
     seen.push(session.id);
-    if (turnBehaviour === "throw") throw new Error("provider blew up: STUDENT SECRET");
+    if (turnBehaviour === "throw")
+      throw new Error("provider blew up: STUDENT SECRET");
     if (turnBehaviour === "aborted") {
       return { text: "half an ans", toolCalls: 1, outcome: "aborted" as const };
     }
@@ -70,7 +77,11 @@ test("an unauthenticated POST /chat is rejected with 401", async () => {
     body: JSON.stringify({ message: "hi" }),
   });
   assert.equal(res.status, 401);
-  assert.equal(seen.length, 0, "an unauthenticated request must never reach the agent");
+  assert.equal(
+    seen.length,
+    0,
+    "an unauthenticated request must never reach the agent",
+  );
 });
 
 test("a wrong password is rejected and sets no cookie", async () => {
@@ -132,7 +143,9 @@ test("two logins with the same password get separate sessions", async () => {
   assert.equal(seen.length, 2);
   assert.notEqual(seen[0], seen[1], "each cookie must drive its own session");
 
-  const exportA = await (await fetch(`${base}/export`, { headers: { cookie: a } })).text();
+  const exportA = await (
+    await fetch(`${base}/export`, { headers: { cookie: a } })
+  ).text();
   assert.doesNotMatch(exportA, /answered: hello[\s\S]*answered: hello/);
 });
 
@@ -174,7 +187,9 @@ test("an aborted turn is marked partial and is not recorded as history", async (
   assert.equal(data.outcome, "aborted");
   assert.match(data.text, /partial/i);
 
-  const md = await (await fetch(`${base}/export`, { headers: { cookie } })).text();
+  const md = await (
+    await fetch(`${base}/export`, { headers: { cookie } })
+  ).text();
   assert.doesNotMatch(md, /half an ans/);
 });
 
@@ -186,13 +201,18 @@ test("clearing a session disposes it and issues a fresh cookie", async () => {
     body: JSON.stringify({ message: "remember me" }),
   });
   const before = sessionCount();
-  const res = await fetch(`${base}/clear`, { method: "POST", headers: { cookie } });
+  const res = await fetch(`${base}/clear`, {
+    method: "POST",
+    headers: { cookie },
+  });
   assert.equal(res.status, 200);
   const fresh = cookieFrom(res);
   assert.notEqual(fresh, cookie);
   assert.equal(sessionCount(), before, "one session out, one session in");
 
-  const md = await (await fetch(`${base}/export`, { headers: { cookie: fresh } })).text();
+  const md = await (
+    await fetch(`${base}/export`, { headers: { cookie: fresh } })
+  ).text();
   assert.doesNotMatch(md, /remember me/);
 });
 
@@ -219,7 +239,11 @@ test("an in-flight turn can be stopped through /stop", async () => {
       new Promise((resolve) => {
         signal?.addEventListener("abort", () => {
           sawAbort = true;
-          resolve({ text: "stopped", toolCalls: 0, outcome: "aborted" as const });
+          resolve({
+            text: "stopped",
+            toolCalls: 0,
+            outcome: "aborted" as const,
+          });
         });
       }),
   });
@@ -257,7 +281,9 @@ test("an in-flight turn can be stopped through /stop", async () => {
 // through propose_schedule — the agent never renders it and never writes it.
 test("/export/schedule serves a document only after one has been proposed", async () => {
   const cookie = cookieFrom(await login());
-  const before = await fetch(`${base}/export/schedule`, { headers: { cookie } });
+  const before = await fetch(`${base}/export/schedule`, {
+    headers: { cookie },
+  });
   assert.equal(before.status, 404, "no schedule proposed yet");
 
   const withSchedule = createAdvisorServer({
@@ -377,7 +403,10 @@ test("/clear waits for an in-flight turn that would recreate the session directo
     }).catch(() => undefined);
 
     await started;
-    await fetch(`${raceBase}/clear`, { method: "POST", headers: { Cookie: cookie } });
+    await fetch(`${raceBase}/clear`, {
+      method: "POST",
+      headers: { Cookie: cookie },
+    });
     await chat;
 
     assert.ok(capturedDir, "sanity: the turn never ran");
@@ -424,7 +453,11 @@ test("/chat waits for the aborted prior turn to finish its commit before startin
         return { text: "partial", toolCalls: 1, outcome: "aborted" as const };
       }
       events.push("second:start");
-      return { text: "second answer", toolCalls: 1, outcome: "complete" as const };
+      return {
+        text: "second answer",
+        toolCalls: 1,
+        outcome: "complete" as const,
+      };
     },
   });
   await new Promise<void>((r) => raceServer.listen(0, "127.0.0.1", r));
@@ -460,7 +493,10 @@ test("/chat waits for the aborted prior turn to finish its commit before startin
     // And the second turn still produced its answer — the wait must not have
     // cost the caller the response.
     assert.equal(second.status, 200);
-    assert.equal(((await second.json()) as { text: string }).text, "second answer");
+    assert.equal(
+      ((await second.json()) as { text: string }).text,
+      "second answer",
+    );
   } finally {
     resetSessionsForTest();
     raceServer.close();
@@ -470,7 +506,8 @@ test("/chat waits for the aborted prior turn to finish its commit before startin
 // --- new outcomes must not render as finished answers ------------------------
 
 test("a malformed-tool-call turn never renders its prose as an answer", async () => {
-  const prose = "<cu_public__search-clemson-classes>{}</cu_public__search-clemson-classes>";
+  const prose =
+    "<cu_public__search-clemson-classes>{}</cu_public__search-clemson-classes>";
   const mServer = createAdvisorServer({
     runTurn: async () => ({
       text: prose,
@@ -496,12 +533,20 @@ test("a malformed-tool-call turn never renders its prose as an answer", async ()
     });
     const body = (await chat.json()) as { text: string; outcome: string };
 
-    assert.equal(body.outcome, "malformed_tool_call", "the outcome must reach the client");
+    assert.equal(
+      body.outcome,
+      "malformed_tool_call",
+      "the outcome must reach the client",
+    );
     assert.ok(
       !body.text.includes(prose),
       "the malformed tool-call prose was rendered to the advisor as an answer",
     );
-    assert.match(body.text, /restarted|malformed/i, "the advisor must be told the turn failed");
+    assert.match(
+      body.text,
+      /restarted|malformed/i,
+      "the advisor must be told the turn failed",
+    );
   } finally {
     resetSessionsForTest();
     mServer.close();
@@ -512,7 +557,8 @@ test("a malformed-tool-call turn never renders its prose as an answer", async ()
 // malformed one is the endpoint operator's. If the advisor cannot tell them
 // apart, our budget bug gets escalated as a request to restart a shared server.
 test("a truncated turn is marked partial and reads differently from a malformed one", async () => {
-  const partial = "Fall 2026 CPSC 3000-level classes include CPSC 3300, CPSC 36";
+  const partial =
+    "Fall 2026 CPSC 3000-level classes include CPSC 3300, CPSC 36";
   const tcServer = createAdvisorServer({
     runTurn: async () => ({
       text: partial,
@@ -538,7 +584,11 @@ test("a truncated turn is marked partial and reads differently from a malformed 
     });
     const body = (await chat.json()) as { text: string; outcome: string };
 
-    assert.equal(body.outcome, "truncated", "the outcome must reach the client");
+    assert.equal(
+      body.outcome,
+      "truncated",
+      "the outcome must reach the client",
+    );
     assert.notEqual(
       body.outcome,
       "complete",

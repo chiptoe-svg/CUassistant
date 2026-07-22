@@ -124,3 +124,110 @@ test("empty result set does not invent term fields", () => {
   assert.equal("term" in out, false);
   assert.deepEqual(out.sections, []);
 });
+
+// --- Encoding exhaustiveness -------------------------------------------------
+//
+// compactSearchResult omits fields, so every field needs a deliberate decision
+// about what its absence means. The danger is not the fields below — those were
+// reasoned about — it is the NEXT field someone adds, which would silently
+// inherit the default with nobody deciding anything.
+//
+// This map is typed Record<keyof ClemsonSection, ...>, so adding a field to
+// ClemsonSection without listing it here is a COMPILE ERROR, not a silent pass.
+// The runtime tests then check the declared policy is what actually happens.
+//
+//   hoisted        - moved to the envelope; identical on every row
+//   always         - never omitted; absence would be ambiguous or dangerous
+//   omit-when-null - absent means "not reported"
+//   omit-when-zero - absent means zero (only safe where zero IS "none")
+type FieldPolicy = "hoisted" | "always" | "omit-when-null" | "omit-when-zero";
+
+const FIELD_POLICY: Record<keyof ClemsonSection, FieldPolicy> = {
+  term: "hoisted",
+  termDescription: "hoisted",
+  crn: "always",
+  subjectCourse: "always",
+  section: "always",
+  title: "always",
+  // 0 credits is a real value (1,497 Fall 2026 sections) — never omit on zero.
+  creditHours: "omit-when-null",
+  campus: "omit-when-null",
+  scheduleType: "omit-when-null",
+  instructionalMethod: "omit-when-null",
+  // These four carry meaningful zeros. seatsAvailable:0 means FULL — omitting
+  // it would make a full section look like one with no reported seat count.
+  enrollment: "always",
+  maxEnrollment: "always",
+  seatsAvailable: "always",
+  open: "always",
+  // Zero here genuinely means "no waitlist", so absence is unambiguous.
+  waitCount: "omit-when-zero",
+  waitCapacity: "omit-when-zero",
+  instructors: "omit-when-null",
+  meetings: "omit-when-null",
+};
+
+test("every ClemsonSection field has a declared encoding policy", () => {
+  // Compile-time coverage is enforced by the Record type above. This asserts
+  // the map and a real section have not drifted apart at runtime.
+  const declared = new Set(Object.keys(FIELD_POLICY));
+  const actual = new Set(Object.keys(section()));
+  assert.deepEqual(
+    [...actual].filter((k) => !declared.has(k)),
+    [],
+    "ClemsonSection has a field with no declared encoding policy",
+  );
+  assert.deepEqual(
+    [...declared].filter((k) => !actual.has(k)),
+    [],
+    "FIELD_POLICY declares a field that no longer exists",
+  );
+});
+
+test("a fully-populated section keeps every non-hoisted field", () => {
+  // Every field non-empty — the default fixture has a zero waitlist, which is
+  // legitimately omitted, so it is not "fully populated" for this purpose.
+  const out = compactSearchResult(
+    result({ sections: [section({ waitCount: 3, waitCapacity: 5 })] }),
+  );
+  const row = (out.sections as Record<string, unknown>[])[0]!;
+  for (const [field, policy] of Object.entries(FIELD_POLICY)) {
+    assert.equal(
+      field in row,
+      policy !== "hoisted",
+      `${field} (${policy}) wrong when populated`,
+    );
+  }
+});
+
+test("an empty section omits exactly the fields its policy allows", () => {
+  const out = compactSearchResult(
+    result({
+      sections: [
+        section({
+          campus: null,
+          scheduleType: null,
+          instructionalMethod: null,
+          creditHours: null,
+          enrollment: 0,
+          maxEnrollment: 0,
+          seatsAvailable: 0,
+          open: false,
+          waitCount: 0,
+          waitCapacity: 0,
+          instructors: [],
+          meetings: [],
+        }),
+      ],
+    }),
+  );
+  const row = (out.sections as Record<string, unknown>[])[0]!;
+  for (const [field, policy] of Object.entries(FIELD_POLICY)) {
+    if (policy === "hoisted") continue;
+    assert.equal(
+      field in row,
+      policy === "always",
+      `${field} (${policy}) wrong when empty — "always" fields must survive`,
+    );
+  }
+});

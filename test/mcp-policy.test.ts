@@ -11,7 +11,10 @@ import type { McpToolDefinition } from "../src/mcp-tools/types.ts";
 
 function fakeTool(operation?: string): McpToolDefinition {
   return {
-    operation,
+    // Deliberately allowed to be undefined: these tests cover the case where a
+    // tool is registered without an operation, which the type forbids but a
+    // hand-written definition could still do.
+    operation: operation as string,
     tool: {
       name: operation ?? "missing-operation",
       description: "test tool",

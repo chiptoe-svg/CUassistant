@@ -20,12 +20,15 @@
 //     instrument broke" for "the model was wrong". "Could not establish" and
 //     "the model was wrong" must never be the same value.
 //   - S5's two data sources have DIFFERENT strength and that asymmetry is
-//     load-bearing: the time/day filter (schedule DB) is fully sound; the
-//     eligibility check (gc_advisor explicit_courses) is a ONE-SIDED lower
-//     bound — membership confirms eligibility, absence does not prove
-//     ineligibility (wildcard rules like "Any ENGR course" exist and are not
-//     enumerated in explicit_courses). Do not flatten this into a single
-//     boolean.
+//     load-bearing: the time/day filter (schedule DB) confirms `clear` or
+//     `violates` from a recorded meeting, but is NOT a simple boolean — a
+//     section with zero recorded meetings is `undetermined`, never assumed
+//     `clear`, because "no meeting recorded" cannot distinguish genuine async
+//     from a data gap that is really an MWF 8am meeting. The eligibility
+//     check (gc_advisor explicit_courses) is separately ONE-SIDED — membership
+//     confirms eligibility, absence does not prove ineligibility (wildcard
+//     rules like "Any ENGR course" exist and are not enumerated in
+//     explicit_courses). Do not flatten either into a single boolean.
 //
 // Conflict primitive: this module does NOT reinvent interval overlap. It
 // reuses `getMeetingsForCrns` / `findConflicts` from src/clemson-schedule-db.ts
@@ -396,14 +399,30 @@ export function anchorS4(
 // S5 — open-ended requirement search with hard scheduling constraints.
 //
 // Two data sources of DIFFERENT strength — kept separate on purpose:
-//   - passesTimeDayFilter: SOUND. Reads only the schedule DB. A section
-//     qualifies iff every meeting starts at/after 9:00 (start_min >= 540) and
-//     none falls on Friday.
+//   - timeDayStatus: reads only the schedule DB, but is itself THREE-VALUED,
+//     not a sound/unsound boolean split. A section with recorded meetings is
+//     `clear` (every meeting starts at/after 9:00 and none is on Friday) or
+//     `violates` (at least one meeting fails that). A section with ZERO
+//     meeting rows is `undetermined` — NOT `clear`. "No meeting recorded"
+//     is ambiguous between genuine async and a data gap that is really an
+//     MWF 8am meeting the snapshot failed to capture, and this instrument
+//     does not get to assert soundness it cannot back. Treating an absence of
+//     data as a pass is exactly the "couldn't establish" == "satisfies"
+//     conflation this project keeps getting burned by (see
+//     scripts/fabrication-probe.ts's whole reason for existing) — so
+//     `undetermined` is its own bucket, mirroring the eligibility half's own
+//     one-sidedness rather than silently resolving it.
 //   - explicitCourseUnion: ONE-SIDED. Reads gc_advisor req-rules. Membership
 //     in the union CONFIRMS eligibility; absence does NOT prove ineligibility
 //     — some rules are empty wildcard rules ("Any ENGR course") that
 //     explicit_courses does not enumerate. This is a LOWER BOUND, never
 //     treated as a closed set.
+//
+// Neither half is allowed to manufacture a positive from missing data. That
+// symmetry is the point: `undetermined` (time/day) and
+// `eligibility_unverifiable` (requirement membership) are the same shape of
+// admission — "I could not confirm this, so I am not counting it as valid,
+// but I am also not calling it a violation."
 // ---------------------------------------------------------------------------
 
 /** Banner stores subject_course spaceless ("GC3720"); gc_advisor's
@@ -419,16 +438,21 @@ export const S5_ELIGIBILITY_SLOT_TYPES = [
   "Graphic Communication Technical Requirement",
 ];
 
+export type TimeDayStatus = "clear" | "violates" | "undetermined";
+
 /**
- * A section qualifies iff EVERY meeting starts at/after 9:00 and none falls
- * on Friday. A section with NO meeting rows at all (async/TBA — common in
- * this catalog) passes vacuously: there is no recorded meeting that violates
- * either constraint, so nothing here contradicts "nothing before 9, nothing
- * on Fridays". This is a deliberate reading of "every meeting…", not an
- * oversight — flagged in the Task 1 report as a judgment call.
+ * Three-valued, on purpose (see the block comment above this section):
+ *   - `undetermined` — zero meeting rows recorded for this CRN. Cannot
+ *     confirm either way; this is NOT the same as "clear" and must never be
+ *     scored as a pass.
+ *   - `violates` — at least one recorded meeting starts before 9:00
+ *     (start_min < 540) or falls on Friday.
+ *   - `clear` — at least one meeting recorded, and every one of them starts
+ *     at/after 9:00 and none is on Friday.
  */
-export function passesTimeDayFilter(meetings: MeetingInterval[]): boolean {
-  return meetings.every((m) => m.startMin >= 540 && m.day !== "F");
+export function timeDayStatus(meetings: MeetingInterval[]): TimeDayStatus {
+  if (meetings.length === 0) return "undetermined";
+  return meetings.every((m) => m.startMin >= 540 && m.day !== "F") ? "clear" : "violates";
 }
 
 /**
@@ -472,8 +496,13 @@ export interface S5Fact {
   catalogYear: string;
   /** The one-sided lower bound: courses confirmed eligible via explicit_courses. */
   explicitEligible: string[];
-  /** BOTH in explicitEligible AND clears the time/day filter — the
-   *  definitely-valid answer set per the spec. */
+  /** BOTH in explicitEligible AND `timeDayStatus === "clear"` — the
+   *  definitely-valid answer set per the spec. Sections with zero recorded
+   *  meetings (`undetermined`) are deliberately EXCLUDED here even when their
+   *  course is eligibility-confirmed: this is the set `false_empty` is
+   *  measured against, and false_empty must fire only when a CONFIRMED
+   *  in-person, timed option existed — not an async section the instrument
+   *  cannot vouch for. */
   validSet: Array<{ course: string; crn: string }>;
 }
 
@@ -521,7 +550,7 @@ export async function anchorS5(
     const validSet: Array<{ course: string; crn: string }> = [];
     for (const row of offered) {
       const meetings = getMeetingsForCrns(db, term, [row.crn]);
-      if (passesTimeDayFilter(meetings)) {
+      if (timeDayStatus(meetings) === "clear") {
         validSet.push({ course: row.subject_course, crn: row.crn });
       }
     }
@@ -534,26 +563,39 @@ export async function anchorS5(
 
 // ---------------------------------------------------------------------------
 // S5 per-suggestion classifier — what the later scoring task calls to grade
-// one (course, crn) the model proposed. Three outcomes only (per the Task 1
-// brief's scope); `false_empty` from the spec is a whole-answer check ("model
-// claimed nothing fits but a valid option existed"), not a per-suggestion
-// classification, and belongs to the scoring task that has the model's full
-// answer to inspect.
+// one (course, crn) the model proposed. Four outcomes (per the Task 1 brief's
+// scope, extended for the three-valued time/day filter); `false_empty` from
+// the spec is a whole-answer check ("model claimed nothing fits but a valid
+// option existed"), not a per-suggestion classification, and belongs to the
+// scoring task that has the model's full answer to inspect.
 //
-// Precedence is load-bearing: the SOUND check runs first and short-circuits.
-// A course that IS in the explicit union but meets on Friday is still a
-// definitive time_day_violation — eligibility can never rescue a broken hard
-// constraint.
+// Precedence is load-bearing:
+//   1. `violates` short-circuits everything — a course that IS in the
+//      explicit union but meets on Friday is still a definitive
+//      time_day_violation; eligibility can never rescue a broken hard
+//      constraint.
+//   2. `undetermined` is checked next, BEFORE eligibility — a zero-meeting
+//      section is never scored `valid` even if its course is
+//      eligibility-confirmed, because the reason it can't be `valid` is the
+//      unconfirmed schedule fact, not the (possibly perfectly fine)
+//      eligibility fact. Don't credit it, don't penalize it: its own bucket.
+//   3. Only a `clear` section proceeds to the eligibility check.
 // ---------------------------------------------------------------------------
 
-export type S5Outcome = "time_day_violation" | "valid" | "eligibility_unverifiable";
+export type S5Outcome =
+  | "time_day_violation"
+  | "time_day_undetermined"
+  | "valid"
+  | "eligibility_unverifiable";
 
 export function classifySuggestion(
   course: string,
   meetings: MeetingInterval[],
   explicitEligible: Set<string> | string[],
 ): S5Outcome {
-  if (!passesTimeDayFilter(meetings)) return "time_day_violation";
+  const status = timeDayStatus(meetings);
+  if (status === "violates") return "time_day_violation";
+  if (status === "undetermined") return "time_day_undetermined";
   const union =
     explicitEligible instanceof Set ? explicitEligible : new Set(explicitEligible.map(normCourse));
   return union.has(normCourse(course)) ? "valid" : "eligibility_unverifiable";

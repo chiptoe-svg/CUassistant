@@ -34,7 +34,6 @@ import {
   crnsConflict,
   describeS2,
   explicitCourseUnion,
-  passesTimeDayFilter,
   S1_CRN,
   S2_COURSE,
   S3_ANCHOR_CRN,
@@ -44,6 +43,7 @@ import {
   S4_TARGET_CRN,
   SCENARIOS,
   TERM,
+  timeDayStatus,
 } from "../scripts/advising-benchmark/scenarios.ts";
 
 function hasSnapshot(term: string): boolean {
@@ -344,6 +344,34 @@ describe("explicitCourseUnion", () => {
 });
 
 // ---------------------------------------------------------------------------
+// S5 — timeDayStatus is three-valued, on purpose. A zero-meeting section is
+// `undetermined`, never assumed `clear` — "no meeting recorded" cannot
+// distinguish genuine async from a data gap. Pure synthetic data, no live
+// snapshot required.
+// ---------------------------------------------------------------------------
+
+describe("timeDayStatus", () => {
+  it("zero meeting rows is undetermined, NOT clear", () => {
+    assert.equal(timeDayStatus([]), "undetermined");
+  });
+
+  it("every meeting at/after 9:00 and never on Friday is clear", () => {
+    const meetings = [mi("A", "T", 660, 710), mi("A", "R", 660, 710)];
+    assert.equal(timeDayStatus(meetings), "clear");
+  });
+
+  it("a meeting before 9:00 violates, even alongside otherwise-clear meetings", () => {
+    const meetings = [mi("A", "M", 480, 530), mi("A", "W", 660, 710)]; // 8:00 Monday
+    assert.equal(timeDayStatus(meetings), "violates");
+  });
+
+  it("a Friday meeting violates, even alongside otherwise-clear meetings", () => {
+    const meetings = [mi("A", "T", 660, 710), mi("A", "F", 660, 710)];
+    assert.equal(timeDayStatus(meetings), "violates");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // S5 — anchor + classifier, against the REAL gc_advisor process and REAL
 // snapshot. Skipped where either is unavailable.
 // ---------------------------------------------------------------------------
@@ -368,13 +396,15 @@ describe("anchorS5 (live gc_advisor + live snapshot)", () => {
   );
 
   it(
-    "classifySuggestion: valid, time_day_violation and eligibility_unverifiable, picked from live data",
+    "classifySuggestion: valid, time_day_violation, time_day_undetermined and " +
+      "eligibility_unverifiable, picked from live data",
     { skip: canRun ? false : "requires live snapshot + gc_advisor DB" },
     async () => {
       const res = await anchorS5();
       assert.equal(res.status, "resolved");
       if (res.status !== "resolved") return;
       const union = new Set(res.value.explicitEligible);
+      const placeholders = [...union].map(() => "?").join(",");
 
       const db = openScheduleDb(TERM)!;
       try {
@@ -401,9 +431,41 @@ describe("anchorS5 (live gc_advisor + live snapshot)", () => {
           "time_day_violation",
         );
 
+        // --- time_day_undetermined: an ELIGIBLE course (in the explicit
+        //     union) with ZERO recorded meetings. Deliberately picked to be
+        //     eligibility-confirmed so this proves the undetermined verdict
+        //     comes from the unconfirmed schedule fact, not from eligibility
+        //     — and that it is never silently upgraded to "valid" just
+        //     because the course would otherwise qualify. ---
+        const zeroMeeting = db
+          .prepare(
+            `select s.crn as crn, s.subject_course as subject_course
+               from sections s
+              where s.term = ? and s.subject_course in (${placeholders})
+                and not exists (select 1 from meetings m where m.crn = s.crn and m.term = s.term)
+              limit 1`,
+          )
+          .get(TERM, ...union) as { crn: string; subject_course: string } | undefined;
+        assert.ok(
+          zeroMeeting,
+          "expected at least one eligibility-confirmed, zero-meeting section in the live catalog",
+        );
+        const zeroMeetings = getMeetingsForCrns(db, TERM, [zeroMeeting!.crn]);
+        assert.deepEqual(zeroMeetings, [], "sanity: this CRN truly has no meeting rows");
+        assert.equal(
+          classifySuggestion(zeroMeeting!.subject_course, zeroMeetings, union),
+          "time_day_undetermined",
+        );
+        // And it must NOT be in the anchor's own validSet, despite being
+        // eligibility-confirmed — false_empty must fire only on a CONFIRMED
+        // in-person, timed option.
+        assert.ok(
+          !res.value.validSet.some((v) => v.crn === zeroMeeting!.crn),
+          "a zero-meeting section must never appear in validSet, eligible or not",
+        );
+
         // --- eligibility_unverifiable: clears time/day, has real meetings,
         //     but is not in the explicit union ---
-        const placeholders = [...union].map(() => "?").join(",");
         const candidates = db
           .prepare(
             `select distinct s.crn as crn, s.subject_course as subject_course

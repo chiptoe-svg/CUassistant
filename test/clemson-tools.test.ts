@@ -5,6 +5,7 @@ import {
   assertMcpOperation,
   isMcpOperationExposed,
 } from "../src/mcp-tools/permissions.ts";
+import { searchClasses } from "../src/mcp-tools/clemson-classes.ts";
 
 // The Clemson Browse Classes tools are public, no-auth, read-only and should be
 // exposed (their policy actions are approval=none).
@@ -41,6 +42,30 @@ test("skill docs tools are exposed and pass the policy gate", () => {
       input: { name: "clemson-schedule-advising" },
     }),
   );
+});
+
+// search-clemson-classes must reject an unscoped whole-term search — an
+// unbounded search is the context-explosion case the tool exists to avoid.
+test("search-clemson-classes rejects a call with neither subject nor courseNumber", async () => {
+  const res = await searchClasses.handler({ term: "202608" });
+  assert.equal(res.isError, true);
+  assert.match(
+    (res.content[0] as { text: string }).text,
+    /subject or courseNumber is required/,
+  );
+});
+
+test("search-clemson-classes accepts a subject-scoped call", async () => {
+  const res = await searchClasses.handler({ term: "202608", subject: "CPSC" });
+  assert.notEqual(res.isError, true, (res.content[0] as { text: string }).text);
+});
+
+test("search-clemson-classes accepts a courseNumber-scoped call", async () => {
+  const res = await searchClasses.handler({
+    term: "202608",
+    courseNumber: "1010",
+  });
+  assert.notEqual(res.isError, true, (res.content[0] as { text: string }).text);
 });
 
 test("schedule conflict tools pass the policy gate", () => {

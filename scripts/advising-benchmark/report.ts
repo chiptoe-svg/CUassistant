@@ -54,6 +54,7 @@ import {
   type ScoredJudgeVerdict,
   type UnscoredJudgeVerdict,
 } from "./judge.ts";
+import { selectToolSubset } from "./selector.ts";
 import {
   agentToolsToWireTools,
   buildToolExecutor,
@@ -365,10 +366,31 @@ export interface ModelScenarioCell {
   s1Calibration: S1CalibrationStatus;
 }
 
+/**
+ * `"full"` (DEFAULT): every scenario gets the entire live tool surface —
+ * today's behavior, unchanged. `"selector"`: each scenario gets
+ * `selectToolSubset(bridge.tools, scenario.prompt)` (scripts/advising-
+ * benchmark/selector.ts's deterministic keyword router) instead — a
+ * benchmark-only prototype arm to MEASURE the effect of a smaller per-turn
+ * tool array (malformed rate, latency, correctness) before any such
+ * selection ever touches the live advisor. See selector.ts's module doc for
+ * the full rationale; this flag does not change runScenarioTrial or
+ * src/advisor-agent.ts in any way — it only changes which `tools` array this
+ * orchestrator hands to runScenarioTrial/runModel.
+ */
+export type ToolSelectionMode = "full" | "selector";
+
 export interface BenchmarkResult {
   startedAt: string;
   trials: number;
   toolSurfaceSize: number;
+  toolSelectionMode: ToolSelectionMode;
+  /** Number of tools actually offered to the model for each scenario id.
+   *  Under "full" this always equals toolSurfaceSize for every scenario
+   *  (recorded anyway so the WITH-vs-WITHOUT comparison reads directly off
+   *  one field regardless of mode). Under "selector" this is
+   *  selectToolSubset's per-scenario output length. */
+  scenarioToolCounts: Record<string, number>;
   models: string[];
   scenarioIds: string[];
   anchors: AnchorSummary[];
@@ -419,6 +441,9 @@ export interface RunBenchmarkOptions {
   models: ModelCandidate[];
   scenarios: Scenario[];
   trials: number;
+  /** DEFAULT "full" — see ToolSelectionMode's doc comment. Additive: omitting
+   *  this reproduces today's behavior exactly. */
+  toolSelectionMode?: ToolSelectionMode;
 }
 
 /**
@@ -443,18 +468,38 @@ export async function runBenchmark(opts: RunBenchmarkOptions): Promise<Benchmark
   const startedAt = new Date().toISOString();
   const systemPrompt = loadSystemPrompt();
 
+  const toolSelectionMode: ToolSelectionMode = opts.toolSelectionMode ?? "full";
+
   process.stderr.write("[report] connecting to the live advisor MCP tool surface ...\n");
   const bridge = await createAdvisorMcpBridge();
   process.stderr.write(`[report] tool surface ready: ${bridge.tools.length} tools\n`);
-  const tools = agentToolsToWireTools(bridge.tools);
   const execTool = buildToolExecutor(bridge.tools);
 
   const anchors: AnchorSummary[] = [];
   const references: ReferenceSummary[] = [];
   const cells: ModelScenarioCell[] = [];
+  const scenarioToolCounts: Record<string, number> = {};
 
   try {
     for (const scenario of opts.scenarios) {
+      // "full" hands every scenario the entire bridge (today's behavior,
+      // byte-identical to before this flag existed). "selector" scopes it
+      // per scenario via the deterministic keyword router — see
+      // ToolSelectionMode's doc comment. execTool is intentionally still
+      // built from the FULL bridge above (not scoped): only the array
+      // *offered* to the model changes here, per the brief.
+      const scenarioAgentTools =
+        toolSelectionMode === "selector"
+          ? selectToolSubset(bridge.tools, scenario.prompt)
+          : bridge.tools;
+      const scenarioTools = agentToolsToWireTools(scenarioAgentTools);
+      scenarioToolCounts[scenario.id] = scenarioTools.length;
+      if (toolSelectionMode === "selector") {
+        process.stderr.write(
+          `[report] ${scenario.id}: tool-selection=selector -> ${scenarioTools.length}/${bridge.tools.length} tools\n`,
+        );
+      }
+
       process.stderr.write(`[report] resolving ${scenario.id}'s anchor ...\n`);
       const anchor = await resolveAnchorSummary(scenario);
       anchors.push(anchor);
@@ -463,7 +508,7 @@ export async function runBenchmark(opts: RunBenchmarkOptions): Promise<Benchmark
       }
 
       process.stderr.write(`[report] generating ${scenario.id}'s reference answer ...\n`);
-      const refObs = await runScenarioTrial(REFERENCE_MODEL, scenario, systemPrompt, tools, execTool);
+      const refObs = await runScenarioTrial(REFERENCE_MODEL, scenario, systemPrompt, scenarioTools, execTool);
       const refSummary = summarizeReferenceObservation(refObs);
       references.push({ scenarioId: scenario.id, ...refSummary });
       if (refSummary.status === "unavailable") {
@@ -479,7 +524,7 @@ export async function runBenchmark(opts: RunBenchmarkOptions): Promise<Benchmark
         process.stderr.write(
           `[report] ${candidate.label}/${scenario.id}: running ${opts.trials} trial(s) ...\n`,
         );
-        const run = await runModel(candidate, scenario, opts.trials, systemPrompt, tools, execTool);
+        const run = await runModel(candidate, scenario, opts.trials, systemPrompt, scenarioTools, execTool);
         process.stderr.write(
           `[report] ${candidate.label}/${scenario.id}: ${run.steady ? "steady" : `UNSTEADY (${run.steadinessReason})`}, ` +
             `${run.observations.length} observation(s)\n`,
@@ -550,6 +595,8 @@ export async function runBenchmark(opts: RunBenchmarkOptions): Promise<Benchmark
     startedAt,
     trials: opts.trials,
     toolSurfaceSize: bridge.tools.length,
+    toolSelectionMode,
+    scenarioToolCounts,
     models: opts.models.map((m) => m.label),
     scenarioIds: opts.scenarios.map((s) => s.id),
     anchors,
@@ -601,6 +648,16 @@ export function renderReport(result: BenchmarkResult): string {
   log(`Models: ${result.models.join(", ")}`);
   log(`Scenarios: ${result.scenarioIds.join(", ")}`);
   log(`Tool surface loaded for this run: ${result.toolSurfaceSize} tools (bare names, real advisor bridge)`);
+  // Additive: only rendered under --tool-selection selector, so
+  // --tool-selection full's markdown is byte-identical to before this flag
+  // existed.
+  if (result.toolSelectionMode === "selector") {
+    log(`Tool-selection mode: **selector** (prototype — see scripts/advising-benchmark/selector.ts)`);
+    log(`Per-scenario tool counts (selector vs full ${result.toolSurfaceSize}):`);
+    for (const scenarioId of result.scenarioIds) {
+      log(`- ${scenarioId}: ${result.scenarioToolCounts[scenarioId] ?? "n/a"} tools`);
+    }
+  }
   log();
   log(
     `> **What this does and does not establish.** This is a screen to shortlist ` +
@@ -784,6 +841,9 @@ export interface ReportCliArgs {
   scenarios: Scenario[];
   trials: number;
   out?: string;
+  /** DEFAULT "full" — reproduces today's behavior exactly. See
+   *  ToolSelectionMode's doc comment for what "selector" does. */
+  toolSelectionMode: ToolSelectionMode;
 }
 
 export function parseReportArgs(argv: string[]): ReportCliArgs {
@@ -796,6 +856,14 @@ export function parseReportArgs(argv: string[]): ReportCliArgs {
       `REFUSED: --trials ${JSON.stringify(rawTrials ?? "(no value)")} is not a positive whole number.`,
     );
   }
+
+  const rawToolSelection = getFlag(argv, "--tool-selection") ?? "full";
+  if (rawToolSelection !== "full" && rawToolSelection !== "selector") {
+    throw new Error(
+      `REFUSED: --tool-selection ${JSON.stringify(rawToolSelection)} is not "full" or "selector".`,
+    );
+  }
+  const toolSelectionMode: ToolSelectionMode = rawToolSelection;
 
   const models =
     modelsFlag === "all"
@@ -827,7 +895,7 @@ export function parseReportArgs(argv: string[]): ReportCliArgs {
           return s;
         });
 
-  return { models, scenarios, trials, out: getFlag(argv, "--out") };
+  return { models, scenarios, trials, out: getFlag(argv, "--out"), toolSelectionMode };
 }
 
 async function main(): Promise<void> {
@@ -844,6 +912,7 @@ async function main(): Promise<void> {
     models: args.models,
     scenarios: args.scenarios,
     trials: args.trials,
+    toolSelectionMode: args.toolSelectionMode,
   });
   const markdown = renderReport(result);
   console.log(markdown);

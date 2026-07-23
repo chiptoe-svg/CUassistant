@@ -7,7 +7,12 @@
 import Database from "better-sqlite3";
 
 import { GC_ADVISOR_DB } from "../config.js";
-import { openScheduleDb, getScheduleDbMeta } from "../clemson-schedule-db.js";
+import {
+  openScheduleDb,
+  getScheduleDbMeta,
+  getMeetingsForCrns,
+  findConflicts,
+} from "../clemson-schedule-db.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
@@ -88,6 +93,38 @@ function getLatestProgramId(
   return row?.id ?? null;
 }
 
+// Year-aware sibling of getLatestProgramId — picks the program row for a
+// specific catalog_year.label (e.g. "2025-2026") instead of always the
+// newest, so a student grandfathered into an older catalog gets that
+// catalog's requirement rule (course lists/credit totals can differ by year).
+function getProgramIdForCatalogYear(
+  db: Database.Database,
+  programName: string,
+  catalogYear: string,
+): number | null {
+  const row = db
+    .prepare(
+      `SELECT p.id FROM program p
+       JOIN catalog_year cy ON p.catalog_year_id = cy.id
+       WHERE p.name = ? AND cy.label = ? LIMIT 1`,
+    )
+    .get(programName, catalogYear) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+// Parse a "HHMM" string (e.g. "0900") into minutes-since-midnight, or null
+// if malformed. Mirrors the private hhmMToMins in clemson-schedule-db.ts —
+// duplicated here only because it's a trivial parse, not the conflict
+// primitive itself (that one IS reused, see getMeetingsForCrns/findConflicts
+// below).
+function hhmmToMins(t: string): number | null {
+  if (!/^\d{4}$/.test(t)) return null;
+  const h = parseInt(t.slice(0, 2), 10);
+  const m = parseInt(t.slice(2), 10);
+  if (h > 23 || m > 59) return null;
+  return h * 60 + m;
+}
+
 function getRequirementRule(
   db: Database.Database,
   programId: number,
@@ -135,13 +172,19 @@ function checkPrereqEligible(
 // MCP tool
 // ---------------------------------------------------------------------------
 
-const findEligibleSections: McpToolDefinition = {
+export const findEligibleSections: McpToolDefinition = {
   operation: "clemson.find_eligible_sections",
   tool: {
     name: "find-eligible-sections",
     description:
       "Find Banner sections offered in a given term that fulfill a GC " +
-      "degree requirement slot AND are prereq-eligible for the student. " +
+      "degree requirement slot AND are prereq-eligible for the student, " +
+      "optionally ALSO filtered by scheduling constraints (time-of-day, " +
+      "excluded days, conflicts with an existing schedule, open seats). " +
+      "This is the single call for 'requirement-eligible sections that also " +
+      "fit these scheduling constraints' — pass no_meeting_before/" +
+      "exclude_days/avoid_conflict_with/open_only instead of pulling the " +
+      "full eligible list and filtering it by hand across many turns. " +
       "Returns section details (CRN, title, credits, seats, meetings) plus " +
       "`prereq_eligible` per section based on the completed-courses list. " +
       "Use slot_type values from get-gc-requirement-rules (e.g. " +
@@ -175,6 +218,43 @@ const findEligibleSections: McpToolDefinition = {
           description:
             "GC program name (default 'Graphic Communications, BS').",
         },
+        catalog_year: {
+          type: "string",
+          description:
+            "Optional catalog year label, e.g. '2025-2026', to pick the " +
+            "requirement rule for a student grandfathered into an older " +
+            "catalog. Default: latest catalog year for program_name.",
+        },
+        no_meeting_before: {
+          type: "string",
+          description:
+            "Optional HHMM string, e.g. '0900'. Excludes a section if ANY " +
+            "of its meetings starts before this time. Sections with no " +
+            "meeting rows (async/online) can't be confirmed either way and " +
+            "are returned separately in sections_without_meetings instead " +
+            "of sections.",
+        },
+        exclude_days: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional day codes to avoid, e.g. ['F'] (M T W R F S U). " +
+            "Excludes a section if ANY of its meetings falls on one of " +
+            "these days. Same async handling as no_meeting_before.",
+        },
+        avoid_conflict_with: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional CRNs already on the student's schedule. Excludes a " +
+            "section if any of its meetings time-conflicts (same day, " +
+            "overlapping interval) with any meeting of these CRNs.",
+        },
+        open_only: {
+          type: "boolean",
+          description:
+            "Optional. If true, excludes sections with seats_available <= 0.",
+        },
       },
       required: ["term", "slot_type", "completed_courses"],
     },
@@ -197,6 +277,48 @@ const findEligibleSections: McpToolDefinition = {
         ? args.program_name
         : "Graphic Communications, BS";
 
+    const catalogYear =
+      typeof args.catalog_year === "string" && args.catalog_year
+        ? args.catalog_year
+        : undefined;
+
+    // --- Scheduling constraints (all optional; unset = today's behavior) ---
+    const noMeetingBefore =
+      typeof args.no_meeting_before === "string" && args.no_meeting_before
+        ? args.no_meeting_before
+        : undefined;
+    let noMeetingBeforeMins: number | null = null;
+    if (noMeetingBefore !== undefined) {
+      noMeetingBeforeMins = hhmmToMins(noMeetingBefore);
+      if (noMeetingBeforeMins === null)
+        return err(
+          `no_meeting_before must be an HHMM string, e.g. "0900" (got "${noMeetingBefore}").`,
+        );
+    }
+
+    const excludeDaySet =
+      Array.isArray(args.exclude_days) && args.exclude_days.length > 0
+        ? new Set((args.exclude_days as string[]).map((d) => d.toUpperCase()))
+        : null;
+
+    const avoidConflictWith =
+      Array.isArray(args.avoid_conflict_with) && args.avoid_conflict_with.length > 0
+        ? (args.avoid_conflict_with as string[])
+        : null;
+
+    const openOnly = args.open_only === true;
+
+    // Whether a section's meetings can be judged against a time/day rule at
+    // all — zero-meeting (async) sections can't be, see the filtering loop.
+    const timeDayConstraintGiven = noMeetingBeforeMins !== null || excludeDaySet !== null;
+
+    const appliedConstraints: Record<string, unknown> = {};
+    if (catalogYear) appliedConstraints.catalog_year = catalogYear;
+    if (noMeetingBeforeMins !== null) appliedConstraints.no_meeting_before = noMeetingBefore;
+    if (excludeDaySet) appliedConstraints.exclude_days = [...excludeDaySet];
+    if (avoidConflictWith) appliedConstraints.avoid_conflict_with = avoidConflictWith;
+    if (openOnly) appliedConstraints.open_only = true;
+
     const schedDb = openScheduleDb(term);
     if (!schedDb)
       return err(
@@ -207,11 +329,16 @@ const findEligibleSections: McpToolDefinition = {
       // ATTACH the catalog DB so we can query it alongside the schedule.
       schedDb.prepare("ATTACH DATABASE ? AS catalog").run(GC_ADVISOR_DB);
 
-      const programId = getLatestProgramId(schedDb, programName);
+      const programId = catalogYear
+        ? getProgramIdForCatalogYear(schedDb, programName, catalogYear)
+        : getLatestProgramId(schedDb, programName);
       if (programId === null) {
         return err(
-          `Program "${programName}" not found in gc_advisor.db. ` +
-            "Check the name with get-gc-program-plan.",
+          catalogYear
+            ? `Program "${programName}" not found for catalog year "${catalogYear}" in gc_advisor.db. ` +
+                "Check the year and name with get-gc-program-plan, or omit catalog_year for the latest."
+            : `Program "${programName}" not found in gc_advisor.db. ` +
+                "Check the name with get-gc-program-plan.",
         );
       }
 
@@ -228,6 +355,7 @@ const findEligibleSections: McpToolDefinition = {
           slot_type: slotType,
           total_credits_required: rule.total_credits,
           sections: [],
+          applied_constraints: appliedConstraints,
           note:
             "This requirement rule has no explicit course list — it may be " +
             "satisfied by a declared minor or a broad course category. " +
@@ -253,12 +381,31 @@ const findEligibleSections: McpToolDefinition = {
           slot_type: slotType,
           total_credits_required: rule.total_credits,
           sections: [],
+          applied_constraints: appliedConstraints,
           note: "No sections are offered in this term for the eligible course list.",
         });
       }
 
       const crns = sectionRows.map((r) => r.crn);
       const crnPhs = crns.map(() => "?").join(",");
+
+      // avoid_conflict_with: load the candidate sections' meetings together
+      // with the student's current-schedule CRNs' meetings in one query, run
+      // the shared findConflicts primitive, and pull out which candidate
+      // CRNs collide with a current-schedule CRN (candidate-vs-candidate and
+      // current-vs-current pairs are not relevant here).
+      let conflictingCrns: Set<string> | null = null;
+      if (avoidConflictWith) {
+        const combinedCrns = [...new Set([...crns, ...avoidConflictWith])];
+        const allMeetings = getMeetingsForCrns(schedDb, term, combinedCrns);
+        const conflicts = findConflicts(allMeetings);
+        const avoidSet = new Set(avoidConflictWith);
+        conflictingCrns = new Set<string>();
+        for (const c of conflicts) {
+          if (avoidSet.has(c.crn_a) && !avoidSet.has(c.crn_b)) conflictingCrns.add(c.crn_b);
+          else if (avoidSet.has(c.crn_b) && !avoidSet.has(c.crn_a)) conflictingCrns.add(c.crn_a);
+        }
+      }
 
       const meetingRows = schedDb
         .prepare(
@@ -317,13 +464,22 @@ const findEligibleSections: McpToolDefinition = {
       const completedSet = new Set(completedCoursesArr.map(normCode));
       const meta = getScheduleDbMeta(schedDb);
 
-      const sections = sectionRows.map((row) => {
+      const sections: Record<string, unknown>[] = [];
+      const sectionsWithoutMeetings: Record<string, unknown>[] = [];
+
+      for (const row of sectionRows) {
+        // open_only and avoid_conflict_with apply to every section — including
+        // zero-meeting (async) ones — and can exclude it outright.
+        if (openOnly && row.seats_available <= 0) continue;
+        if (conflictingCrns?.has(row.crn)) continue;
+
         const courseInfo = courseMap.get(normCode(row.subject_course));
         const prereqEligible = checkPrereqEligible(
           courseInfo?.prereq_parsed ?? null,
           completedSet,
         );
         const mgMap = meetingMap.get(row.crn);
+        const hasMeetings = !!mgMap && mgMap.size > 0;
         const meetings = mgMap
           ? [...mgMap.values()].map((mg) => ({
               days: [...mg.days].sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b)).join(""),
@@ -334,7 +490,8 @@ const findEligibleSections: McpToolDefinition = {
               type: mg.type,
             }))
           : [];
-        return {
+
+        const base = {
           crn: row.crn,
           subject_course: row.subject_course,
           section: row.section,
@@ -349,16 +506,54 @@ const findEligibleSections: McpToolDefinition = {
           prereq_eligible: prereqEligible,
           prereq_text: courseInfo?.prereq_text ?? null,
         };
-      });
 
-      return okJson({
+        // A section with no meeting rows (async/online) can't be confirmed to
+        // satisfy no_meeting_before/exclude_days — it's neither vacuously
+        // included nor silently dropped, it goes in a separate array so the
+        // advisor still sees it.
+        if (timeDayConstraintGiven && !hasMeetings) {
+          sectionsWithoutMeetings.push({
+            ...base,
+            note:
+              "No meeting times on file (async/online section) — cannot " +
+              "confirm it satisfies the time/day constraint(s); review manually.",
+          });
+          continue;
+        }
+
+        if (timeDayConstraintGiven && hasMeetings) {
+          let violates = false;
+          for (const mg of mgMap!.values()) {
+            if (noMeetingBeforeMins !== null && mg.startMin < noMeetingBeforeMins) {
+              violates = true;
+              break;
+            }
+            if (excludeDaySet && mg.days.some((d) => excludeDaySet.has(d))) {
+              violates = true;
+              break;
+            }
+          }
+          if (violates) continue;
+        }
+
+        sections.push(base);
+      }
+
+      const result: Record<string, unknown> = {
         term,
         term_description: meta.termDescription,
         slot_type: slotType,
         total_credits_required: rule.total_credits,
         sections,
+        applied_constraints: appliedConstraints,
         _source: `Clemson University Online Catalog (gc_advisor) + Banner schedule ${meta.fetchedAt}`,
-      });
+      };
+      // Only present when a time/day constraint was actually given — keeps
+      // the response shape identical to today's when no constraints are
+      // passed (regression guard).
+      if (timeDayConstraintGiven) result.sections_without_meetings = sectionsWithoutMeetings;
+
+      return okJson(result);
     } finally {
       try {
         schedDb.prepare("DETACH DATABASE catalog").run();

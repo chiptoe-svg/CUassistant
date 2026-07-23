@@ -5,7 +5,7 @@
 //   1. A REFERENCE-ANSWER generator: gpt-5.4 run through Task 2's EXISTING
 //      agentic loop (runScenarioTrial, imported from runner.ts — NOT
 //      reimplemented here) to produce a "good answer" bar.
-//   2. A POINTWISE, BLINDED LLM judge (gpt-5.5-pro): scores ONE candidate
+//   2. A POINTWISE, BLINDED LLM judge (gpt-5.5): scores ONE candidate
 //      answer at a time, never sees which model produced it, and does NOT
 //      re-check facts — Task 1's deterministic anchor already owns facts.
 //      The judge scores reasoning/advising quality GIVEN the anchor facts as
@@ -90,14 +90,19 @@ export interface JudgeModelConfig {
 }
 
 /**
- * gpt-5.5-pro: a heavyweight "pro" model per the spec's "Yardstick" section.
+ * The judge: a high-frontier model above the gpt-5.4 reference (spec's
+ * "Yardstick" section). gpt-5.5-pro was the first choice but is 403'd at the
+ * Clemson gateway ("OpenAI pricing is not configured" for -pro tiers — an
+ * IT-side gap, not a bug), so the judge uses plain gpt-5.5: a tier above the
+ * reference, unblocked, and verified to score cleanly. The gpt-5.6 variants
+ * (luna/sol/terra) also return 200 if a newer judge is ever wanted.
  * Plain completion only — the judge is NEVER given tools (see judgeAnswer).
  */
 export const JUDGE_MODEL: JudgeModelConfig = {
-  label: "judge-gpt-5.5-pro",
+  label: "judge-gpt-5.5",
   baseUrl: CLEMSON_LLM_OPENAI_BASE_URL,
   apiKey: CLEMSON_LLM_API_KEY,
-  model: "gpt-5.5-pro",
+  model: "gpt-5.5",
 };
 
 /** Output budget for the judge's short JSON verdict. Not exported as a env
@@ -106,9 +111,9 @@ export const JUDGE_MODEL: JudgeModelConfig = {
  *  reason to make this configurable yet. */
 const JUDGE_MAX_OUTPUT_TOKENS = 700;
 
-/** gpt-5.5-pro is a "pro" (heavyweight, slower) model per the spec — give it
- *  the same generous per-completion budget the candidate loop uses rather
- *  than risk a false timeout on a model this project has not load-tested. */
+/** Generous per-completion budget: the judge is a frontier model this project
+ *  has not load-tested, so allow the same headroom the candidate loop uses
+ *  rather than risk a false timeout. */
 const JUDGE_TIMEOUT_MS = 240_000;
 
 // ---------------------------------------------------------------------------
@@ -471,7 +476,7 @@ export function parseJudgeResponse(
 }
 
 /**
- * The live judge call: gpt-5.5-pro, PLAIN completion (no `tools` field at
+ * The live judge call: gpt-5.5, PLAIN completion (no `tools` field at
  * all — the judge never gets tools, it only reasons over what it is given).
  * An HTTP failure or an unparseable body both come back as "unscored", never
  * a thrown exception a batch caller could mistake for a crash and never a

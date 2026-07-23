@@ -335,8 +335,10 @@ describe("REFERENCE_MODEL / JUDGE_MODEL config", () => {
     assert.ok(REFERENCE_MODEL.baseUrl.length > 0);
   });
 
-  it("JUDGE_MODEL resolves gpt-5.5-pro on the same passthrough", () => {
-    assert.equal(JUDGE_MODEL.model, "gpt-5.5-pro");
+  it("JUDGE_MODEL resolves gpt-5.5 on the same passthrough", () => {
+    // gpt-5.5, not gpt-5.5-pro: the -pro tier 403s at the Clemson gateway
+    // ("OpenAI pricing is not configured"). See judge.ts JUDGE_MODEL comment.
+    assert.equal(JUDGE_MODEL.model, "gpt-5.5");
     assert.ok(JUDGE_MODEL.baseUrl.length > 0);
   });
 

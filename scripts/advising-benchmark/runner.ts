@@ -96,7 +96,7 @@ import { SCENARIOS, type Scenario } from "./scenarios.ts";
  * a guess at gpt-oss's own thinking-flag convention.
  *
  * "openai-reasoning" is for the Task 3 yardstick models (gpt-5.4 reference,
- * gpt-5.5-pro judge) called through CLEMSON_LLM_OPENAI_BASE_URL. This is NOT
+ * gpt-5.5 judge) called through CLEMSON_LLM_OPENAI_BASE_URL. This is NOT
  * a guess: advisor-agent.ts's runWithProvider already documents "the
  * Responses API rejects temperature for reasoning models — a 400", and
  * src/openai-classifier.ts's working gpt-5.4-mini call confirms the pattern

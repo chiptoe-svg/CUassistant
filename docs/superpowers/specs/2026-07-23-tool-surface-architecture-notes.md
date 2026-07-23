@@ -202,11 +202,33 @@ Ranked by leverage:
    domain-scoped subset (~6–10 tools) attacks both at once. Same lever on the
    result side: keep capping tool-result size — the −47% compaction is banked, and
    mandatory `subject`/`courseNumber` scoping now prevents whole-term dumps.
-3. **Cap generation.** Tune `ADVISOR_MAX_OUTPUT_TOKENS` to what answers actually
+   Selector mechanism (grounded in code): the advisor builds its tool array at
+   `advisor-agent.ts:646` (`[...bridge.tools, proposeSchedule]`), so selection is
+   just `selectToolSubset(bridge.tools, request)` applied there — the Pi
+   "tools-fixed-at-construction" constraint is a non-issue because the harness is
+   (re)built per turn, so the subset re-selects each turn. Groups are FUNCTIONAL
+   (scheduling / curriculum / wiki), not per-server; router is deterministic
+   keywords first (zero added latency), cheap-LLM only for ambiguous turns; and it
+   COMPOSES (default scheduling+curriculum ≈13 tools) because real advising spans
+   domains. Risk: a turn needs an unloaded tool — mitigate with generous default
+   composition + per-turn re-selection. Measure WITH vs WITHOUT on the benchmark:
+   malformed rate ↓, latency ↓, AND correctness must hold.
+3. **Skill-doc length — mostly load-bearing, so cache/scope rather than gut it.**
+   The advisor's on-demand skill docs (`get-skill-docs`) add to prefill and persist
+   in history. `clemson-schedule-advising` is long (533L); `gc-advisor` (236L,
+   modular `includes/`, workflow-heavy) is about right and a good template. But
+   the length is mostly legitimate: the "data shapes / return:" blocks document
+   OUTPUT shapes, which MCP tool defs do NOT carry — that is gap-filling, not
+   duplication. Right test: "does this line say something the tool schema doesn't?"
+   — return shapes YES (keep, tighten examples), re-listed input params NO (trim),
+   workflow/limits YES. The real latency lever for skills is prefix caching (stable
+   doc cached after first load) + the selector scoping the loaded skill to the
+   scoped tool subset — not arbitrary shortening.
+4. **Cap generation.** Tune `ADVISOR_MAX_OUTPUT_TOKENS` to what answers actually
    need; evaluate thinking-on vs thinking-off. Turning off qwen `enable_thinking`
    deterministically cuts tokens/latency; the QUALITY cost is a *measured* tradeoff
    — the benchmark's latency p50/p95 + judge score is exactly the instrument for it.
-4. **Benchmark wall-clock (harness only): run independent cells concurrently**
+5. **Benchmark wall-clock (harness only): run independent cells concurrently**
    (vLLM batches happily). TENSION: latency under concurrent load ≠ isolated
    latency, so keep a concurrent pass for throughput and an isolated pass for the
    latency metric — do not conflate them.

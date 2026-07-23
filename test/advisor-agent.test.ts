@@ -44,33 +44,27 @@ test("the persona carries the rules that keep answers grounded", () => {
 
 // REGRESSION: a benchmark transcript caught the advisor's model burning 2 of
 // 3 tool calls on list-skills + get-skill-docs, then never calling the
-// deterministic find-eligible-sections join (scenario S5). The fix is to stop
-// making the model discover its one skill at runtime — inject it directly —
-// and to filter the four discovery tool names out of its bridge (see
-// SKILL_DISCOVERY_TOOL_NAMES in advisor-mcp.ts). This pins the persona-side
-// half: the gc-advisor SKILL.md content must actually be present.
-test("the gc-advisor skill is injected directly into the system prompt", () => {
+// deterministic find-eligible-sections join (scenario S5). We hide the four
+// discovery tools (SKILL_DISCOVERY_TOOL_NAMES in advisor-mcp.ts) and give the
+// model a MINIMAL tool-use directive in the persona — NOT the full skill.
+// Measured on benchmark S5: injecting the data-heavy skill made the model
+// answer FROM the prompt instead of calling the tool (tool-calling -> ~40%,
+// S5 3.26 -> 2.28). Data-starve the model; give it only the directive.
+test("the persona carries the find-eligible-sections tool-use directive", () => {
   const p = loadSystemPrompt();
-  assert.match(p, /GC Advisor Skill/, "the injected-skill section heading is missing");
   assert.match(
     p,
     /find-eligible-sections/,
-    "a known string from the gc-advisor skill body must be present",
+    "the requirement + scheduling-constraint tool-use directive must be present",
   );
-  assert.match(
-    p,
-    /don't hand-filter/,
-    "the requirement + scheduling-constraint guidance added for S5 must be present",
-  );
+  assert.match(p, /no_meeting_before/, "the constraint params must be named in the directive");
 });
 
-// The skill file may be absent (a stale or missing gc_advisor checkout) — that
-// must degrade the advisor's guidance, not crash the service.
-test("loadSystemPrompt falls back to the persona alone when the skill file is unreadable", () => {
-  const p = loadSystemPrompt("/nonexistent/path/does-not-exist/SKILL.md");
-  assert.match(p, /catalog year/i, "the persona itself must still be returned");
-  assert.doesNotMatch(p, /GC Advisor Skill/, "no skill section without a readable file");
-  assert.doesNotMatch(p, /find-eligible-sections/);
+// The full gc-advisor SKILL.md is deliberately NOT dumped into the prompt (see
+// loadSystemPrompt comment): a data dump induces answer-from-prompt over tool use.
+test("loadSystemPrompt does NOT inject the full skill (data-starve the model)", () => {
+  const p = loadSystemPrompt();
+  assert.doesNotMatch(p, /GC Advisor Skill/, "the full skill must not be injected");
 });
 
 // --- egress gate ------------------------------------------------------------

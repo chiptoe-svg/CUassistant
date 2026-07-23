@@ -103,7 +103,7 @@ const listTerms: McpToolDefinition = {
   },
 };
 
-const searchClasses: McpToolDefinition = {
+export const searchClasses: McpToolDefinition = {
   operation: "clemson.search_classes",
   tool: {
     name: "search-clemson-classes",
@@ -112,8 +112,10 @@ const searchClasses: McpToolDefinition = {
       "Read-only, no login, works on or off campus. Returns sections with " +
       "CRN, title, credit hours, seats available/max, waitlist counts, " +
       "instructor (name + email), and meeting days/time/building/room. " +
-      "Requires a term code from list-clemson-terms; narrow with subject " +
-      "(e.g. CPSC), courseNumber (e.g. 1010), and/or openOnly. " +
+      "Requires a term code from list-clemson-terms AND a subject " +
+      "(e.g. CPSC) and/or courseNumber (e.g. 1010) to scope the search — " +
+      "an unscoped whole-term search is not supported, since it can return " +
+      "thousands of sections. openOnly further narrows within scope. " +
       "Served from the daily snapshot when available (fast, no Banner load); " +
       "falls back to a live Banner query if no snapshot exists yet. " +
       "Pass refresh:true only if you need up-to-the-minute seat counts. " +
@@ -122,7 +124,11 @@ const searchClasses: McpToolDefinition = {
       "count are omitted — an absent field means none/zero. seatsAvailable is " +
       "always present, and seatsAvailable:0 means the section is full. When " +
       "the result is truncated the envelope carries truncated:true plus a " +
-      "hint; narrow the query or page with offset rather than repeating it.",
+      "hint; narrow the query or page with offset rather than repeating it. " +
+      "Does not return course descriptions, prerequisites, or degree-" +
+      "requirement eligibility — use get-clemson-section-details for catalog " +
+      "detail on one CRN, or find-eligible-sections for GC requirement-" +
+      "eligible sections.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -132,11 +138,14 @@ const searchClasses: McpToolDefinition = {
         },
         subject: {
           type: "string",
-          description: "Subject abbreviation, e.g. CPSC.",
+          description:
+            "Subject abbreviation, e.g. CPSC. Required unless courseNumber " +
+            "is given.",
         },
         courseNumber: {
           type: "string",
-          description: "Course number, e.g. 1010.",
+          description:
+            "Course number, e.g. 1010. Required unless subject is given.",
         },
         openOnly: {
           type: "boolean",
@@ -168,10 +177,18 @@ const searchClasses: McpToolDefinition = {
     }
     const term = args.term as string | undefined;
     if (!term) return err("term is required (see list-clemson-terms)");
+    const subject = args.subject as string | undefined;
+    const courseNumber = args.courseNumber as string | undefined;
+    if (!subject && !courseNumber)
+      return err(
+        "subject or courseNumber is required to scope the search (e.g. " +
+          "subject: 'CPSC') — an unscoped whole-term search is not " +
+          "supported; add a subject and/or courseNumber.",
+      );
     const result = await searchClemsonClasses({
       term,
-      subject: args.subject as string | undefined,
-      courseNumber: args.courseNumber as string | undefined,
+      subject,
+      courseNumber,
       openOnly: Boolean(args.openOnly),
       max: typeof args.max === "number" ? args.max : undefined,
       offset: typeof args.offset === "number" ? args.offset : undefined,
@@ -194,7 +211,9 @@ const sectionDetails: McpToolDefinition = {
       "description, prerequisites, corequisites, restrictions, section " +
       "attributes, and a bookstore link for required materials. Read-only, " +
       "no login. Get the CRN from search-clemson-classes. (There is no " +
-      "parsed textbook list — Banner only exposes a bookstore URL.)",
+      "parsed textbook list — Banner only exposes a bookstore URL.) Takes " +
+      "one known CRN — do not use this to browse or filter across many " +
+      "sections; use search-clemson-classes for that.",
     inputSchema: {
       type: "object" as const,
       properties: {

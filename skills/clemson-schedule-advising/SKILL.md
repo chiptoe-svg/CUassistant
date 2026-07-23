@@ -40,16 +40,19 @@ Search the Banner class schedule. Served from the daily SQLite snapshot by
 default (fast, no Banner load); falls back to a live query if no snapshot exists.
 
 ```
-args (required): { term: string }
+args (required): { term: string, subject: string /* or courseNumber */ }
 args (optional): {
-  subject: string,        // e.g. "CPSC"
-  courseNumber: string,   // e.g. "1010"
+  subject: string,        // e.g. "CPSC" — at least one of subject/courseNumber required
+  courseNumber: string,   // e.g. "1010" — at least one of subject/courseNumber required
   openOnly: boolean,      // default false
   max: number,            // default 50, capped at 500
   offset: number,         // default 0, for paging
   refresh: boolean        // force live Banner query (slow — use sparingly)
 }
 ```
+
+An unscoped whole-term search (neither `subject` nor `courseNumber`) is
+rejected — narrow with at least one of them.
 
 Returns:
 ```json
@@ -520,6 +523,11 @@ non-GC programs use `search-clemson-classes` with the known course codes from
 ### `find-eligible-sections` requires a snapshot
 The tool reads the per-term SQLite schedule snapshot (`state/clemson/<term>.db`).
 If no snapshot exists yet for the term (e.g. a newly opened registration period
-before 05:00), the tool returns an error. Workaround: call
-`search-clemson-classes { term, refresh: true }` first to prime the snapshot,
-then retry.
+before 05:00), the tool returns an error. `search-clemson-classes { term,
+subject, refresh: true }` does NOT prime this snapshot — `refresh: true` there
+only forces one live, subject/courseNumber-scoped Banner query and does not
+write it to disk. There is no MCP tool that writes the full-term snapshot on
+demand; it is written by the daily refresh job (~05:00) or by
+`find-clemson-instructor-classes`/`get-clemson-room-availability` as an
+incidental side effect of a cold, subject-less scan. If `find-eligible-sections`
+errors for a brand-new term, retry after the next daily refresh.

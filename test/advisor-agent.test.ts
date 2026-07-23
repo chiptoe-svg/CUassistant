@@ -35,36 +35,15 @@ test("the persona carries the rules that keep answers grounded", () => {
   assert.match(p, /catalog year/i, "catalog-year discipline");
   assert.match(p, /petitions/i, "the exceptions boundary");
   assert.match(p, /empty/i, "the empty-result rule");
-  assert.doesNotMatch(
-    p,
-    /you have `list-skills`/i,
-    "the persona must not tell the model to call a tool that's been filtered out of its bridge",
-  );
+  assert.match(p, /list-skills/, "skills are retrieved, not inlined");
 });
 
-// REGRESSION: a benchmark transcript caught the advisor's model burning 2 of
-// 3 tool calls on list-skills + get-skill-docs, then never calling the
-// deterministic find-eligible-sections join (scenario S5). We hide the four
-// discovery tools (SKILL_DISCOVERY_TOOL_NAMES in advisor-mcp.ts) and give the
-// model a MINIMAL tool-use directive in the persona — NOT the full skill.
-// Measured on benchmark S5: injecting the data-heavy skill made the model
-// answer FROM the prompt instead of calling the tool (tool-calling -> ~40%,
-// S5 3.26 -> 2.28). Data-starve the model; give it only the directive.
-test("the persona carries the find-eligible-sections tool-use directive", () => {
+// The three skills total ~6,500 tokens. Inlining them would spend a tenth of a
+// 64k window on every turn — the budget the 2026-07-21 payload work reclaimed.
+test("skill bodies are NOT inlined into the system prompt", () => {
   const p = loadSystemPrompt();
-  assert.match(
-    p,
-    /find-eligible-sections/,
-    "the requirement + scheduling-constraint tool-use directive must be present",
-  );
-  assert.match(p, /no_meeting_before/, "the constraint params must be named in the directive");
-});
-
-// The full gc-advisor SKILL.md is deliberately NOT dumped into the prompt (see
-// loadSystemPrompt comment): a data dump induces answer-from-prompt over tool use.
-test("loadSystemPrompt does NOT inject the full skill (data-starve the model)", () => {
-  const p = loadSystemPrompt();
-  assert.doesNotMatch(p, /GC Advisor Skill/, "the full skill must not be injected");
+  assert.ok(p.length < 8000, `system prompt is ${p.length} chars — skills inlined?`);
+  assert.doesNotMatch(p, /### `search-clemson-classes`/, "skill body leaked in");
 });
 
 // --- egress gate ------------------------------------------------------------

@@ -58,35 +58,6 @@ async function loadToolsFromClient(
 }
 
 /**
- * Skill-discovery tools the advisor must never see.
- *
- * A benchmark transcript caught the advisor's model spending 2 of its 3 tool
- * calls on `list-skills` + `get-skill-docs` — hunting at runtime for guidance
- * it should already have — then answering without ever calling the
- * deterministic `find-eligible-sections` join, re-failing scenario S5. The
- * advisor is single-purpose (GC advising, see advisor/AGENTS.md); it does not
- * need to DISCOVER its one skill, so loadSystemPrompt() in advisor-agent.ts
- * injects the gc-advisor SKILL.md directly into the system prompt instead.
- * These tool names are therefore pure overhead for this agent: every call
- * they tempt the model into is a wasted round against ADVISOR_MAX_ROUNDS.
- *
- * `list-gc-skills` / `get-gc-skill-docs` are the catalog server's (8767)
- * renamed copies (see mcp-catalog.ts); `list-skills` / `get-skill-docs` are
- * the public server's (8766) originals. Both pairs are filtered here.
- *
- * This is an ADVISOR-SIDE filter only. The tools stay registered on 8766/8767
- * — other MCP consumers (e.g. an authoring session editing a SKILL.md) still
- * need them — so this list must never be threaded into src/mcp-tools/skills.ts
- * or the server registration.
- */
-const SKILL_DISCOVERY_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "list-skills",
-  "get-skill-docs",
-  "list-gc-skills",
-  "get-gc-skill-docs",
-]);
-
-/**
  * Expose each MCP tool under its BARE name — no `<server>__<tool>` prefix.
  *
  * The prefixing was inherited from nanoclaw, where it prevents collisions
@@ -283,9 +254,7 @@ export async function createAdvisorMcpBridge(
       const client = deps.createClient();
 
       await client.connect(transport);
-      loaded = (await loadToolsFromClient(serverName, client)).filter(
-        (tool) => !SKILL_DISCOVERY_TOOL_NAMES.has(tool.name),
-      );
+      loaded = await loadToolsFromClient(serverName, client);
       runtimes.push({
         tools: [],
         async close() {

@@ -141,53 +141,6 @@ function makeDeps(clients: ReturnType<typeof fakeClient>[]) {
   };
 }
 
-// REGRESSION: a benchmark transcript caught the advisor's model spending 2 of
-// 3 tool calls on list-skills + get-skill-docs — discovering guidance a
-// single-purpose advisor should already have — then never calling the
-// deterministic find-eligible-sections join (scenario S5). The advisor's one
-// skill is now injected into its system prompt (loadSystemPrompt in
-// advisor-agent.ts), so these four names must never reach its tool array,
-// from either server.
-test("the four skill-discovery tool names are filtered out of the advisor's bridge", async () => {
-  const serverNames = Object.keys(advisorMcpServers());
-  const discoveryNames = [
-    "list-skills",
-    "get-skill-docs",
-    "list-gc-skills",
-    "get-gc-skill-docs",
-  ];
-  // Put ALL FOUR discovery names on the first server and one on the second
-  // (mirroring the real split: list-skills/get-skill-docs from 8766,
-  // list-gc-skills/get-gc-skill-docs from 8767), so every name is actually
-  // exercised through the filter rather than merely asserted absent.
-  const clients = serverNames.map((_name, i) =>
-    fakeClient({
-      tools:
-        i === 0
-          ? [...discoveryNames.map(fakeTool), fakeTool(`keep_${i}`)]
-          : [fakeTool(`keep_${i}`)],
-    }),
-  );
-  const { deps } = makeDeps(clients);
-
-  const bridge = await createAdvisorMcpBridge(deps);
-
-  const names = bridge.tools.map((t) => t.name);
-  for (const discoveryName of discoveryNames) {
-    assert.ok(
-      !names.includes(discoveryName),
-      `"${discoveryName}" reached the advisor's tool array — it must be filtered`,
-    );
-  }
-  assert.deepEqual(
-    names.sort(),
-    serverNames.map((_name, i) => `keep_${i}`).sort(),
-    "non-discovery tools must still pass through",
-  );
-
-  await bridge.close();
-});
-
 test("createAdvisorMcpBridge returns the union of tools from each connected server, and nothing else", async () => {
   const serverNames = Object.keys(advisorMcpServers());
   const toolsByServer = serverNames.map((_name, i) => [fakeTool(`tool_${i}_a`), fakeTool(`tool_${i}_b`)]);

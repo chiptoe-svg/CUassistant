@@ -191,19 +191,6 @@ export const GC_ADVISOR_DB =
 // would drift from it silently.
 export const GC_ADVISOR_SKILLS =
   process.env.GC_ADVISOR_SKILLS || "/Users/admin/projects/gc_advisor/skills";
-/**
- * The advisor's one skill (Clemson GC academic advising), injected directly
- * into the advisor system prompt by loadSystemPrompt() in advisor-agent.ts —
- * see the comment there and SKILL_DISCOVERY_TOOL_NAMES in advisor-mcp.ts for
- * why: the advisor is single-purpose and must not spend tool calls
- * discovering a skill it always needs.
- *
- * Derived from GC_ADVISOR_SKILLS rather than re-hardcoded, so overriding that
- * root (e.g. in a test fixture or a relocated checkout) moves this with it.
- */
-export const GC_ADVISOR_SKILL_MD =
-  process.env.GC_ADVISOR_SKILL_MD ||
-  path.join(GC_ADVISOR_SKILLS, "gc-advisor", "SKILL.md");
 
 // Public GC catalog MCP server port (loopback HTTP transport).
 export const MCP_CATALOG_HTTP_PORT = Number(

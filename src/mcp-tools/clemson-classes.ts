@@ -122,7 +122,11 @@ const searchClasses: McpToolDefinition = {
       "count are omitted — an absent field means none/zero. seatsAvailable is " +
       "always present, and seatsAvailable:0 means the section is full. When " +
       "the result is truncated the envelope carries truncated:true plus a " +
-      "hint; narrow the query or page with offset rather than repeating it.",
+      "hint; narrow the query or page with offset rather than repeating it. " +
+      "Does not return course descriptions, prerequisites, or degree-" +
+      "requirement eligibility — use get-clemson-section-details for catalog " +
+      "detail on one CRN, or find-eligible-sections for GC requirement-" +
+      "eligible sections.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -194,7 +198,9 @@ const sectionDetails: McpToolDefinition = {
       "description, prerequisites, corequisites, restrictions, section " +
       "attributes, and a bookstore link for required materials. Read-only, " +
       "no login. Get the CRN from search-clemson-classes. (There is no " +
-      "parsed textbook list — Banner only exposes a bookstore URL.)",
+      "parsed textbook list — Banner only exposes a bookstore URL.) Takes " +
+      "one known CRN — do not use this to browse or filter across many " +
+      "sections; use search-clemson-classes for that.",
     inputSchema: {
       type: "object" as const,
       properties: {

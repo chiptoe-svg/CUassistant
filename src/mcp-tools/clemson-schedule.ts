@@ -19,7 +19,9 @@ const checkConflicts: McpToolDefinition = {
       "Given a list of CRNs for a term, returns which pairs have time " +
       "conflicts (same day, overlapping minutes) and which are conflict-free. " +
       "Deterministic — reads the daily Banner snapshot, not live Banner. " +
-      "Use CRNs from search-clemson-classes.",
+      "Use CRNs from search-clemson-classes. Do not use this to filter a " +
+      "large candidate pool against a fixed set — use " +
+      "find-conflict-free-schedule instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -78,7 +80,9 @@ const findConflictFree: McpToolDefinition = {
       "consider), returns which candidates can be added without time conflicts. " +
       "Each candidate is checked against every fixed CRN and against every " +
       "other candidate. Returns conflict_free candidates and details of any " +
-      "conflicts for the rest. Reads the daily Banner snapshot.",
+      "conflicts for the rest. Reads the daily Banner snapshot. Do not use " +
+      "this just to check a short, already-chosen CRN list — use " +
+      "check-schedule-conflicts for that.",
     inputSchema: {
       type: "object" as const,
       properties: {

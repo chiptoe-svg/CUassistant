@@ -95,7 +95,9 @@ export const requirementRules: McpToolDefinition = {
       "Get the requirement rules for the GC Graphic Communications BS degree " +
       "in a given catalog year: lab science, specialty area (minor or 15-credit " +
       "course set), and technical requirement — with explicit course codes, " +
-      "total credits, and raw footnote text. Read-only, no login.",
+      "total credits, and raw footnote text. Read-only, no login. Does not " +
+      "include General Education requirements (use get-gc-gen-ed) or the " +
+      "full semester-by-semester course plan (use get-gc-program-plan).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -136,7 +138,8 @@ export const genEd: McpToolDefinition = {
       "6 categories (Communication, Mathematics, Natural Sciences with Lab, " +
       "Arts and Humanities, Social Sciences, Global Challenges) with minimum " +
       "credits, allowed course lists, constraint rules, and student learning outcomes. " +
-      "Read-only, no login.",
+      "Read-only, no login. For major-specific requirements (lab science, " +
+      "specialty area, technical) use get-gc-requirement-rules instead.",
     inputSchema: {
       type: "object" as const,
       properties: {

@@ -148,7 +148,10 @@ const findEligibleSections: McpToolDefinition = {
       "'Specialty Area Requirement', 'Graphic Communication Technical Requirement'). " +
       "Pass completed_courses as a list of course codes the student has passed " +
       "(e.g. [\"GC 1010\", \"GC 2010\"]) — used only for prereq gating, " +
-      "no identity or grade data needed.",
+      "no identity or grade data needed. Only works for the GC (Graphic " +
+      "Communications) program, since the join requires a program loaded " +
+      "into gc_advisor.db — for other majors use search-clemson-classes " +
+      "with course codes from get-gc-program-plan instead.",
     inputSchema: {
       type: "object" as const,
       properties: {

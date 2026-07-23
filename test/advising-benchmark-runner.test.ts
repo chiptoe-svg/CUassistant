@@ -326,7 +326,7 @@ describe("MODEL_PANEL", () => {
     assert.deepEqual(
       MODEL_PANEL.map((c) => c.label).sort(),
       [
-        "frontier-gpt-5.6",
+        "frontier-gpt-5.5",
         "gptoss-120b",
         "qwen3.6-35b-a3b-fp8",
         "spark-qwen3.6-35b-a3b",
@@ -361,7 +361,7 @@ describe("MODEL_PANEL", () => {
       (c) => c.label === "gptoss-120b" || c.label === "qwen3.6-35b-a3b-fp8",
     );
     const spark = MODEL_PANEL.find((c) => c.label === "spark-qwen3.6-35b-a3b")!;
-    const frontier = MODEL_PANEL.find((c) => c.label === "frontier-gpt-5.6")!;
+    const frontier = MODEL_PANEL.find((c) => c.label === "frontier-gpt-5.5")!;
     assert.equal(new Set(rcd.map((c) => c.baseUrl)).size, 1);
     assert.notEqual(spark.baseUrl, rcd[0]!.baseUrl);
     assert.notEqual(frontier.baseUrl, rcd[0]!.baseUrl);

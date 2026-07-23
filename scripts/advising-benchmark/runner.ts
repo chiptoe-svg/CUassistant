@@ -131,16 +131,24 @@ export const MODEL_PANEL: ModelCandidate[] = [
     // route is FERPA-cleared for identifiable PII, so this can't take raw student
     // data; but WITH de-identification it is a real deployment option, not merely a
     // yardstick — so it belongs in the panel as a genuine (privacy-gated) choice.
-    // Deliberately gpt-5.6 (NOT the gpt-5.4 reference / gpt-5.5 judge) so no model
-    // judges itself or is scored against its own answer.
+    //
+    // gpt-5.5, NOT gpt-5.6: gpt-5.6-sol rejects function tools on /chat/completions
+    // unless reasoning_effort:'none' (which turns its reasoning OFF — understates
+    // the frontier) or /v1/responses (a different API our loop doesn't speak).
+    // gpt-5.5 does tools+reasoning on /chat/completions today (verified). CAVEAT:
+    // gpt-5.5 is also the judge, so its QUALITY score carries a mild self-preference
+    // bias — pointwise+blinded blunts it, and reliability/latency are judge-
+    // independent and clean. Judge stays gpt-5.5 so the frontier's scores are
+    // comparable to the baseline's. Flag the caveat in the report (same class as
+    // gptoss's same-family note).
     //
     // Replaces qwen-agentworld-35b-a3b, which was DROPPED: per its arXiv paper it
     // is a "language world model" that predicts environment observations, not an
     // agent policy that calls tools — wrong model class for an advisor candidate.
-    label: "frontier-gpt-5.6",
+    label: "frontier-gpt-5.5",
     baseUrl: CLEMSON_LLM_OPENAI_BASE_URL,
     apiKey: CLEMSON_LLM_API_KEY,
-    model: "gpt-5.6-sol",
+    model: "gpt-5.5",
     family: "openai-reasoning",
   },
   {

@@ -177,6 +177,44 @@ and we are ahead of the advice there.
   tool-calling, now budgeted) rather than Spark — a per-turn model-selection
   question the provider chain could encode.
 
+## Latency — deterministic speedups (advisor + benchmark)
+
+Context: the advisor's buffer-and-gate UX releases one complete answer with no
+streaming, so total turn latency is felt directly. The 2026-07-23 model benchmark
+measured qwen turns at 10–34s on multi-tool scenarios (gptoss-120b ~1s); prompts
+are 19–33k tokens. Time goes to re-PREFILLING a large, mostly-static prefix every
+turn (system prompt + 24 tool schemas + the growing message/tool-result history)
+and to GENERATION (thinking tokens + answer). The levers below attack prefill and
+generation size; each is deterministic engineering unless marked as a measured
+tradeoff.
+
+Ranked by leverage:
+
+1. **Prefix caching (server-side, biggest, zero quality cost).** The
+   system+tool-schemas prefix is byte-identical across every turn of a loop and
+   every trial in a benchmark cell. If vLLM `enable_prefix_caching` is on for
+   Spark/RCD, that ~15–20k-token prefix is prefilled once and reused. FIRST thing
+   to verify — if off, it is a one-flag ask to the endpoint owners. (Probe when no
+   run is loading the endpoint, so the timing isn't skewed by contention.)
+2. **Shrink the per-turn prefix — the selector layer (Decision 1), now with a
+   latency rationale too.** 24 tool schemas re-sent every turn is both slow
+   (prefill) AND reliability-degrading (the measured tool-count slope). A
+   domain-scoped subset (~6–10 tools) attacks both at once. Same lever on the
+   result side: keep capping tool-result size — the −47% compaction is banked, and
+   mandatory `subject`/`courseNumber` scoping now prevents whole-term dumps.
+3. **Cap generation.** Tune `ADVISOR_MAX_OUTPUT_TOKENS` to what answers actually
+   need; evaluate thinking-on vs thinking-off. Turning off qwen `enable_thinking`
+   deterministically cuts tokens/latency; the QUALITY cost is a *measured* tradeoff
+   — the benchmark's latency p50/p95 + judge score is exactly the instrument for it.
+4. **Benchmark wall-clock (harness only): run independent cells concurrently**
+   (vLLM batches happily). TENSION: latency under concurrent load ≠ isolated
+   latency, so keep a concurrent pass for throughput and an isolated pass for the
+   latency metric — do not conflate them.
+
+To measure next: (a) prefix-caching status on Spark/RCD; (b) the token cost of the
+system+tools prefix (the reducible part); (c) the selector prototype's latency
+delta, measured alongside its reliability delta on `tool-ceiling-probe.ts`.
+
 ## Pointers
 
 - Design: `docs/superpowers/specs/2026-07-21-advisor-chat-design.md`

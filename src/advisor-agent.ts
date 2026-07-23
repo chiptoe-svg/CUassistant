@@ -51,7 +51,6 @@ import {
   ADVISOR_TURN_TIMEOUT_MS,
   CLEMSON_LLM_API_KEY,
   CLEMSON_LLM_OPENAI_BASE_URL,
-  GC_ADVISOR_SKILL_MD,
   OPENAI_API_KEY,
 } from "./config.js";
 import { log } from "./log.js";
@@ -63,33 +62,21 @@ import type { AdvisorSession } from "./advisor-session.js";
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
 
 /**
- * The persona (advisor/AGENTS.md) plus the gc-advisor SKILL.md appended.
+ * The advisor system prompt: the persona (advisor/AGENTS.md) only.
  *
- * gc_advisor owns the skill document (see GC_ADVISOR_SKILL_MD in config.ts —
- * same "read in place, don't copy" reasoning as shelling out to query.py), so
- * this reads it fresh every call rather than baking a copy into this repo.
- * `skillPath` defaults to that config constant and exists as a parameter only
- * so a test can point it at a missing file without mutating process.env.
- *
- * Falls back to the persona alone if the skill file can't be read — a stale
- * or absent gc_advisor checkout must degrade the advisor's guidance, not crash
- * the service.
+ * We deliberately do NOT inject the full gc-advisor SKILL.md. Measured on
+ * benchmark S5: injecting the data-heavy skill made the models answer FROM the
+ * prompt instead of calling the deterministic tools — tool-calling fell to ~40%
+ * and S5 quality dropped (3.26 → 2.28). A model is induced to USE a tool by
+ * being data-starved plus a minimal directive, not by a skill dump. The one
+ * tool-use directive that matters (call find-eligible-sections with the
+ * scheduling constraints) lives inline in AGENTS.md instead.
  */
-export function loadSystemPrompt(skillPath: string = GC_ADVISOR_SKILL_MD): string {
-  const persona = readFileSync(
+export function loadSystemPrompt(): string {
+  return readFileSync(
     fileURLToPath(new URL("../advisor/AGENTS.md", import.meta.url)),
     "utf8",
   );
-  try {
-    const skill = readFileSync(skillPath, "utf8");
-    return `${persona}\n\n---\n\n## GC Advisor Skill (injected — not retrieved via a tool)\n\n${skill}`;
-  } catch (e) {
-    log.warn(
-      "gc-advisor SKILL.md unreadable; advisor persona shipped without its injected skill",
-      { skillPath, err: e instanceof Error ? e.message : String(e) },
-    );
-    return persona;
-  }
 }
 
 // --- egress authorization ---------------------------------------------------

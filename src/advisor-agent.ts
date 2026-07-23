@@ -17,10 +17,14 @@
 // pay listTools() latency every turn and churn connections against the MCP
 // servers; all three transports are HTTP, so sharing is safe.
 //
-// Skills are NOT inlined into the system prompt. They are retrieved on demand
-// through the bridge's list-skills / get-skill-docs tools. The three relevant
-// skills total ~6,500 tokens; inlining them would spend a tenth of a 64k window
-// on every turn.
+// The advisor's one skill (gc-advisor) is INLINED into the system prompt by
+// loadSystemPrompt() below, not retrieved on demand. A benchmark transcript
+// caught the model spending 2 of its 3 tool calls on list-skills +
+// get-skill-docs — discovering guidance a single-purpose advisor should
+// already have — then never calling the deterministic find-eligible-sections
+// join. The four skill-discovery tool names are filtered out of the bridge in
+// advisor-mcp.ts (SKILL_DISCOVERY_TOOL_NAMES) for the same reason: there is
+// nothing left for them to be called for.
 
 import { mkdtempSync, readFileSync } from "node:fs";
 import { cp, rm } from "node:fs/promises";
@@ -47,6 +51,7 @@ import {
   ADVISOR_TURN_TIMEOUT_MS,
   CLEMSON_LLM_API_KEY,
   CLEMSON_LLM_OPENAI_BASE_URL,
+  GC_ADVISOR_SKILL_MD,
   OPENAI_API_KEY,
 } from "./config.js";
 import { log } from "./log.js";
@@ -57,11 +62,34 @@ import type { AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
 
-export function loadSystemPrompt(): string {
-  return readFileSync(
+/**
+ * The persona (advisor/AGENTS.md) plus the gc-advisor SKILL.md appended.
+ *
+ * gc_advisor owns the skill document (see GC_ADVISOR_SKILL_MD in config.ts —
+ * same "read in place, don't copy" reasoning as shelling out to query.py), so
+ * this reads it fresh every call rather than baking a copy into this repo.
+ * `skillPath` defaults to that config constant and exists as a parameter only
+ * so a test can point it at a missing file without mutating process.env.
+ *
+ * Falls back to the persona alone if the skill file can't be read — a stale
+ * or absent gc_advisor checkout must degrade the advisor's guidance, not crash
+ * the service.
+ */
+export function loadSystemPrompt(skillPath: string = GC_ADVISOR_SKILL_MD): string {
+  const persona = readFileSync(
     fileURLToPath(new URL("../advisor/AGENTS.md", import.meta.url)),
     "utf8",
   );
+  try {
+    const skill = readFileSync(skillPath, "utf8");
+    return `${persona}\n\n---\n\n## GC Advisor Skill (injected — not retrieved via a tool)\n\n${skill}`;
+  } catch (e) {
+    log.warn(
+      "gc-advisor SKILL.md unreadable; advisor persona shipped without its injected skill",
+      { skillPath, err: e instanceof Error ? e.message : String(e) },
+    );
+    return persona;
+  }
 }
 
 // --- egress authorization ---------------------------------------------------

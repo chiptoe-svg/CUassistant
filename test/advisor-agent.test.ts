@@ -35,15 +35,42 @@ test("the persona carries the rules that keep answers grounded", () => {
   assert.match(p, /catalog year/i, "catalog-year discipline");
   assert.match(p, /petitions/i, "the exceptions boundary");
   assert.match(p, /empty/i, "the empty-result rule");
-  assert.match(p, /list-skills/, "skills are retrieved, not inlined");
+  assert.doesNotMatch(
+    p,
+    /you have `list-skills`/i,
+    "the persona must not tell the model to call a tool that's been filtered out of its bridge",
+  );
 });
 
-// The three skills total ~6,500 tokens. Inlining them would spend a tenth of a
-// 64k window on every turn — the budget the 2026-07-21 payload work reclaimed.
-test("skill bodies are NOT inlined into the system prompt", () => {
+// REGRESSION: a benchmark transcript caught the advisor's model burning 2 of
+// 3 tool calls on list-skills + get-skill-docs, then never calling the
+// deterministic find-eligible-sections join (scenario S5). The fix is to stop
+// making the model discover its one skill at runtime — inject it directly —
+// and to filter the four discovery tool names out of its bridge (see
+// SKILL_DISCOVERY_TOOL_NAMES in advisor-mcp.ts). This pins the persona-side
+// half: the gc-advisor SKILL.md content must actually be present.
+test("the gc-advisor skill is injected directly into the system prompt", () => {
   const p = loadSystemPrompt();
-  assert.ok(p.length < 8000, `system prompt is ${p.length} chars — skills inlined?`);
-  assert.doesNotMatch(p, /### `search-clemson-classes`/, "skill body leaked in");
+  assert.match(p, /GC Advisor Skill/, "the injected-skill section heading is missing");
+  assert.match(
+    p,
+    /find-eligible-sections/,
+    "a known string from the gc-advisor skill body must be present",
+  );
+  assert.match(
+    p,
+    /don't hand-filter/,
+    "the requirement + scheduling-constraint guidance added for S5 must be present",
+  );
+});
+
+// The skill file may be absent (a stale or missing gc_advisor checkout) — that
+// must degrade the advisor's guidance, not crash the service.
+test("loadSystemPrompt falls back to the persona alone when the skill file is unreadable", () => {
+  const p = loadSystemPrompt("/nonexistent/path/does-not-exist/SKILL.md");
+  assert.match(p, /catalog year/i, "the persona itself must still be returned");
+  assert.doesNotMatch(p, /GC Advisor Skill/, "no skill section without a readable file");
+  assert.doesNotMatch(p, /find-eligible-sections/);
 });
 
 // --- egress gate ------------------------------------------------------------

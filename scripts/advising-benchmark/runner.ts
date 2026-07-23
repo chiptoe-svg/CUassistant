@@ -94,8 +94,19 @@ import { SCENARIOS, type Scenario } from "./scenarios.ts";
  * (temperature + chat_template_kwargs.enable_thinking). "plain" sends only
  * temperature — see the file header for why gptoss-120b is "plain" rather than
  * a guess at gpt-oss's own thinking-flag convention.
+ *
+ * "openai-reasoning" is for the Task 3 yardstick models (gpt-5.4 reference,
+ * gpt-5.5-pro judge) called through CLEMSON_LLM_OPENAI_BASE_URL. This is NOT
+ * a guess: advisor-agent.ts's runWithProvider already documents "the
+ * Responses API rejects temperature for reasoning models — a 400", and
+ * src/openai-classifier.ts's working gpt-5.4-mini call confirms the pattern
+ * on chat/completions too — it sends no `temperature` at all and uses
+ * `max_completion_tokens`, not `max_tokens`. Reusing "plain" (which injects
+ * ADVISOR_TEMPERATURE) for these models would risk exactly that 400, so they
+ * get their own family rather than silently reusing a shape built for a
+ * different endpoint family.
  */
-export type ModelFamily = "qwen-thinking" | "plain";
+export type ModelFamily = "qwen-thinking" | "plain" | "openai-reasoning";
 
 export interface ModelCandidate {
   label: string;
@@ -169,11 +180,20 @@ export interface RunObservation {
 /**
  * Shape one turn's request body per the candidate's family. tool_choice is
  * deliberately never touched — see the file header.
+ *
+ * "openai-reasoning" deliberately does NOT inject temperature (see the
+ * ModelFamily doc comment) and passes the body through as-is; the
+ * max_tokens/max_completion_tokens key swap for that family lives in the
+ * caller (runScenarioTrial), since it is chosen when the body's token-limit
+ * key is first set, before this function ever sees it.
  */
 export function applyRequestShape(
   body: Record<string, unknown>,
   family: ModelFamily,
 ): Record<string, unknown> {
+  if (family === "openai-reasoning") {
+    return { ...body };
+  }
   const shaped: Record<string, unknown> = {
     ...body,
     temperature: ADVISOR_TEMPERATURE,
@@ -333,8 +353,12 @@ async function fetchEndpointState(
   }
 }
 
-/** Route a tool call to the live AgentTool that actually executes it. */
-function buildToolExecutor(
+/**
+ * Route a tool call to the live AgentTool that actually executes it. Exported
+ * so Task 3's reference-answer generator (scripts/advising-benchmark/judge.ts)
+ * can build the same tool executor without duplicating this logic.
+ */
+export function buildToolExecutor(
   tools: AgentTool[],
 ): (name: string, args: unknown) => Promise<string> {
   const byName = new Map(tools.map((t) => [t.name, t]));
@@ -357,7 +381,14 @@ function buildToolExecutor(
   };
 }
 
-async function runScenarioTrial(
+/**
+ * Run ONE scenario trial through the agentic loop for one candidate. Exported
+ * — Task 3's reference-answer generator (judge.ts) reuses this EXACT function
+ * to run gpt-5.4 through the same loop, per the spec's "the reference answer
+ * is just gpt-5.4 run through the SAME agentic loop." No second loop
+ * implementation exists anywhere in this benchmark.
+ */
+export async function runScenarioTrial(
   candidate: ModelCandidate,
   scenario: Scenario,
   systemPrompt: string,
@@ -378,6 +409,15 @@ async function runScenarioTrial(
   let usage: UsageTotals = { promptTokens: null, completionTokens: null };
   const latencyMsPerCompletion: number[] = [];
 
+  // OpenAI reasoning-family models (see the ModelFamily doc comment) reject
+  // `max_tokens` on chat/completions in favor of `max_completion_tokens` —
+  // the same distinction src/openai-classifier.ts's working gpt-5.4-mini call
+  // already encodes. The key is chosen here, before applyRequestShape ever
+  // sees the body, since applyRequestShape only touches temperature/
+  // chat_template_kwargs, not the token-limit field's name.
+  const tokenLimitKey =
+    candidate.family === "openai-reasoning" ? "max_completion_tokens" : "max_tokens";
+
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const body = applyRequestShape(
       {
@@ -385,7 +425,7 @@ async function runScenarioTrial(
         messages,
         tools,
         stream: false,
-        max_tokens: ADVISOR_MAX_OUTPUT_TOKENS,
+        [tokenLimitKey]: ADVISOR_MAX_OUTPUT_TOKENS,
       },
       candidate.family,
     );

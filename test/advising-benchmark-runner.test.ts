@@ -273,6 +273,21 @@ describe("applyRequestShape", () => {
     assert.equal("tool_choice" in thinking, false);
     assert.equal("tool_choice" in plain, false);
   });
+
+  it("openai-reasoning family (Task 3's gpt-5.4/gpt-5.5-pro) sends NO temperature and no chat_template_kwargs", () => {
+    // Reasoning-family OpenAI models reject a non-default temperature (see
+    // advisor-agent.ts's Responses-API note and openai-classifier.ts's
+    // working gpt-5.4-mini call, which omits temperature entirely) — this
+    // family must not inject ADVISOR_TEMPERATURE the way "plain" does.
+    const body = applyRequestShape(
+      { model: "gpt-5.4", messages: [], max_completion_tokens: 800 },
+      "openai-reasoning",
+    );
+    assert.equal("temperature" in body, false);
+    assert.equal("chat_template_kwargs" in body, false);
+    assert.equal("tool_choice" in body, false);
+    assert.equal(body.max_completion_tokens, 800);
+  });
 });
 
 // --- tool array conversion ---------------------------------------------------

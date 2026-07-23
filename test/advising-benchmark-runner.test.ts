@@ -321,13 +321,13 @@ describe("agentToolsToWireTools", () => {
 // --- MODEL_PANEL well-formedness ---------------------------------------------
 
 describe("MODEL_PANEL", () => {
-  it("has exactly the 4 candidates the spec names", () => {
+  it("has the 3 FERPA-OK candidates plus the de-identified-path frontier", () => {
     assert.equal(MODEL_PANEL.length, 4);
     assert.deepEqual(
       MODEL_PANEL.map((c) => c.label).sort(),
       [
+        "frontier-gpt-5.6",
         "gptoss-120b",
-        "qwen-agentworld-35b-a3b",
         "qwen3.6-35b-a3b-fp8",
         "spark-qwen3.6-35b-a3b",
       ].sort(),
@@ -348,17 +348,23 @@ describe("MODEL_PANEL", () => {
         `${c.label} apiKey must be a string (may be empty)`,
       );
       assert.ok(
-        c.family === "qwen-thinking" || c.family === "plain",
+        c.family === "qwen-thinking" ||
+          c.family === "plain" ||
+          c.family === "openai-reasoning",
         `${c.label} has an unknown family: ${c.family}`,
       );
     }
   });
 
-  it("the three RCD-hosted candidates share one base URL; Spark is a distinct endpoint", () => {
-    const rcd = MODEL_PANEL.filter((c) => c.label !== "spark-qwen3.6-35b-a3b");
+  it("the two RCD candidates share one base URL; Spark and the frontier are distinct endpoints", () => {
+    const rcd = MODEL_PANEL.filter(
+      (c) => c.label === "gptoss-120b" || c.label === "qwen3.6-35b-a3b-fp8",
+    );
     const spark = MODEL_PANEL.find((c) => c.label === "spark-qwen3.6-35b-a3b")!;
+    const frontier = MODEL_PANEL.find((c) => c.label === "frontier-gpt-5.6")!;
     assert.equal(new Set(rcd.map((c) => c.baseUrl)).size, 1);
     assert.notEqual(spark.baseUrl, rcd[0]!.baseUrl);
+    assert.notEqual(frontier.baseUrl, rcd[0]!.baseUrl);
   });
 });
 
@@ -375,7 +381,7 @@ describe("parseArgs", () => {
   it("reads --model, --scenario, --trials, --out, --allow-underpowered", () => {
     const args = parseArgs([
       "--model",
-      "qwen-agentworld-35b-a3b",
+      "gptoss-120b",
       "--scenario",
       "S1",
       "--trials",
@@ -384,7 +390,7 @@ describe("parseArgs", () => {
       "/tmp/out.json",
       "--allow-underpowered",
     ]);
-    assert.equal(args.model, "qwen-agentworld-35b-a3b");
+    assert.equal(args.model, "gptoss-120b");
     assert.equal(args.scenario, "S1");
     assert.equal(args.trials, 1);
     assert.equal(args.out, "/tmp/out.json");

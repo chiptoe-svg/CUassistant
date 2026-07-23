@@ -69,6 +69,7 @@ import {
   ADVISOR_TEMPERATURE,
   CLEMSON_LLM_API_KEY,
   CLEMSON_LLM_BASE_URL,
+  CLEMSON_LLM_OPENAI_BASE_URL,
 } from "../../src/config.ts";
 import {
   detectMalformedToolCall,
@@ -84,8 +85,9 @@ import {
 import { SCENARIOS, type Scenario } from "./scenarios.ts";
 
 // ---------------------------------------------------------------------------
-// MODEL_PANEL — the 4 deployable, FERPA-OK candidates. Plain config array,
-// easy to edit. See the spec's "Candidate panel" table.
+// MODEL_PANEL — 3 local/RCD FERPA-OK candidates (usable on raw student PII) + 1
+// frontier deployable only on DE-IDENTIFIED traffic (the toggle's OpenAI mode).
+// Plain config array, easy to edit. See the spec's "Candidate panel" table.
 // ---------------------------------------------------------------------------
 
 /**
@@ -125,11 +127,21 @@ export const MODEL_PANEL: ModelCandidate[] = [
     family: "plain",
   },
   {
-    label: "qwen-agentworld-35b-a3b",
-    baseUrl: CLEMSON_LLM_BASE_URL,
+    // FRONTIER via the DE-IDENTIFIED path — the toggle's "OpenAI mode". No OpenAI
+    // route is FERPA-cleared for identifiable PII, so this can't take raw student
+    // data; but WITH de-identification it is a real deployment option, not merely a
+    // yardstick — so it belongs in the panel as a genuine (privacy-gated) choice.
+    // Deliberately gpt-5.6 (NOT the gpt-5.4 reference / gpt-5.5 judge) so no model
+    // judges itself or is scored against its own answer.
+    //
+    // Replaces qwen-agentworld-35b-a3b, which was DROPPED: per its arXiv paper it
+    // is a "language world model" that predicts environment observations, not an
+    // agent policy that calls tools — wrong model class for an advisor candidate.
+    label: "frontier-gpt-5.6",
+    baseUrl: CLEMSON_LLM_OPENAI_BASE_URL,
     apiKey: CLEMSON_LLM_API_KEY,
-    model: "qwen-agentworld-35b-a3b",
-    family: "qwen-thinking",
+    model: "gpt-5.6-sol",
+    family: "openai-reasoning",
   },
   {
     label: "qwen3.6-35b-a3b-fp8",

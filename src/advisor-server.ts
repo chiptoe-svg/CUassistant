@@ -12,7 +12,7 @@
 //     can reach.
 
 import http from "node:http";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,7 @@ import {
   ADVISOR_PASSWORD,
   ADVISOR_PORT,
   ADVISOR_SESSION_TTL_MS,
+  STATE_DIR,
 } from "./config.js";
 import { log } from "./log.js";
 import { isLoopbackHost } from "./mcp-tools/server.js";
@@ -51,6 +52,12 @@ import { renderSchedule } from "./advisor-artifacts.js";
 import { flagLikelyPrivate } from "./advisor-pii-detect.js";
 
 const MAX_BODY_BYTES = 5_000_000;
+
+// Local-only feedback drop: no network egress, just files on the advisor
+// host. Env override so tests write to a temp dir instead of the real state
+// directory.
+const FEEDBACK_DIR =
+  process.env.ADVISOR_FEEDBACK_DIR || path.join(STATE_DIR, "feedback");
 
 const CLEANER_DIR = fileURLToPath(new URL("../advisor/cleaner", import.meta.url));
 const CLEANER_MIME: Record<string, string> = {
@@ -429,6 +436,53 @@ export function createAdvisorServer(
         clearActive(cid);
         log.info("advisor active track cleared", { client: cid });
         return json(res, 200, { cleared: true }); // client id is stable — no Set-Cookie
+      }
+
+      if (method === "POST" && url.pathname === "/feedback") {
+        const parsed = JSON.parse(await readBody(req)) as {
+          description?: string;
+          screenshot?: string;
+        };
+        const description = (parsed.description ?? "").trim();
+        if (!description) {
+          return json(res, 400, { error: "description is required" });
+        }
+
+        // Read the env var fresh (not the module-load-time FEEDBACK_DIR
+        // constant): tests set ADVISOR_FEEDBACK_DIR per-run, after this
+        // module has already been imported once for the whole suite.
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const dir = path.join(process.env.ADVISOR_FEEDBACK_DIR || FEEDBACK_DIR, stamp);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(path.join(dir, "description.txt"), description, "utf8");
+        writeFileSync(
+          path.join(dir, "meta.json"),
+          JSON.stringify(
+            { at: new Date().toISOString(), mode: session.mode, advisorId: session.advisorId },
+            null,
+            2,
+          ),
+        );
+
+        const screenshot = parsed.screenshot;
+        const match = screenshot?.match(
+          /^data:image\/(png|jpe?g|webp);base64,(.+)$/,
+        );
+        if (match) {
+          const [, kind, b64] = match;
+          const ext = kind === "jpeg" ? "jpg" : kind;
+          writeFileSync(
+            path.join(dir, `screenshot.${ext}`),
+            Buffer.from(b64!, "base64"),
+          );
+        }
+
+        // Metadata only — never the description or image content.
+        log.info("advisor feedback saved", {
+          dir: stamp,
+          hasImage: Boolean(match),
+        });
+        return json(res, 200, { saved: true });
       }
 
       if (method === "POST" && url.pathname === "/mode") {

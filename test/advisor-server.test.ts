@@ -794,3 +794,83 @@ test("GET /cleaner/../ traversal is refused", async () => {
     assert.ok(r.status === 400 || r.status === 404);
   } finally { server.close(); }
 });
+
+// --- POST /feedback: local-only feature-request / bug-report drop -----------
+
+const TINY_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+test("POST /feedback without a cookie is rejected with 401", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const r = await fetch(base + "/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "add a dark mode toggle" }),
+    });
+    assert.equal(r.status, 401);
+  } finally { server.close(); }
+});
+
+test("POST /feedback with auth but no description is rejected with 400", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "advisor-feedback-"));
+  process.env.ADVISOR_FEEDBACK_DIR = tmp;
+  try {
+    const { server, base } = await startTestServer();
+    try {
+      const c = await loginCookie(base);
+      const r = await fetch(base + "/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: c },
+        body: JSON.stringify({ description: "   " }),
+      });
+      assert.equal(r.status, 400);
+      const data = (await r.json()) as { error: string };
+      assert.match(data.error, /description is required/);
+    } finally { server.close(); }
+  } finally {
+    delete process.env.ADVISOR_FEEDBACK_DIR;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("POST /feedback with a description and screenshot saves both to disk", async () => {
+  const { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } =
+    await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "advisor-feedback-"));
+  process.env.ADVISOR_FEEDBACK_DIR = tmp;
+  try {
+    const { server, base } = await startTestServer();
+    try {
+      const c = await loginCookie(base);
+      const r = await fetch(base + "/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: c },
+        body: JSON.stringify({
+          description: "  the schedule export button is hard to find  ",
+          screenshot: TINY_PNG,
+        }),
+      });
+      assert.equal(r.status, 200);
+      const data = (await r.json()) as { saved: boolean };
+      assert.equal(data.saved, true);
+
+      const entries = readdirSync(tmp);
+      assert.equal(entries.length, 1, "expected one timestamped feedback directory");
+      const dir = path.join(tmp, entries[0]!);
+      assert.ok(existsSync(path.join(dir, "description.txt")));
+      assert.ok(existsSync(path.join(dir, "screenshot.png")));
+      assert.ok(existsSync(path.join(dir, "meta.json")));
+      const text = readFileSync(path.join(dir, "description.txt"), "utf8");
+      assert.equal(text, "the schedule export button is hard to find");
+    } finally { server.close(); }
+  } finally {
+    delete process.env.ADVISOR_FEEDBACK_DIR;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

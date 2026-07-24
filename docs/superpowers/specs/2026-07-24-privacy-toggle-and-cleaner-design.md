@@ -33,8 +33,8 @@ reach OpenAI.
 
 ### Provider chains per mode
 Today `ADVISOR_PROVIDER_CHAIN` (config.ts) is a process-level constant
-(`"spark,openai"`) resolved once. Change it to be **selected per turn by the
-session's mode**:
+(`"spark,openai"`) resolved once. Change it to be **selected by the active
+track's mode** (each track is an `AdvisorSession` carrying its own `mode`):
 
 ```
 MODE_CHAINS = {
@@ -69,32 +69,68 @@ chain if set; the openai chain is fixed.
   `/chat/completions`; `gpt-5.6-sol` does NOT and must not be used here). Make it a
   configurable constant (`ADVISOR_OPENAI_MODEL`, default `gpt-5.5`).
 
-### Session mode + reset
-- The `AdvisorSession` (advisor-session.ts) gains a `mode: "private" | "openai"`.
-- **Switch private→OpenAI:** full session dispose (existing clear() path —
-  history + workDir + piSessionRoot), then set `mode="openai"`. This is the leak
-  boundary: no prior message may survive into the first OpenAI turn.
-- **Switch OpenAI→private:** set `mode="private"`; **no** reset.
-- **New session:** opens in the advisor's last-used mode (see persistence). A new
-  session opening in OpenAI mode is safe (no history to leak) — but the mode
-  indicator MUST be correct at first paint.
+### Two-track sessions (no reset)
+
+A browser (cookie) owns a **pair** of sessions, one per mode, plus an `active`
+mode. Switching modes swaps which track the UI and the next turn use — it never
+disposes anything. Isolation is therefore **structural**: the Private track's
+history, workDir, and Pi conversation are a different `AdvisorSession` from the
+OpenAI track's and never enter each other's context, so no reset is needed to
+keep Private data out of an OpenAI request.
+
+- The cookie identifies a **client** (the browser), not a single session —
+  phase-1 isolation stays per-cookie (`advisorId` is still `"shared"`).
+- A client holds `{ private?: AdvisorSession, openai?: AdvisorSession, active:
+  AdvisorMode }`. The non-active track is created lazily on first entry.
+- `AdvisorSession` gains a `mode` field so a turn reads its own chain
+  (`MODE_CHAINS[session.mode]`); the two tracks carry `"private"` and `"openai"`.
+- **Switch:** set `active`, lazily create the target track. No abort, no dispose,
+  no new cookie. Flip back and forth freely; each conversation persists.
+- **Clear session:** clears the **active** track only (dispose + recreate); the
+  other track is untouched.
+- **Disposal/sweep/shutdown** must reap **both** tracks of every client (TTL
+  expiry and SIGTERM), since each holds JSONL transcripts.
 
 ### UX (the featured surface)
-- **Persistent, distinct chrome per mode**, unmistakable at first paint (e.g.
-  a colored header band + a mode label; Private and OpenAI visually different
-  enough that no one loses track mid-conversation).
-- **Confirm-on-switch-to-OpenAI** (one-shot dialog) naming *both* consequences:
-  "This starts a new conversation **and** routes de-identified data to OpenAI.
-  Continue?" No confirm needed switching back to Private.
-- The cleaner tab link is present in **both** modes.
+- **Persistent, distinct chrome per track**, unmistakable at first paint (a
+  colored banner + label; Private and OpenAI visually different enough that no
+  one loses track). The banner reflects the **active** track.
+- **Confirm-on-switch-to-OpenAI** (one-shot dialog): now a pure de-identification
+  reminder — "You're switching to the OpenAI track. De-identified data only — no
+  student names, IDs, or grades." No conversation is lost, so it no longer warns
+  about that. No confirm switching back to Private.
+- The cleaner tab link is present on **both** tracks.
+
+### OpenAI-track private-info detector (server-enforced)
+
+Sending in the **OpenAI track** passes a rudimentary PII check the Private track
+never runs. The check is **server-side and enforced** — one source of truth,
+unit-tested, and not bypassable by editing page JS:
+
+- On `POST /chat` for an OpenAI-track session, run `flagLikelyPrivate(message)`.
+  If it returns any flags AND the request did not carry `consent: true`, respond
+  **`409 { needsConsent: true, flags }`** and **run no turn** — nothing egresses.
+- `flagLikelyPrivate` matches **high-precision structured patterns only**:
+  Clemson C-ID (`C` + 8 digits), SSN, email, phone, `GPA` + a number, and long
+  digit runs. **Names are deliberately NOT gated** — regex name-detection
+  false-fires on course titles, buildings, and instructor names, which trains
+  advisors to click through. Names are covered by the standing banner and the
+  switch confirm instead.
+- The browser renders the 409: a dialog lists the flagged categories (with the
+  matched snippet, so the advisor can find and fix it) and offers **Cancel &
+  edit** (keep the text in the box, refocus, send nothing) or **Not private —
+  send** (re-POST with `consent: true`).
+- **Audit:** when an advisor overrides, log that an OpenAI turn was sent with a
+  PII-flag override and the flagged **categories** (never the content).
+- Private track: no check — identifiable data is allowed there.
 
 ### Persistence + audit
-- **Last-used mode** default: client-side (`localStorage`) is sufficient for the
-  toggle's initial state; the server is authoritative for routing (each turn
-  carries/knows the session mode). Optionally persist per `advisorId` server-side
-  for cross-device — not required for the pilot.
-- **Audit-log the mode per turn** (which turns went to OpenAI) — cheap, valuable
-  for FERPA traceability.
+
+- **Default track on login** = the client's last-active mode (in-memory per
+  client; a restart resets to `private`, the safe default). The server is
+  authoritative for routing; the banner is cosmetic and cannot disagree.
+- **Audit per turn:** log the `mode` on every turn (which turns went to OpenAI),
+  plus the override record above — cheap and valuable for FERPA traceability.
 
 ### Deployment
 Advisor change (chain-per-mode, session mode, UI) + policy change → **restart the
@@ -167,16 +203,22 @@ page's static assets (vendored pdf.js included).
 2. Cleaner parses + whitelist-extracts **in the browser**; advisor reviews the
    sanitized output and copies it.
 3. Advisor pastes the sanitized ledger into the advisor chat.
-4. The advisor's **mode** decides where that turn goes: Private (fp8→spark, local)
-   or OpenAI (gpt-5.5, de-identified). The mode is visible; the egress gate makes
-   the routing honest.
+4. The **active track** decides where that turn goes: Private (fp8→spark, local)
+   or OpenAI (gpt-5.5, de-identified). The banner is visible; the egress gate
+   makes the routing honest; and an OpenAI-track send first passes the
+   server-enforced PII detector (consent required to override a flag).
 
 ## Testing
 - **Mode→chain routing:** private resolves `rcd,spark`; openai resolves `openai`;
   the egress gate authorizes each and REFUSES a private-mode dial to a
   non-authorized/openai host (assert the fail-closed path).
-- **Reset-on-switch:** private→openai disposes the session (history + workDir +
-  piSessionRoot cleared); openai→private does not.
+- **Two-track sessions:** switching sets `active` and preserves both tracks (no
+  dispose); `/clear` disposes the active track only; client expiry/shutdown reaps
+  both tracks.
+- **PII detector:** `flagLikelyPrivate` flags C-ID/SSN/email/phone/GPA/long-digits
+  and does NOT flag names or ordinary advising prose; OpenAI-track `/chat`
+  returns `409 needsConsent` on a flag without consent (no turn runs) and
+  proceeds with `consent: true`; Private-track `/chat` never checks.
 - **`rcd` provider:** resolves the fp8 model, base URL, and auth correctly (unit),
   plus a live smoke that the advisor reaches fp8.
 - **Cleaner framework:** input dispatch (pdf/text) and module routing.

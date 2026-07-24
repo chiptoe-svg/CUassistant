@@ -23,6 +23,7 @@ process.env.GC_ADVISOR_DB = GC_DB_PATH;
 const TERM = "202608";
 const PROGRAM = "Graphic Communications, BS";
 const SLOT = "Specialty Area Requirement";
+const ACCOUNTING_MINOR = "Accounting Minor";
 
 function buildGcAdvisorFixture(): void {
   const db = new Database(GC_DB_PATH);
@@ -59,6 +60,16 @@ function buildGcAdvisorFixture(): void {
     "INSERT INTO program (id, catalog_year_id, poid, name, kind) VALUES (?, ?, ?, ?, 'major')",
   ).run(2, 2, 501, PROGRAM); // 2025-2026 — latest
 
+  // Minor/certificate programs — for get-program-requirements tests. Two
+  // distinct names both containing "Account" so a fuzzy "Account" query
+  // returns >1 candidate.
+  db.prepare(
+    "INSERT INTO program (id, catalog_year_id, poid, name, kind) VALUES (?, ?, ?, ?, 'minor')",
+  ).run(3, 2, 502, ACCOUNTING_MINOR);
+  db.prepare(
+    "INSERT INTO program (id, catalog_year_id, poid, name, kind) VALUES (?, ?, ?, ?, 'certificate')",
+  ).run(4, 2, 503, "Accounting Certificate");
+
   const insertRule = db.prepare(
     "INSERT INTO requirement_rule (program_id, slot_type, rule) VALUES (?, ?, ?)",
   );
@@ -85,6 +96,22 @@ function buildGcAdvisorFixture(): void {
     }),
   );
 
+  insertRule.run(
+    3,
+    "program_requirement",
+    JSON.stringify({
+      total_credits: 18,
+      required_courses: ["ACCT 2010", "ACCT 3110", "ACCT 3120"],
+      elective_rules: [
+        {
+          credits: 9,
+          level_or_subject_pattern: "3000- or 4000-level accounting courses",
+        },
+      ],
+      not_open_to: [],
+    }),
+  );
+
   const insertCourse = db.prepare(
     "INSERT INTO course (code, subject, number, prereq_text, prereq_parsed) VALUES (?, ?, ?, ?, ?)",
   );
@@ -97,7 +124,7 @@ function buildGcAdvisorFixture(): void {
 buildGcAdvisorFixture();
 
 const { writeScheduleDb } = await import("../src/clemson-schedule-db.ts");
-const { findEligibleSections, findSectionsBySchedule } = await import(
+const { findEligibleSections, findSectionsBySchedule, getProgramRequirements } = await import(
   "../src/mcp-tools/clemson-advising.ts"
 );
 import type { ClemsonTermSnapshot } from "../src/clemson-classes.ts";
@@ -392,4 +419,65 @@ test("find-sections-by-schedule: a time/day query excludes async (no-meeting) se
   assert.ok(!sectionCrns.includes("90007"), "async section can't fit a day/time slot — excluded from sections");
   assert.equal("sections_without_meetings" in body!, false, "no async pile is returned for a time query");
   assert.match(body!.note ?? "", /async/i, "the excluded async count is surfaced in a note");
+});
+
+// ---------------------------------------------------------------------------
+// get-program-requirements — reads requirement_rule rows for minors/
+// certificates (and the GC BS) directly from the gc_advisor.db fixture, with
+// no schedule DB / ATTACH involved.
+// ---------------------------------------------------------------------------
+
+async function callRequirements(args: Record<string, unknown>) {
+  const res = await getProgramRequirements.handler(args);
+  return {
+    res,
+    body: res.isError
+      ? null
+      : (JSON.parse((res.content[0] as { text: string }).text) as {
+          program?: string;
+          catalog_year?: string;
+          requirements?: Array<Record<string, unknown>>;
+          candidates?: string[];
+          query?: string;
+        }),
+  };
+}
+
+test("get-program-requirements: exact name returns the parsed rule", async () => {
+  const { body } = await callRequirements({ name: ACCOUNTING_MINOR });
+  assert.ok(body);
+  assert.equal(body!.program, ACCOUNTING_MINOR);
+  assert.equal(body!.catalog_year, "2025-2026");
+  assert.ok(body!.requirements);
+  assert.equal(body!.requirements!.length, 1);
+  const rule = body!.requirements![0];
+  assert.equal(rule.slot_type, "program_requirement");
+  assert.equal(rule.total_credits, 18);
+  assert.deepEqual(rule.required_courses, ["ACCT 2010", "ACCT 3110", "ACCT 3120"]);
+});
+
+test("get-program-requirements: exact name is case-insensitive", async () => {
+  const { body } = await callRequirements({ name: "accounting minor" });
+  assert.ok(body);
+  assert.equal(body!.program, ACCOUNTING_MINOR);
+});
+
+test("get-program-requirements: partial name matching >1 program returns candidates, not requirements", async () => {
+  const { body } = await callRequirements({ name: "Account" });
+  assert.ok(body);
+  assert.equal(body!.requirements, undefined);
+  assert.ok(body!.candidates);
+  assert.ok(body!.candidates!.includes(ACCOUNTING_MINOR));
+  assert.ok(body!.candidates!.includes("Accounting Certificate"));
+});
+
+test("get-program-requirements: name matching nothing returns a clear error", async () => {
+  const { res } = await callRequirements({ name: "Underwater Basket Weaving Minor" });
+  assert.equal(res.isError, true);
+  assert.match((res.content[0] as { text: string }).text, /No Clemson program matches/);
+});
+
+test("get-program-requirements: missing name returns a clear error", async () => {
+  const res = await getProgramRequirements.handler({});
+  assert.equal(res.isError, true);
 });

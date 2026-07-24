@@ -333,6 +333,11 @@ export const MCP_ALLOWED_OPERATIONS: Record<string, McpOperationSpec> = {
     status: "active",
     policyActionId: "clemson.find_sections_by_schedule",
   },
+  "clemson.gc_program_requirements": {
+    backend: "external-http",
+    status: "active",
+    policyActionId: "clemson.gc_program_requirements",
+  },
   "clemson.gc_catalog_years": {
     backend: "external-http",
     status: "active",
@@ -662,6 +667,7 @@ export const SCOPE_OPERATIONS: Record<string, string[]> = {
     "clemson.gc_audit_progress",
     "clemson.find_eligible_sections",
     "clemson.find_sections_by_schedule",
+    "clemson.gc_program_requirements",
   ],
   // host.trigger_scan is human_required -> not exposed -> intentionally absent.
   "host:read": [

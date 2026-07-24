@@ -765,11 +765,21 @@ test("GET /cleaner requires auth", async () => {
   finally { server.close(); }
 });
 
-test("GET /cleaner serves HTML to an authed session", async () => {
+test("GET /cleaner redirects to the trailing-slash form (so relative asset URLs resolve)", async () => {
   const { server, base } = await startTestServer();
   try {
     const c = await loginCookie(base);
-    const r = await fetch(base + "/cleaner", { headers: { Cookie: c } });
+    const r = await fetch(base + "/cleaner", { headers: { Cookie: c }, redirect: "manual" });
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get("location"), "cleaner/");
+  } finally { server.close(); }
+});
+
+test("GET /cleaner/ serves HTML to an authed session", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner/", { headers: { Cookie: c } });
     assert.equal(r.status, 200);
     assert.match(r.headers.get("content-type") ?? "", /text\/html/);
     assert.match(await r.text(), /cleaner/i);

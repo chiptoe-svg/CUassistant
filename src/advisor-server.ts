@@ -319,6 +319,14 @@ export function createAdvisorServer(
       const session = active.session;
 
       if (method === "GET" && url.pathname === "/cleaner") {
+        // Redirect to the trailing-slash form so the page's RELATIVE asset URLs
+        // (framework.js, ./modules/…, ./vendor/…) resolve under /cleaner/ rather
+        // than the site root. "cleaner/" is relative, so it also works behind the
+        // Caddy /advisor/ prefix — same reason /login redirects to "./".
+        res.writeHead(302, { Location: "cleaner/" });
+        return res.end();
+      }
+      if (method === "GET" && url.pathname === "/cleaner/") {
         return serveCleanerAsset(res, "index.html");
       }
       if (method === "GET" && url.pathname.startsWith("/cleaner/")) {

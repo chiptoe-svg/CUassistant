@@ -317,3 +317,16 @@ export const ADVISOR_MCP_WIKI_URL =
   process.env.ADVISOR_MCP_WIKI_URL || "http://127.0.0.1:3000/api/mcp";
 /** Bearer token for the curriculum wiki MCP, which requires auth (401 without). */
 export const ADVISOR_MCP_WIKI_TOKEN = process.env.ADVISOR_MCP_WIKI_TOKEN || "";
+
+// --- Advisor voice input: local Whisper via OMLX (on-host STT) ---
+// The advisor's mic records audio in the browser and posts it to /transcribe,
+// which forwards it to OMLX's OpenAI-compatible transcription endpoint on
+// loopback. Audio stays on-host (local_omlx, scope: local) — never a cloud STT
+// like the browser's SpeechRecognition, which streams to Google. Empty key
+// disables the feature (the /transcribe route returns 503, and the mic hides).
+export const ADVISOR_WHISPER_URL =
+  process.env.ADVISOR_WHISPER_URL ||
+  "http://127.0.0.1:8000/v1/audio/transcriptions";
+export const ADVISOR_WHISPER_KEY = process.env.ADVISOR_WHISPER_KEY || "";
+export const ADVISOR_WHISPER_MODEL =
+  process.env.ADVISOR_WHISPER_MODEL || "whisper-large-v3-turbo-asr-fp16";

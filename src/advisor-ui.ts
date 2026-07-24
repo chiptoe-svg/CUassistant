@@ -447,28 +447,43 @@ $("message").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); }
 });
 
-// Voice dictation. The browser's SpeechRecognition transcribes into the box.
-// NOTE: in Chrome this streams audio to Google for transcription — same as the
-// curriculum tool's voice input. Hidden entirely where the API is absent.
-const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
-if (SR) {
-  let rec = null, live = false;
-  const stopMic = () => { live = false; $("mic").classList.remove("live"); };
-  $("mic").addEventListener("click", () => {
-    if (live && rec) { rec.stop(); return; }
-    rec = new SR();
-    rec.lang = "en-US"; rec.interimResults = false;
-    rec.onresult = (ev) => {
-      const t = Array.from(ev.results).map((r) => r[0].transcript).join(" ").trim();
-      const el = $("message");
-      el.value = (el.value.trim() ? el.value.trim() + " " : "") + t;
-      el.focus();
+// Voice dictation via ON-HOST Whisper. The mic records audio in the browser and
+// posts the blob to /transcribe, which forwards it to OMLX's local Whisper — the
+// audio stays on the machine, never a cloud STT (the browser's SpeechRecognition
+// would stream to Google). Works in any browser with MediaRecorder.
+const micOk = typeof navigator !== "undefined" && navigator.mediaDevices &&
+  typeof MediaRecorder !== "undefined";
+if (micOk) {
+  let mediaRec = null, chunks = [], recording = false;
+  const setMic = (on) => { recording = on; $("mic").classList.toggle("live", on); };
+  $("mic").addEventListener("click", async () => {
+    if (recording && mediaRec) { mediaRec.stop(); return; }   // second click stops
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (err) { status.textContent = "Microphone unavailable."; return; }
+    chunks = [];
+    mediaRec = new MediaRecorder(stream);
+    mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    mediaRec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      setMic(false);
+      const blob = new Blob(chunks, { type: mediaRec.mimeType || "audio/webm" });
+      if (!blob.size) { status.textContent = "No audio recorded."; return; }
+      status.textContent = "Transcribing\\u2026";
+      try {
+        const r = await fetch("transcribe", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "transcription failed");
+        const t = (data.text || "").trim();
+        if (t) { const el = $("message"); el.value = (el.value.trim() ? el.value.trim() + " " : "") + t; el.focus(); }
+        status.textContent = t ? "Transcribed." : "No speech detected.";
+      } catch (err) { status.textContent = "Could not transcribe."; }
     };
-    rec.onend = stopMic; rec.onerror = stopMic;
-    live = true; $("mic").classList.add("live"); rec.start();
+    mediaRec.start(); setMic(true);
+    status.textContent = "Listening\\u2026 click the mic again to stop.";
   });
 } else {
-  $("mic").hidden = true;   // no speech support in this browser
+  $("mic").hidden = true;   // no MediaRecorder support in this browser
 }
 
 async function switchMode(next) {

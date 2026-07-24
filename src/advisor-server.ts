@@ -21,6 +21,9 @@ import {
   ADVISOR_PASSWORD,
   ADVISOR_PORT,
   ADVISOR_SESSION_TTL_MS,
+  ADVISOR_WHISPER_KEY,
+  ADVISOR_WHISPER_MODEL,
+  ADVISOR_WHISPER_URL,
   STATE_DIR,
 } from "./config.js";
 import { log } from "./log.js";
@@ -188,6 +191,28 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+/**
+ * Read the body as raw bytes. `readBody` decodes utf8, which corrupts binary —
+ * the /transcribe route needs the audio blob intact to forward to Whisper.
+ */
+function readBodyBuffer(req: http.IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("body too large"));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 function html(res: http.ServerResponse, status: number, page: string): void {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
   res.end(page);
@@ -331,6 +356,48 @@ export function createAdvisorServer(
       }
       if (method === "GET" && url.pathname.startsWith("/cleaner/")) {
         return serveCleanerAsset(res, url.pathname.slice("/cleaner/".length));
+      }
+
+      // Voice input: the browser records mic audio and posts the blob here; we
+      // forward it to OMLX's on-host Whisper (loopback) and return the text.
+      // The audio never leaves the machine — no cloud STT. OMLX is `local_omlx`
+      // (scope: local) in policy, reached over loopback, so this needs no egress
+      // gate. Nothing about the audio or transcript is logged (it may name a
+      // student).
+      if (method === "POST" && url.pathname === "/transcribe") {
+        if (!ADVISOR_WHISPER_KEY) {
+          return json(res, 503, { error: "voice input is not configured" });
+        }
+        const audio = await readBodyBuffer(req);
+        if (audio.length === 0) return json(res, 400, { error: "no audio" });
+        const type = String(req.headers["content-type"] || "audio/webm");
+        const ext = type.includes("mp4") || type.includes("mp4a")
+          ? "mp4"
+          : type.includes("wav")
+            ? "wav"
+            : type.includes("ogg")
+              ? "ogg"
+              : "webm";
+        try {
+          const fd = new FormData();
+          fd.append("file", new Blob([audio], { type }), `audio.${ext}`);
+          fd.append("model", ADVISOR_WHISPER_MODEL);
+          const wr = await fetch(ADVISOR_WHISPER_URL, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${ADVISOR_WHISPER_KEY}` },
+            body: fd,
+          });
+          if (!wr.ok) throw new Error(`whisper ${wr.status}`);
+          const data = (await wr.json()) as { text?: string };
+          const text = (data.text || "").trim();
+          log.info("advisor transcription", { chars: text.length }); // metadata only
+          return json(res, 200, { text });
+        } catch (err) {
+          log.warn("advisor transcription failed", {
+            err: err instanceof Error ? err.name : "unknown",
+          });
+          return json(res, 502, { error: "transcription failed" });
+        }
       }
 
       if (method === "POST" && url.pathname === "/chat") {

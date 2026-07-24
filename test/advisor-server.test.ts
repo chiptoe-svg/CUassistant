@@ -786,6 +786,14 @@ test("GET /cleaner/ serves HTML to an authed session", async () => {
   } finally { server.close(); }
 });
 
+test("POST /transcribe requires auth", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const r = await fetch(base + "/transcribe", { method: "POST", body: "x" });
+    assert.equal(r.status, 401);
+  } finally { server.close(); }
+});
+
 test("GET /cleaner/modules/degree-works.js serves JS", async () => {
   const { server, base } = await startTestServer();
   try {

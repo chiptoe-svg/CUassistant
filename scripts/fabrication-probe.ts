@@ -1621,7 +1621,10 @@ interface LoopResult extends FabObservation {
   completionTokens: number | null;
 }
 
-const MAX_TURNS = 6;
+// Exported (not just a local const) so scripts/advising-benchmark/runner.ts can
+// reuse the same tool-round cap for its own agentic loop rather than
+// redeclaring a magic number that could silently drift from this one.
+export const MAX_TURNS = 6;
 
 /**
  * `frontier` strips the vLLM/Qwen-specific fields the OpenAI passthrough

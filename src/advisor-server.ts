@@ -12,7 +12,7 @@
 //     can reach.
 
 import http from "node:http";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,11 +31,13 @@ import {
   parseCookies,
 } from "./advisor-auth.js";
 import {
-  clearSession,
-  createSession,
+  createClient,
+  getActiveSession,
+  switchActive,
+  clearActive,
   disposeAllSessions,
-  getSession,
   sweepExpired,
+  type AdvisorMode,
   type AdvisorSession,
 } from "./advisor-session.js";
 import {
@@ -46,8 +48,33 @@ import {
 } from "./advisor-agent.js";
 import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
 import { renderSchedule } from "./advisor-artifacts.js";
+import { flagLikelyPrivate } from "./advisor-pii-detect.js";
 
 const MAX_BODY_BYTES = 5_000_000;
+
+const CLEANER_DIR = fileURLToPath(new URL("../advisor/cleaner", import.meta.url));
+const CLEANER_MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+/** Serve a static asset from advisor/cleaner behind auth; traversal-safe. */
+function serveCleanerAsset(res: http.ServerResponse, relPath: string): void {
+  const resolved = path.resolve(CLEANER_DIR, "." + path.posix.normalize("/" + relPath));
+  if (resolved !== CLEANER_DIR && !resolved.startsWith(CLEANER_DIR + path.sep)) {
+    return json(res, 400, { error: "bad path" });
+  }
+  const type = CLEANER_MIME[path.extname(resolved).toLowerCase()];
+  if (!type) return json(res, 404, { error: "not found" });
+  let body: Buffer;
+  try { body = readFileSync(resolved); }
+  catch { return json(res, 404, { error: "not found" }); }
+  res.writeHead(200, { "Content-Type": type });
+  res.end(body);
+}
 
 /**
  * Fail closed: the only thing standing between this service and the network is
@@ -219,6 +246,16 @@ interface InFlightTurn {
 }
 const inFlight = new Map<string, InFlightTurn>();
 
+// Last mode each advisor used, so a fresh login opens where they left off.
+// In-memory: a restart resets to `private`, the safe default. The server is
+// authoritative for routing; the banner is cosmetic and cannot disagree.
+const lastMode = new Map<string, AdvisorMode>();
+
+/** Test seam: drop last-used-mode tracking so a fresh login defaults to "private" again. */
+export function resetLastModeForTest(): void {
+  lastMode.clear();
+}
+
 export function createAdvisorServer(
   deps: { runTurn?: RunTurn } = {},
 ): http.Server {
@@ -230,12 +267,10 @@ export function createAdvisorServer(
 
     try {
       if (method === "GET" && url.pathname === "/") {
-        const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
-        // Resolve against the store, not just the cookie's presence: an
-        // expired or forged cookie must land back on the login page rather
-        // than on a chat window whose every request 401s.
-        return getSession(sid)
-          ? html(res, 200, renderChatPage())
+        const cid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+        const active = getActiveSession(cid);
+        return active
+          ? html(res, 200, renderChatPage(active.session.mode))
           : html(res, 200, renderLoginPage());
       }
 
@@ -256,29 +291,57 @@ export function createAdvisorServer(
           log.warn("advisor login rejected");
           return html(res, 401, page);
         }
-        const session = createSession("shared");
-        log.info("advisor login", { session: session.id });
+        const { clientId } = createClient("shared", lastMode.get("shared") ?? "private");
+        log.info("advisor login", { client: clientId });
         // Relative, not "/": behind the Caddy /advisor/ prefix an absolute "/"
         // would land the browser on the capture tool at :3000. "./" resolves
         // from /login to / and from /advisor/login to /advisor/ — correct at
         // both mount points, which is also why the UI uses relative URLs.
         res.writeHead(302, {
           Location: "./",
-          "Set-Cookie": sessionCookie(session.id),
+          "Set-Cookie": sessionCookie(clientId),
         });
         return res.end();
       }
 
       const auth = authenticate(req);
       if (!auth) return json(res, 401, { error: "not authenticated" });
-      const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
-      const session = getSession(sid);
-      if (!session) return json(res, 401, { error: "session expired" });
+      const cid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      const active = getActiveSession(cid);
+      if (!active) return json(res, 401, { error: "session expired" });
+      const session = active.session;
+
+      if (method === "GET" && url.pathname === "/cleaner") {
+        return serveCleanerAsset(res, "index.html");
+      }
+      if (method === "GET" && url.pathname.startsWith("/cleaner/")) {
+        return serveCleanerAsset(res, url.pathname.slice("/cleaner/".length));
+      }
 
       if (method === "POST" && url.pathname === "/chat") {
-        const parsed = JSON.parse(await readBody(req)) as { message?: string };
+        const parsed = JSON.parse(await readBody(req)) as {
+          message?: string;
+          consent?: boolean;
+        };
         const message = parsed.message;
         if (!message) return json(res, 400, { error: "message is required" });
+
+        // OpenAI track: rudimentary PII gate. Refuse to forward flagged text
+        // without explicit consent — a 409 runs NO turn, so nothing egresses.
+        // Private track is FERPA-OK and never checked.
+        if (session.mode === "openai") {
+          const flags = flagLikelyPrivate(message);
+          if (flags.length > 0 && parsed.consent !== true) {
+            return json(res, 409, { needsConsent: true, flags });
+          }
+          if (flags.length > 0) {
+            // Override — metadata only, never the flagged content.
+            log.info("advisor OpenAI turn sent with PII-flag override", {
+              session: session.id,
+              categories: flags.map((f) => f.category),
+            });
+          }
+        }
 
         const controller = new AbortController();
         // Abort the prior turn, then WAIT for it — the same reason /clear waits.
@@ -354,24 +417,30 @@ export function createAdvisorServer(
       }
 
       if (method === "POST" && url.pathname === "/clear") {
-        // Abort, then WAIT. A turn that is past its abort check still has to
-        // run its commit step, and that step recreates piSessionRoot. Clearing
-        // before it finishes leaves a transcript directory behind that no
-        // sweeper knows about, because the session is already out of the map.
+        // Dispose the ACTIVE track only; the other track is untouched. Abort +
+        // WAIT first, as before, so the turn's commit step cannot recreate
+        // piSessionRoot after disposal.
         const entry = inFlight.get(session.id);
         if (entry) {
           entry.controller.abort();
           await entry.done;
           inFlight.delete(session.id);
         }
-        clearSession(session.id);
-        const fresh = createSession(session.advisorId);
-        log.info("advisor session cleared", { session: fresh.id });
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Set-Cookie": sessionCookie(fresh.id),
-        });
-        return res.end(JSON.stringify({ cleared: true }));
+        clearActive(cid);
+        log.info("advisor active track cleared", { client: cid });
+        return json(res, 200, { cleared: true }); // client id is stable — no Set-Cookie
+      }
+
+      if (method === "POST" && url.pathname === "/mode") {
+        const body = JSON.parse(await readBody(req)) as { mode?: string };
+        const next = body.mode;
+        if (next !== "private" && next !== "openai") {
+          return json(res, 400, { error: "mode must be 'private' or 'openai'" });
+        }
+        lastMode.set(session.advisorId, next);
+        const target = switchActive(cid, next); // lazily creates the track; no dispose
+        log.info("advisor mode switched", { client: cid, mode: target.mode });
+        return json(res, 200, { mode: target.mode });
       }
 
       if (method === "POST" && url.pathname === "/upload") {

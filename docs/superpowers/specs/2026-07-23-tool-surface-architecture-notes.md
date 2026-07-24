@@ -177,6 +177,66 @@ and we are ahead of the advice there.
   tool-calling, now budgeted) rather than Spark — a per-turn model-selection
   question the provider chain could encode.
 
+## Latency — deterministic speedups (advisor + benchmark)
+
+Context: the advisor's buffer-and-gate UX releases one complete answer with no
+streaming, so total turn latency is felt directly. The 2026-07-23 model benchmark
+measured qwen turns at 10–34s on multi-tool scenarios (gptoss-120b ~1s); prompts
+are 19–33k tokens. Time goes to re-PREFILLING a large, mostly-static prefix every
+turn (system prompt + 24 tool schemas + the growing message/tool-result history)
+and to GENERATION (thinking tokens + answer). The levers below attack prefill and
+generation size; each is deterministic engineering unless marked as a measured
+tradeoff.
+
+Ranked by leverage:
+
+1. **Prefix caching (server-side, biggest, zero quality cost).** The
+   system+tool-schemas prefix is byte-identical across every turn of a loop and
+   every trial in a benchmark cell. If vLLM `enable_prefix_caching` is on for
+   Spark/RCD, that ~15–20k-token prefix is prefilled once and reused. FIRST thing
+   to verify — if off, it is a one-flag ask to the endpoint owners. (Probe when no
+   run is loading the endpoint, so the timing isn't skewed by contention.)
+2. **Shrink the per-turn prefix — the selector layer (Decision 1), now with a
+   latency rationale too.** 24 tool schemas re-sent every turn is both slow
+   (prefill) AND reliability-degrading (the measured tool-count slope). A
+   domain-scoped subset (~6–10 tools) attacks both at once. Same lever on the
+   result side: keep capping tool-result size — the −47% compaction is banked, and
+   mandatory `subject`/`courseNumber` scoping now prevents whole-term dumps.
+   Selector mechanism (grounded in code): the advisor builds its tool array at
+   `advisor-agent.ts:646` (`[...bridge.tools, proposeSchedule]`), so selection is
+   just `selectToolSubset(bridge.tools, request)` applied there — the Pi
+   "tools-fixed-at-construction" constraint is a non-issue because the harness is
+   (re)built per turn, so the subset re-selects each turn. Groups are FUNCTIONAL
+   (scheduling / curriculum / wiki), not per-server; router is deterministic
+   keywords first (zero added latency), cheap-LLM only for ambiguous turns; and it
+   COMPOSES (default scheduling+curriculum ≈13 tools) because real advising spans
+   domains. Risk: a turn needs an unloaded tool — mitigate with generous default
+   composition + per-turn re-selection. Measure WITH vs WITHOUT on the benchmark:
+   malformed rate ↓, latency ↓, AND correctness must hold.
+3. **Skill-doc length — mostly load-bearing, so cache/scope rather than gut it.**
+   The advisor's on-demand skill docs (`get-skill-docs`) add to prefill and persist
+   in history. `clemson-schedule-advising` is long (533L); `gc-advisor` (236L,
+   modular `includes/`, workflow-heavy) is about right and a good template. But
+   the length is mostly legitimate: the "data shapes / return:" blocks document
+   OUTPUT shapes, which MCP tool defs do NOT carry — that is gap-filling, not
+   duplication. Right test: "does this line say something the tool schema doesn't?"
+   — return shapes YES (keep, tighten examples), re-listed input params NO (trim),
+   workflow/limits YES. The real latency lever for skills is prefix caching (stable
+   doc cached after first load) + the selector scoping the loaded skill to the
+   scoped tool subset — not arbitrary shortening.
+4. **Cap generation.** Tune `ADVISOR_MAX_OUTPUT_TOKENS` to what answers actually
+   need; evaluate thinking-on vs thinking-off. Turning off qwen `enable_thinking`
+   deterministically cuts tokens/latency; the QUALITY cost is a *measured* tradeoff
+   — the benchmark's latency p50/p95 + judge score is exactly the instrument for it.
+5. **Benchmark wall-clock (harness only): run independent cells concurrently**
+   (vLLM batches happily). TENSION: latency under concurrent load ≠ isolated
+   latency, so keep a concurrent pass for throughput and an isolated pass for the
+   latency metric — do not conflate them.
+
+To measure next: (a) prefix-caching status on Spark/RCD; (b) the token cost of the
+system+tools prefix (the reducible part); (c) the selector prototype's latency
+delta, measured alongside its reliability delta on `tool-ceiling-probe.ts`.
+
 ## Pointers
 
 - Design: `docs/superpowers/specs/2026-07-21-advisor-chat-design.md`

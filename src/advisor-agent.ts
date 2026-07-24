@@ -42,10 +42,13 @@ import {
   ADVISOR_MAX_REQUEST_TOKENS,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_MODEL,
+  ADVISOR_OPENAI_MODEL,
   ADVISOR_PROVIDER_CHAIN,
+  ADVISOR_RCD_MODEL,
   ADVISOR_TEMPERATURE,
   ADVISOR_TURN_TIMEOUT_MS,
   CLEMSON_LLM_API_KEY,
+  CLEMSON_LLM_BASE_URL,
   CLEMSON_LLM_OPENAI_BASE_URL,
   OPENAI_API_KEY,
 } from "./config.js";
@@ -53,7 +56,7 @@ import { log } from "./log.js";
 import { isEgressAuthorized } from "./policy.js";
 import { createAdvisorMcpBridge } from "./advisor-mcp.js";
 import { createProposeScheduleTool } from "./advisor-artifacts.js";
-import type { AdvisorSession } from "./advisor-session.js";
+import type { AdvisorMode, AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
 
@@ -113,7 +116,28 @@ const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, ChainDestination>> = {
     policyProvider: "clemson_llm_gateway_openai",
     hosts: ["llm.rcd.clemson.edu"],
   },
+  // Clemson RCD campus models at llm.rcd.clemson.edu/v1 — the FERPA-OK local
+  // route (distinct from the openai passthrough on /openai/v1, same host). The
+  // gate checks only the host; the FERPA distinction between /v1 and /openai/v1
+  // is carried by which track uses which label (see MODE_CHAINS).
+  rcd: {
+    policyProvider: "clemson_rcd_vllm",
+    hosts: ["llm.rcd.clemson.edu"],
+  },
 };
+
+// The provider chain is a function of the session's mode. Private never lists
+// the `openai` label, so a Private turn is structurally unable to dial the OpenAI
+// passthrough — that is what makes the "Private" claim honest. OpenAI has no
+// fallback: a failure surfaces rather than silently retrying elsewhere.
+const MODE_CHAINS: Readonly<Record<AdvisorMode, readonly string[]>> = {
+  private: ADVISOR_PROVIDER_CHAIN,
+  openai: ["openai"],
+};
+
+export function advisorChainForMode(mode: AdvisorMode): readonly string[] {
+  return MODE_CHAINS[mode];
+}
 
 /**
  * The host pi-ai will dial for a model, read off the MODEL OBJECT.
@@ -212,8 +236,12 @@ export function assertAdvisorTargetAuthorized(
 export async function initAdvisorTools(): Promise<void> {
   // Fail at startup on a misconfigured chain rather than at the first turn.
   // runAdvisorTurn re-checks each entry it actually reaches; this is the early
-  // warning, not the gate.
-  assertAdvisorChainAuthorized(ADVISOR_PROVIDER_CHAIN);
+  // warning, not the gate. Both mode chains are asserted — an unauthorized
+  // OpenAI-track entry must not slip through because only the private chain
+  // was checked.
+  for (const chain of Object.values(MODE_CHAINS)) {
+    assertAdvisorChainAuthorized(chain);
+  }
   bridge = await createAdvisorMcpBridge();
   log.info("advisor tools ready", { tools: bridge.tools.length });
 }
@@ -246,6 +274,23 @@ export interface ProviderTarget {
  * off this, so both see the same `baseUrl`.
  */
 function providerModel(name: string): Model<never> | null {
+  if (name === "rcd") {
+    // Same Qwen thinking shape as spark (identical model family), dialed at the
+    // RCD campus /v1 endpoint with the gateway key.
+    return {
+      id: ADVISOR_RCD_MODEL,
+      name: ADVISOR_RCD_MODEL,
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: CLEMSON_LLM_BASE_URL,
+      reasoning: true,
+      compat: { thinkingFormat: "qwen-chat-template" },
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 65536,
+      maxTokens: 8192,
+    } as unknown as Model<never>;
+  }
   if (name === "spark") {
     return {
       id: ADVISOR_MODEL,
@@ -274,7 +319,7 @@ function providerModel(name: string): Model<never> | null {
     } as unknown as Model<never>;
   }
   if (name === "openai") {
-    const id = process.env.ADVISOR_OPENAI_MODEL || "gpt-5.4";
+    const id = ADVISOR_OPENAI_MODEL;
     const registry = getModel("openai", id as never) as unknown as Model<never>;
     // pi-ai's registry HARDCODES baseUrl: https://api.openai.com/v1 for every
     // OpenAI model, and pi-ai dials `model.baseUrl` — it never consults
@@ -310,7 +355,7 @@ function resolveProvider(name: string): ProviderTarget | null {
   // on this path. OPENAI_API_KEY is still accepted as a fallback so an
   // environment that has not been re-provisioned yet keeps working.
   const gatewayKey = CLEMSON_LLM_API_KEY || OPENAI_API_KEY;
-  if (name === "openai" && !gatewayKey) return null;
+  if ((name === "openai" || name === "rcd") && !gatewayKey) return null;
   return {
     name,
     apiKey:
@@ -772,6 +817,7 @@ async function runWithProvider(
     log.info("advisor turn complete", {
       session: session.id,
       advisorId: session.advisorId,
+      mode: session.mode,
       provider: target.name,
       model: target.model.id,
       rounds,
@@ -937,7 +983,7 @@ export async function runAdvisorTurn(
   if (!bridge) throw new Error("advisor tools not initialised");
 
   const errors: string[] = [];
-  for (const name of ADVISOR_PROVIDER_CHAIN) {
+  for (const name of MODE_CHAINS[session.mode]) {
     // Resolve FIRST, then gate. The gate has to see the model object that pi-ai
     // will dial — it reads `model.baseUrl` and nothing else — so checking before
     // the target exists would be checking a configuration string instead of the

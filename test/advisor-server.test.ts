@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 // before advisor-server pulls it in. Hence the dynamic import.
 process.env.ADVISOR_PASSWORD = "test-password";
 
-const { createAdvisorServer, resetLoginRateLimitForTest } =
+const { createAdvisorServer, resetLoginRateLimitForTest, resetLastModeForTest } =
   await import("../src/advisor-server.ts");
 
 const { resetSessionsForTest, sessionCount } =
@@ -15,7 +15,15 @@ const { resetSessionsForTest, sessionCount } =
 // Every test here logs in, all from loopback, so they share one /login rate
 // bucket and would otherwise start 429ing partway through the file. The limiter
 // itself is covered in advisor-lan.test.ts; here it is just noise.
-beforeEach(() => resetLoginRateLimitForTest());
+//
+// resetLastModeForTest keeps a fresh login defaulting to "private": lastMode
+// is keyed by advisorId ("shared" for every login in this file), so without
+// resetting it, an earlier test's /mode switch to "openai" would leak into a
+// later test's login default and make PII-gate tests order-dependent.
+beforeEach(() => {
+  resetLoginRateLimitForTest();
+  resetLastModeForTest();
+});
 
 // Stand-in for runAdvisorTurn. Records the sessions it saw so the isolation
 // test can prove two cookies never share one conversation.
@@ -60,6 +68,39 @@ function cookieFrom(res: Response): string {
   const set = res.headers.get("set-cookie");
   assert.ok(set, "expected a Set-Cookie header");
   return set.split(";")[0]!;
+}
+
+// Two-track tests below spin up their own server per test (mirrors the
+// stoppable/withSchedule/raceServer pattern above) rather than sharing the
+// module-level `server`, so /mode switches in one test cannot bleed into
+// another via the shared session store.
+async function startTestServer(): Promise<{
+  server: ReturnType<typeof createAdvisorServer>;
+  base: string;
+}> {
+  const testServer = createAdvisorServer({
+    runTurn: async (_session, input) => ({
+      text: `answered: ${input}`,
+      toolCalls: 1,
+      outcome: "complete" as const,
+    }),
+  });
+  await new Promise<void>((r) => testServer.listen(0, "127.0.0.1", r));
+  const p = (testServer.address() as AddressInfo).port;
+  return { server: testServer, base: `http://127.0.0.1:${p}` };
+}
+
+async function loginCookie(
+  base: string,
+  password = "test-password",
+): Promise<string> {
+  const res = await fetch(`${base}/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ password }).toString(),
+    redirect: "manual",
+  });
+  return cookieFrom(res);
 }
 
 test("the root path serves the login page to an unauthenticated visitor", async () => {
@@ -197,7 +238,7 @@ test("an aborted turn is marked partial and is not recorded as history", async (
   assert.doesNotMatch(md, /half an ans/);
 });
 
-test("clearing a session disposes it and issues a fresh cookie", async () => {
+test("clearing the active track disposes it without issuing a new cookie", async () => {
   const cookie = cookieFrom(await login());
   await fetch(`${base}/chat`, {
     method: "POST",
@@ -210,12 +251,15 @@ test("clearing a session disposes it and issues a fresh cookie", async () => {
     headers: { cookie },
   });
   assert.equal(res.status, 200);
-  const fresh = cookieFrom(res);
-  assert.notEqual(fresh, cookie);
+  assert.equal(
+    res.headers.get("set-cookie"),
+    null,
+    "client id is stable across /clear",
+  );
   assert.equal(sessionCount(), before, "one session out, one session in");
 
   const md = await (
-    await fetch(`${base}/export`, { headers: { cookie: fresh } })
+    await fetch(`${base}/export`, { headers: { cookie } })
   ).text();
   assert.doesNotMatch(md, /remember me/);
 });
@@ -650,4 +694,103 @@ test("a timed-out turn is marked partial rather than final", async () => {
     resetSessionsForTest();
     tServer.close();
   }
+});
+
+// --- two-track: /mode swap, OpenAI PII consent gate, /clear active only -----
+
+test("POST /mode swaps the active track and does not reset", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/mode", {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: c },
+      body: JSON.stringify({ mode: "openai" }),
+    });
+    const data = (await r.json()) as { mode: string };
+    assert.equal(r.status, 200);
+    assert.equal(data.mode, "openai");
+    assert.equal(r.headers.get("set-cookie"), null); // cookie (client id) is stable
+  } finally { server.close(); }
+});
+
+test("POST /chat on the OpenAI track blocks flagged text without consent", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    await fetch(base + "/mode", { method: "POST", headers: { "Content-Type": "application/json", Cookie: c }, body: JSON.stringify({ mode: "openai" }) });
+    const r = await fetch(base + "/chat", {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: c },
+      body: JSON.stringify({ message: "look at C12345678" }),
+    });
+    assert.equal(r.status, 409);
+    const data = (await r.json()) as {
+      needsConsent: boolean;
+      flags: { category: string; sample: string }[];
+    };
+    assert.equal(data.needsConsent, true);
+    assert.ok(data.flags.some((f) => f.category === "Clemson student ID"));
+  } finally { server.close(); }
+});
+
+test("POST /chat on the OpenAI track proceeds with consent", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    await fetch(base + "/mode", { method: "POST", headers: { "Content-Type": "application/json", Cookie: c }, body: JSON.stringify({ mode: "openai" }) });
+    const r = await fetch(base + "/chat", {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: c },
+      body: JSON.stringify({ message: "look at C12345678", consent: true }),
+    });
+    assert.equal(r.status, 200);
+  } finally { server.close(); }
+});
+
+test("POST /chat on the Private track never checks for PII", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/chat", {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: c },
+      body: JSON.stringify({ message: "student C12345678 wants GC 3400" }),
+    });
+    assert.equal(r.status, 200); // private is FERPA-OK; no gate
+  } finally { server.close(); }
+});
+
+// --- cleaner tab: auth-gated static serving ----------------------------------
+
+test("GET /cleaner requires auth", async () => {
+  const { server, base } = await startTestServer();
+  try { assert.equal((await fetch(base + "/cleaner")).status, 401); }
+  finally { server.close(); }
+});
+
+test("GET /cleaner serves HTML to an authed session", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner", { headers: { Cookie: c } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type") ?? "", /text\/html/);
+    assert.match(await r.text(), /cleaner/i);
+  } finally { server.close(); }
+});
+
+test("GET /cleaner/modules/degree-works.js serves JS", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner/modules/degree-works.js", { headers: { Cookie: c } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type") ?? "", /javascript/);
+  } finally { server.close(); }
+});
+
+test("GET /cleaner/../ traversal is refused", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner/..%2f..%2fsrc%2fadvisor-agent.ts", { headers: { Cookie: c } });
+    assert.ok(r.status === 400 || r.status === 404);
+  } finally { server.close(); }
 });

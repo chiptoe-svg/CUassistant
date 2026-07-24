@@ -20,6 +20,7 @@ import {
   __dialledHostForTest,
   __resolveProviderForTest,
   __runWithProviderForTest,
+  advisorChainForMode,
   assertAdvisorChainAuthorized,
   assertAdvisorTargetAuthorized,
   detectMalformedToolCall,
@@ -239,6 +240,7 @@ function fakeSession(): AdvisorSession {
   return {
     id: "test-session",
     advisorId: "shared",
+    mode: "private",
     workDir: mkdtempSync(path.join(tmpdir(), "advisor-test-work-")),
     piSessionRoot: mkdtempSync(path.join(tmpdir(), "advisor-test-pi-")),
     history: [],
@@ -1262,4 +1264,23 @@ test("a thinking-only turn with no answer text fails instead of returning blank"
   }
 
   assert.ok(threw, `an empty answer was returned as outcome "${outcome}" instead of failing`);
+});
+
+test("rcd chain entry is egress-authorized and dials the RCD campus host", () => {
+  assert.doesNotThrow(() => assertAdvisorChainAuthorized(["rcd"]));
+  const target = __resolveProviderForTest("rcd");
+  if (target) {
+    assert.equal(new URL(target.model.baseUrl).hostname, "llm.rcd.clemson.edu");
+    assert.equal(new URL(target.model.baseUrl).pathname, "/v1");
+    assert.equal(target.model.id, process.env.ADVISOR_RCD_MODEL || "qwen3.6-35b-a3b-fp8");
+  }
+});
+
+test("rcd resolves the RCD campus host", () => {
+  assert.equal(__dialledHostForTest("rcd"), "llm.rcd.clemson.edu");
+});
+
+test("advisorChainForMode: private is rcd,spark and openai is openai-only", () => {
+  assert.deepEqual([...advisorChainForMode("private")], ["rcd", "spark"]);
+  assert.deepEqual([...advisorChainForMode("openai")], ["openai"]);
 });

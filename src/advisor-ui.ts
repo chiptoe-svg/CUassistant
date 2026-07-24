@@ -165,7 +165,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
       <li>What does the Graphic Communications major take in the sophomore year?</li>
       <li>Find 3-credit sections on Tue/Thu afternoons with at least 5 open seats.</li>
       <li>What are the requirements for the Business Administration minor?</li>
-      <li>Does GC 3060 conflict with ENGL 3140 on a Tue/Thu schedule?</li>
+      <li>What are the conflicting sections of GC 4060/4061 and GC 4400/4401 this fall?</li>
     </ul>
   </div>
 </div>

@@ -78,12 +78,12 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
   <span class="modenote" id="modenote">${
     priv
       ? "Local, FERPA-approved models. Student information may be used."
-      : "De-identified data only \\u2014 do NOT enter student names, IDs, or grades."
+      : "De-identified data only — do NOT enter student names, IDs, or grades."
   }</span>
   <button id="modeToggle" type="button">${
     priv ? "Switch to OpenAI mode" : "Switch to Private mode"
   }</button>
-  <a class="cleanerlink" href="cleaner" target="_blank" rel="noopener">Clean a document \\u2197</a>
+  <a class="cleanerlink" href="cleaner" target="_blank" rel="noopener">Clean a document ↗</a>
 </div>
 
 <p>Ask about schedules, room capacity, or GC requirements. Clear the session
@@ -98,7 +98,7 @@ when you move to another student.</p>
   <button id="send" type="submit">Send</button>
   <button id="stop" type="button" disabled>Stop</button>
   <button id="clear" type="button">Clear session</button>
-  <button id="export" type="button">Export transcript</button>
+  <button id="export" type="button">Export chat history</button>
   <button id="schedule" type="button" hidden>Open proposed schedule</button>
 </form>
 

@@ -232,6 +232,25 @@ export function advisorMcpServers(): Record<string, McpServerConfig> {
   return servers;
 }
 
+/**
+ * Skill-discovery tools the advisor must NOT be handed. `list-skills` /
+ * `get-skill-docs` (8766) and their renamed catalog copies `list-gc-skills` /
+ * `get-gc-skill-docs` (8767, see src/mcp-catalog.ts) exist so Claude Code can
+ * author this agent's runtime guidance FROM the skill documents — they are an
+ * authoring aid, not a capability the advisor invokes at runtime. The advisor's
+ * advising guidance lives in the tool descriptions and its persona instead; it
+ * never retrieves a skill mid-conversation. These are filtered out of the
+ * agent's tool array in createAdvisorMcpBridge, so they never reach tools/list.
+ * The servers still serve them to other MCP consumers — this is scoped to the
+ * advisor bridge. Names are the BARE names as exposed to the agent.
+ */
+export const ADVISOR_SKILL_TOOL_DENYLIST: ReadonlySet<string> = new Set([
+  "list-skills",
+  "get-skill-docs",
+  "list-gc-skills",
+  "get-gc-skill-docs",
+]);
+
 export async function createAdvisorMcpBridge(
   deps: AdvisorMcpBridgeDeps = defaultDeps,
 ): Promise<AdvisorMcpBridge> {
@@ -284,6 +303,11 @@ export async function createAdvisorMcpBridge(
     // because gc_curriculum_wiki is currently skipped for want of a token, so
     // its tool names have never actually been enumerated against the others.
     for (const tool of loaded) {
+      // The advisor never uses skill-discovery tools (see
+      // ADVISOR_SKILL_TOOL_DENYLIST). Drop them before they can be counted for
+      // collisions or reach the agent's tool array — a denied tool must not
+      // shadow, be shadowed by, or appear alongside anything.
+      if (ADVISOR_SKILL_TOOL_DENYLIST.has(tool.name)) continue;
       const existing = owners.get(tool.name);
       if (existing !== undefined) {
         await Promise.allSettled(

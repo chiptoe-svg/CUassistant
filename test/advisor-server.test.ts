@@ -756,3 +756,41 @@ test("POST /chat on the Private track never checks for PII", async () => {
     assert.equal(r.status, 200); // private is FERPA-OK; no gate
   } finally { server.close(); }
 });
+
+// --- cleaner tab: auth-gated static serving ----------------------------------
+
+test("GET /cleaner requires auth", async () => {
+  const { server, base } = await startTestServer();
+  try { assert.equal((await fetch(base + "/cleaner")).status, 401); }
+  finally { server.close(); }
+});
+
+test("GET /cleaner serves HTML to an authed session", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner", { headers: { Cookie: c } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type") ?? "", /text\/html/);
+    assert.match(await r.text(), /cleaner/i);
+  } finally { server.close(); }
+});
+
+test("GET /cleaner/modules/degree-works.js serves JS", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner/modules/degree-works.js", { headers: { Cookie: c } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type") ?? "", /javascript/);
+  } finally { server.close(); }
+});
+
+test("GET /cleaner/../ traversal is refused", async () => {
+  const { server, base } = await startTestServer();
+  try {
+    const c = await loginCookie(base);
+    const r = await fetch(base + "/cleaner/..%2f..%2fsrc%2fadvisor-agent.ts", { headers: { Cookie: c } });
+    assert.ok(r.status === 400 || r.status === 404);
+  } finally { server.close(); }
+});

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Document cleaner — advisor</title>
+  <style>
+    :root { color-scheme: light dark;
+      --bg:#f7f7f5; --panel:#fff; --text:#1f2428; --muted:#687078; --line:#d8dadd;
+      --accent:#2f6f5e; --accent-dark:#235346; --warn-bg:#fff8e6; --warn-line:#e3bd5f;
+      --error-bg:#fff0f0; --error-line:#d87979;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#14171a; --panel:#1c2024; --text:#e8eaed; --muted:#9aa2ab; --line:#333a41; } }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); }
+    main { width:min(1200px, calc(100vw - 32px)); margin:28px auto; }
+    h1 { margin:0 0 6px; font-size:26px; font-weight:680; }
+    p.lead { margin:0; color:var(--muted); line-height:1.45; }
+    .privacy { margin:12px 0 0; padding:10px 12px; border-radius:8px;
+      background:#e6f4ee; border:1px solid var(--accent); font-size:14px; }
+    @media (prefers-color-scheme: dark) { .privacy { background:#12271f; } }
+    .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+      padding:14px; margin:18px 0; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    label { font-weight:600; font-size:14px; }
+    select, input[type=file] { font:inherit; color:var(--text); }
+    button { appearance:none; border:0; border-radius:6px; padding:9px 12px;
+      background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+    button:hover { background:var(--accent-dark); }
+    button:disabled { cursor:not-allowed; opacity:.5; }
+    button.secondary { background:#e8ece9; color:#1f2428; }
+    #moduleDesc { color:var(--muted); font-size:13px; flex-basis:100%; }
+    #status { color:var(--muted); font-size:14px; }
+    .paste { display:grid; gap:8px; margin:14px 0; }
+    .messages { display:grid; gap:8px; margin-bottom:14px; }
+    .message { padding:10px 12px; border-radius:8px; font-size:14px; line-height:1.4; }
+    .warning { background:var(--warn-bg); border:1px solid var(--warn-line); color:#1f2428; }
+    .error { background:var(--error-bg); border:1px solid var(--error-line); color:#1f2428; }
+    #summary { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+    .metric { padding:10px 12px; background:var(--panel); border:1px solid var(--line);
+      border-radius:8px; min-width:120px; }
+    .metric span { display:block; color:var(--muted); font-size:12px; margin-bottom:3px; }
+    .metric strong { font-size:18px; font-weight:680; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    section h2 { margin:0; padding:12px 14px; border-bottom:1px solid var(--line); font-size:15px; font-weight:650; }
+    textarea { display:block; width:100%; min-height:520px; resize:vertical; padding:14px;
+      border:0; outline:none; background:var(--panel); color:var(--text);
+      font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size:2; }
+    .paste textarea { min-height:120px; }
+    :focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+    @media (max-width:860px) { .grid { grid-template-columns:1fr; } textarea { min-height:340px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Document cleaner</h1>
+      <p class="lead">De-identify a document before sharing it with the advisor. Choose what you are cleaning, load a PDF or paste text, review the sanitized output, then copy it into the chat.</p>
+      <p class="privacy">Runs entirely in your browser. The original document is never uploaded — only the sanitized output you copy leaves this tab.</p>
+    </header>
+
+    <div class="toolbar">
+      <label for="moduleSelect">Cleaning</label>
+      <select id="moduleSelect" aria-describedby="moduleDesc"></select>
+      <label for="pdfInput">PDF</label>
+      <input id="pdfInput" type="file" accept="application/pdf">
+      <button id="copyButton" type="button" disabled>Copy sanitized output</button>
+      <button id="downloadButton" class="secondary" type="button" disabled>Download</button>
+      <span id="status">Choose what to clean, then load a PDF or paste text.</span>
+      <span id="moduleDesc"></span>
+    </div>
+
+    <div class="paste">
+      <label for="pasteInput">…or paste text (e.g. a page you copied)</label>
+      <textarea id="pasteInput" spellcheck="false" aria-label="Paste text to clean"></textarea>
+      <div><button id="cleanPaste" type="button">Clean pasted text</button></div>
+    </div>
+
+    <div id="messages" class="messages" aria-live="polite"></div>
+    <div id="summary" aria-live="polite"></div>
+
+    <div class="grid">
+      <section><h2>Sanitized output</h2>
+        <textarea id="output" spellcheck="false" aria-label="Sanitized output"></textarea></section>
+      <section><h2>Source preview (private lines removed)</h2>
+        <textarea id="preview" spellcheck="false" aria-label="Source preview"></textarea></section>
+    </div>
+  </main>
+  <script type="module" src="framework.js"></script>
+</body>
+</html>

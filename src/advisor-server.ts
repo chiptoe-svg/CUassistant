@@ -12,7 +12,7 @@
 //     can reach.
 
 import http from "node:http";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,6 +51,30 @@ import { renderSchedule } from "./advisor-artifacts.js";
 import { flagLikelyPrivate } from "./advisor-pii-detect.js";
 
 const MAX_BODY_BYTES = 5_000_000;
+
+const CLEANER_DIR = fileURLToPath(new URL("../advisor/cleaner", import.meta.url));
+const CLEANER_MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+/** Serve a static asset from advisor/cleaner behind auth; traversal-safe. */
+function serveCleanerAsset(res: http.ServerResponse, relPath: string): void {
+  const resolved = path.resolve(CLEANER_DIR, "." + path.posix.normalize("/" + relPath));
+  if (resolved !== CLEANER_DIR && !resolved.startsWith(CLEANER_DIR + path.sep)) {
+    return json(res, 400, { error: "bad path" });
+  }
+  const type = CLEANER_MIME[path.extname(resolved).toLowerCase()];
+  if (!type) return json(res, 404, { error: "not found" });
+  let body: Buffer;
+  try { body = readFileSync(resolved); }
+  catch { return json(res, 404, { error: "not found" }); }
+  res.writeHead(200, { "Content-Type": type });
+  res.end(body);
+}
 
 /**
  * Fail closed: the only thing standing between this service and the network is
@@ -286,6 +310,13 @@ export function createAdvisorServer(
       const active = getActiveSession(cid);
       if (!active) return json(res, 401, { error: "session expired" });
       const session = active.session;
+
+      if (method === "GET" && url.pathname === "/cleaner") {
+        return serveCleanerAsset(res, "index.html");
+      }
+      if (method === "GET" && url.pathname.startsWith("/cleaner/")) {
+        return serveCleanerAsset(res, url.pathname.slice("/cleaner/".length));
+      }
 
       if (method === "POST" && url.pathname === "/chat") {
         const parsed = JSON.parse(await readBody(req)) as {

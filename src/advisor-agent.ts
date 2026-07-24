@@ -17,14 +17,10 @@
 // pay listTools() latency every turn and churn connections against the MCP
 // servers; all three transports are HTTP, so sharing is safe.
 //
-// The advisor's one skill (gc-advisor) is INLINED into the system prompt by
-// loadSystemPrompt() below, not retrieved on demand. A benchmark transcript
-// caught the model spending 2 of its 3 tool calls on list-skills +
-// get-skill-docs — discovering guidance a single-purpose advisor should
-// already have — then never calling the deterministic find-eligible-sections
-// join. The four skill-discovery tool names are filtered out of the bridge in
-// advisor-mcp.ts (SKILL_DISCOVERY_TOOL_NAMES) for the same reason: there is
-// nothing left for them to be called for.
+// Skills are NOT inlined into the system prompt. They are retrieved on demand
+// through the bridge's list-skills / get-skill-docs tools. The three relevant
+// skills total ~6,500 tokens; inlining them would spend a tenth of a 64k window
+// on every turn.
 
 import { mkdtempSync, readFileSync } from "node:fs";
 import { cp, rm } from "node:fs/promises";
@@ -61,17 +57,6 @@ import type { AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
 
-/**
- * The advisor system prompt: the persona (advisor/AGENTS.md) only.
- *
- * We deliberately do NOT inject the full gc-advisor SKILL.md. Measured on
- * benchmark S5: injecting the data-heavy skill made the models answer FROM the
- * prompt instead of calling the deterministic tools — tool-calling fell to ~40%
- * and S5 quality dropped (3.26 → 2.28). A model is induced to USE a tool by
- * being data-starved plus a minimal directive, not by a skill dump. The one
- * tool-use directive that matters (call find-eligible-sections with the
- * scheduling constraints) lives inline in AGENTS.md instead.
- */
 export function loadSystemPrompt(): string {
   return readFileSync(
     fileURLToPath(new URL("../advisor/AGENTS.md", import.meta.url)),

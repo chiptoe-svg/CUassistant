@@ -161,10 +161,18 @@ test("login page posts to login and shows an error when given one", () => {
 
 // Live regions only announce changes detected AFTER they are in the
 // accessibility tree, so both must be present and empty in the initial HTML.
-test("both live regions are mounted empty in the initial markup", () => {
+test("both live regions are mounted without conversation content", () => {
   const page = renderChatPage("private");
+  // #status is fully empty; #answers holds only the static examples hint and
+  // no conversation <article> until the first turn arrives.
   assert.match(page, /id="status"[^>]*aria-live="polite"[^>]*><\/div>/);
-  assert.match(page, /id="answers"[^>]*aria-live="polite"[^>]*><\/div>/);
+  assert.match(page, /id="answers"[^>]*aria-live="polite"[^>]*>/);
+  const answersInner = page.slice(
+    page.indexOf('id="answers"'),
+    page.indexOf('id="composer"'),
+  );
+  assert.doesNotMatch(answersInner, /<article/);
+  assert.match(answersInner, /id="examples"/);
 });
 
 // Buffer and gate: streaming prose (via EventSource, a WebSocket, or a

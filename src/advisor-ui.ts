@@ -66,7 +66,7 @@ const STYLE = `
   #composer { flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:flex-end; gap:.6rem;
               padding:.9rem 1.75rem 1.1rem; border-top:1px solid #8886; }
   #composer label { flex-basis:100%; font-weight:600; margin-bottom:.25rem; }
-  #composer textarea { flex:1 1 auto; min-width:10rem; min-height:2.75rem; max-height:8rem;
+  #composer textarea { flex:1 1 auto; min-width:10rem; min-height:6rem; max-height:12rem;
                         font:inherit; padding:.5rem; }
   #composerbtns { display:grid; grid-template-columns:auto auto; gap:.35rem; align-content:end; }
   #composerbtns button { font:inherit; font-size:.85rem; padding:.35rem .6rem; }
@@ -78,6 +78,16 @@ const STYLE = `
 
   #answers[data-track="private"] article[data-track="openai"],
   #answers[data-track="openai"] article[data-track="private"] { display:none; }
+  /* Empty-state examples: middle-gray italic hints shown until the active
+     track has a message. :has() scopes it per track so it returns after Clear
+     and shows on a fresh track. */
+  #examples { color:#888; font-style:italic; padding:1.5rem .25rem; max-width:44rem; }
+  #examples .ex-lead { margin:0 0 .5rem; }
+  #examples ul { list-style:none; padding:0; margin:0; }
+  #examples li { padding:.3rem 0; border-bottom:1px solid #8881; }
+  #examples li:last-child { border-bottom:0; }
+  #answers[data-track="private"]:has(article[data-track="private"]) #examples,
+  #answers[data-track="openai"]:has(article[data-track="openai"]) #examples { display:none; }
 
   #fbDialog { width:min(34rem, 92vw); border:1px solid #8886; border-radius:10px;
               padding:1.25rem 1.4rem; color:inherit; }
@@ -147,7 +157,18 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
 </div>
 
 <div id="status" role="status" aria-live="polite"></div>
-<div id="answers" data-track="${mode}" aria-live="polite" aria-atomic="false"></div>
+<div id="answers" data-track="${mode}" aria-live="polite" aria-atomic="false">
+  <div id="examples" aria-hidden="true">
+    <p class="ex-lead">Not sure where to start? Try asking…</p>
+    <ul>
+      <li>Which sections of GC 3400 still have open seats this fall?</li>
+      <li>What does the Graphic Communications major take in the sophomore year?</li>
+      <li>Find 3-credit sections on Tue/Thu afternoons with at least 5 open seats.</li>
+      <li>What are the requirements for the Business Administration minor?</li>
+      <li>Does GC 3060 conflict with ENGL 3140 on a Tue/Thu schedule?</li>
+    </ul>
+  </div>
+</div>
 
 <form id="composer">
   <label for="message">Your question</label>

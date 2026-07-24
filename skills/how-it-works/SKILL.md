@@ -17,10 +17,11 @@ ports, keys, or internal server names.
   each morning (around 5 a.m.), so seat counts can be up to a day old — fine for
   planning, but "is there a seat right now" should be confirmed in Banner.
   Catalog and requirement data is pinned to each student's catalog year.
-- **Which AI it uses.** In Private mode it runs on Clemson-hosted models that
-  keep data on Clemson systems; in OpenAI mode it uses a frontier model with only
-  de-identified information. The advisor picks the mode with the toggle at the top
-  of the window.
+- **Which AI it uses.** In Private mode it runs **Qwen3.6** (a 35-billion-parameter
+  open-weight model) on Clemson-owned hardware — RCD's campus GPU cluster, with a
+  local DGX Spark as backup — so the data never leaves Clemson systems. In OpenAI
+  mode it uses **OpenAI's GPT-5.5**, and only de-identified information is sent
+  off-campus. The advisor picks the mode with the toggle at the top of the window.
 - **How it uses the AI.** The model reads the question and phrases the answer,
   but the data itself — courses, times, rooms, requirements — always comes from
   the tools, so it is not making numbers up.

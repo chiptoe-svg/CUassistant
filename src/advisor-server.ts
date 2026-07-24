@@ -246,7 +246,7 @@ export function createAdvisorServer(
         const cid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
         const active = getActiveSession(cid);
         return active
-          ? html(res, 200, renderChatPage())
+          ? html(res, 200, renderChatPage(active.session.mode))
           : html(res, 200, renderLoginPage());
       }
 

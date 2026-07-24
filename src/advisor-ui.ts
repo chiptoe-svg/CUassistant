@@ -19,6 +19,18 @@ const STYLE = `
   textarea { width: 100%; min-height: 5rem; font: inherit; padding: .5rem; }
   button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; }
   :focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
+  #modebar { display:flex; align-items:center; gap:.75rem; flex-wrap:wrap;
+             padding:.6rem .8rem; border-radius:8px; margin-bottom:1rem; border:1px solid #8886; }
+  #modebar[data-mode="private"] { background:#e6f4ee; border-color:#2f6f5e; }
+  #modebar[data-mode="openai"]  { background:#fdf0e0; border-color:#c67b18; }
+  @media (prefers-color-scheme: dark) {
+    #modebar[data-mode="private"] { background:#12271f; }
+    #modebar[data-mode="openai"]  { background:#2c2010; } }
+  #modebar strong { font-weight:680; }
+  #modebar .modenote { color:#595959; font-size:.9rem; }
+  #modebar a.cleanerlink { margin-left:auto; }
+  #answers[data-track="private"] article[data-track="openai"],
+  #answers[data-track="openai"] article[data-track="private"] { display:none; }
 `;
 
 // The login error is the only place a string crosses into this page's markup.
@@ -55,15 +67,30 @@ ${error ? `<p role="alert">${escHtml(error)}</p>` : ""}
   );
 }
 
-export function renderChatPage(): string {
+export function renderChatPage(mode: "private" | "openai" = "private"): string {
+  const priv = mode === "private";
   return page(
     "Advisor chat",
     `<h1>Advisor chat</h1>
+
+<div id="modebar" data-mode="${mode}">
+  <strong id="modelabel">${priv ? "Private mode" : "OpenAI mode"}</strong>
+  <span class="modenote" id="modenote">${
+    priv
+      ? "Local, FERPA-approved models. Student information may be used."
+      : "De-identified data only \\u2014 do NOT enter student names, IDs, or grades."
+  }</span>
+  <button id="modeToggle" type="button">${
+    priv ? "Switch to OpenAI mode" : "Switch to Private mode"
+  }</button>
+  <a class="cleanerlink" href="cleaner" target="_blank" rel="noopener">Clean a document \\u2197</a>
+</div>
+
 <p>Ask about schedules, room capacity, or GC requirements. Clear the session
 when you move to another student.</p>
 
 <div id="status" role="status" aria-live="polite"></div>
-<div id="answers" aria-live="polite" aria-atomic="false"></div>
+<div id="answers" data-track="${mode}" aria-live="polite" aria-atomic="false"></div>
 
 <form id="composer">
   <label for="message">Your question</label>
@@ -77,38 +104,56 @@ when you move to another student.</p>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const status = $("status"), answers = $("answers");
+const status = $("status"), answers = $("answers"), modebar = $("modebar");
+let uiMode = ${JSON.stringify(mode)};
 
 function addAnswer(role, text) {
   const art = document.createElement("article");
+  art.dataset.track = uiMode;
   const h = document.createElement("h2");
   h.className = "role"; h.textContent = role;
   const p = document.createElement("p"); p.textContent = text;
   art.append(h, p); answers.append(art);
 }
 
+// POST a message; transparently handle the OpenAI PII 409. Returns the final
+// Response (200) or null if the advisor cancelled at the consent prompt.
+async function send(message, consent) {
+  const r = await fetch("chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(consent ? { message, consent: true } : { message }),
+  });
+  if (r.status === 409) {
+    const data = await r.json();
+    if (data.needsConsent) {
+      const cats = data.flags.map((f) => f.category + " (\\u201c" + f.sample + "\\u201d)").join(", ");
+      const ok = confirm(
+        "This looks like it may contain private information: " + cats + ".\\n\\n" +
+        "OK = it is not private, send anyway.\\nCancel = go back and edit."
+      );
+      if (ok) return send(message, true);
+      $("message").value = message;   // restore for editing; nothing was sent
+      status.textContent = "Not sent \\u2014 edit and try again.";
+      return null;
+    }
+  }
+  return r;
+}
+
 $("composer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const message = $("message").value.trim();
   if (!message) return;
-  addAnswer("You", message);
-  $("message").value = "";
-  $("send").disabled = true;
-  $("stop").disabled = false;   // a turn is now in flight — stop can reach it
+  $("send").disabled = true; $("stop").disabled = false;
   status.textContent = "Checking the schedule\\u2026";
   try {
-    const r = await fetch("chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    });
+    const r = await send(message, false);
+    if (!r) return;                      // cancelled at consent — leave text as-is
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "request failed");
-    // An aborted turn is a partial answer, not a finished one (Task 3). It
-    // gets a distinct label and status so it is never mistaken for a
-    // completed response.
-    // Prose is the default. The document button appears only after the agent
-    // has actually called propose_schedule and the host validated it.
+    addAnswer("You", message);           // committed to sending; reflect it now
+    $("message").value = "";
     if (data.schedule) $("schedule").hidden = false;
     if (data.outcome === "aborted") {
       addAnswer("Advisor chat \\u2014 stopped", data.text);
@@ -120,9 +165,7 @@ $("composer").addEventListener("submit", async (e) => {
   } catch (err) {
     status.textContent = "Something went wrong. Please try again.";
   } finally {
-    $("send").disabled = false;
-    $("stop").disabled = true;
-    $("message").focus();   // focus stays on input, never yanked to the answer
+    $("send").disabled = false; $("stop").disabled = true; $("message").focus();
   }
 });
 
@@ -133,23 +176,50 @@ $("stop").addEventListener("click", async () => {
     const r = await fetch("stop", { method: "POST" });
     const data = await r.json();
     status.textContent = data.stopped ? "Stop requested." : "Nothing to stop.";
-  } catch (err) {
-    status.textContent = "Could not stop.";
-  }
+  } catch (err) { status.textContent = "Could not stop."; }
 });
 
 $("clear").addEventListener("click", async () => {
   await fetch("clear", { method: "POST" });
-  answers.replaceChildren();
-  $("schedule").hidden = true;   // the old session's document is gone with it
+  // Only the active track was cleared server-side; drop its messages from view.
+  answers.querySelectorAll('article[data-track="' + uiMode + '"]').forEach((a) => a.remove());
+  $("schedule").hidden = true;
   status.textContent = "Session cleared.";
   $("message").focus();
 });
 
 $("export").addEventListener("click", () => { location.href = "export"; });
+$("schedule").addEventListener("click", () => { window.open("export/schedule", "_blank", "noopener"); });
 
-$("schedule").addEventListener("click", () => {
-  window.open("export/schedule", "_blank", "noopener");
+$("modeToggle").addEventListener("click", async () => {
+  const next = uiMode === "private" ? "openai" : "private";
+  if (next === "openai") {
+    const ok = confirm(
+      "Switch to the OpenAI track?\\n\\nDe-identified data only \\u2014 do not enter " +
+      "student names, IDs, or grades. Your Private conversation stays open on the " +
+      "Private track."
+    );
+    if (!ok) return;
+  }
+  try {
+    const r = await fetch("mode", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: next }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "mode switch failed");
+    uiMode = data.mode;
+    const priv = uiMode === "private";
+    modebar.setAttribute("data-mode", uiMode);
+    answers.setAttribute("data-track", uiMode);   // show this track's messages, hide the other
+    $("modelabel").textContent = priv ? "Private mode" : "OpenAI mode";
+    $("modenote").textContent = priv
+      ? "Local, FERPA-approved models. Student information may be used."
+      : "De-identified data only \\u2014 do NOT enter student names, IDs, or grades.";
+    $("modeToggle").textContent = priv ? "Switch to OpenAI mode" : "Switch to Private mode";
+    $("schedule").hidden = true;
+    status.textContent = "Now on the " + (priv ? "Private" : "OpenAI") + " track.";
+  } catch (err) { status.textContent = "Could not switch mode."; }
 });
 </script>`,
   );

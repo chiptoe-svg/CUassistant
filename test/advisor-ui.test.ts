@@ -16,10 +16,14 @@ interface FakeElement {
   hidden: boolean;
   children: FakeElement[];
   listeners: Record<string, (...args: unknown[]) => unknown>;
+  dataset: Record<string, string>;
   append(...nodes: FakeElement[]): void;
   replaceChildren(): void;
   addEventListener(type: string, handler: (...args: unknown[]) => unknown): void;
   focus(): void;
+  setAttribute(name: string, value: string): void;
+  querySelectorAll(selector: string): FakeElement[];
+  remove(): void;
 }
 
 function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
@@ -32,6 +36,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     hidden: false,
     children: [],
     listeners: {},
+    dataset: {},
     append(...nodes) {
       this.children.push(...nodes);
     },
@@ -42,6 +47,17 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
       this.listeners[type] = handler;
     },
     focus() {},
+    setAttribute(name, value) {
+      if (name === "data-track") this.dataset.track = value;
+    },
+    querySelectorAll(selector) {
+      // Only the one selector shape the script actually uses:
+      // article[data-track="<value>"]
+      const match = selector.match(/data-track="([^"]+)"/);
+      const track = match?.[1];
+      return this.children.filter((c) => (track ? c.dataset.track === track : true));
+    },
+    remove() {},
     ...overrides,
   };
 }
@@ -50,7 +66,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
 // fake fetch, then submits the composer once. Returns the recorded fetch
 // calls and the fake elements so callers can assert on the resulting DOM.
 async function runChatSubmit(responseBody: unknown) {
-  const match = renderChatPage().match(/<script>([\s\S]*?)<\/script>/);
+  const match = renderChatPage("private").match(/<script>([\s\S]*?)<\/script>/);
   assert.ok(match, "expected an inline <script> in the chat page");
   const script = match[1];
 
@@ -64,6 +80,10 @@ async function runChatSubmit(responseBody: unknown) {
     clear: makeElement(),
     export: makeElement(),
     schedule: makeElement({ hidden: true }),
+    modebar: makeElement(),
+    modeToggle: makeElement(),
+    modelabel: makeElement(),
+    modenote: makeElement(),
   };
 
   const fetchCalls: Array<[string, unknown]> = [];
@@ -99,7 +119,7 @@ test("login page posts to login and shows an error when given one", () => {
 // Live regions only announce changes detected AFTER they are in the
 // accessibility tree, so both must be present and empty in the initial HTML.
 test("both live regions are mounted empty in the initial markup", () => {
-  const page = renderChatPage();
+  const page = renderChatPage("private");
   assert.match(page, /id="status"[^>]*aria-live="polite"[^>]*><\/div>/);
   assert.match(page, /id="answers"[^>]*aria-live="polite"[^>]*><\/div>/);
 });
@@ -113,7 +133,7 @@ test("both live regions are mounted empty in the initial markup", () => {
 // positive invariant instead: the answer arrives in exactly one buffered
 // request and is appended to #answers exactly once.
 test("the client fetches chat once and appends the answer exactly once", async () => {
-  const page = renderChatPage();
+  const page = renderChatPage("private");
   // Relative URL — see the login-form note; it must keep the /advisor/ prefix.
   assert.match(page, /fetch\("chat"/);
 
@@ -134,7 +154,7 @@ test("the client fetches chat once and appends the answer exactly once", async (
 });
 
 test("every control has an accessible name", () => {
-  const page = renderChatPage();
+  const page = renderChatPage("private");
   for (const id of ["send", "stop", "clear", "export", "message"]) {
     assert.match(
       page,
@@ -149,7 +169,7 @@ test("every control has an accessible name", () => {
 // and the abort path through the Pi harness (Task 3). Its enabled state must
 // be honest: disabled while there is nothing to abort.
 test("the stop control is present and disabled at rest", () => {
-  const page = renderChatPage();
+  const page = renderChatPage("private");
   assert.match(
     page,
     /<button id="stop"[^>]*disabled[^>]*>[^<]*<\/button>/,
@@ -193,4 +213,15 @@ test("the schedule button stays hidden until a schedule has been proposed", asyn
 
   const proposed = await runChatSubmit({ text: "Proposed.", schedule: true });
   assert.equal(proposed.elements.schedule!.hidden, false);
+});
+
+test("renderChatPage reflects the mode at first paint and links the cleaner", () => {
+  const priv = renderChatPage("private");
+  assert.match(priv, /data-mode="private"/);
+  assert.match(priv, /Private/);
+  assert.match(priv, /cleaner/);
+  const oai = renderChatPage("openai");
+  assert.match(oai, /data-mode="openai"/);
+  assert.match(oai, /de-identified/i);
+  assert.match(oai, /needsConsent/); // the consent handler is present in the script
 });

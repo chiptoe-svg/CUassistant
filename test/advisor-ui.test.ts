@@ -99,6 +99,14 @@ async function runChatSubmit(responseBody: unknown) {
     modePrivate: makeElement(),
     modeOpenai: makeElement(),
     modenote: makeElement(),
+    fbOpen: makeElement(),
+    fbDialog: makeElement(),
+    fbText: makeElement(),
+    fbFile: makeElement(),
+    fbPreview: makeElement({ hidden: true }),
+    fbStatus: makeElement(),
+    fbSend: makeElement(),
+    fbCancel: makeElement(),
   };
 
   const fetchCalls: Array<[string, unknown]> = [];
@@ -339,6 +347,14 @@ async function runModeToggle(
     modePrivate: makeElement(),
     modeOpenai: makeElement(),
     modenote: makeElement(),
+    fbOpen: makeElement(),
+    fbDialog: makeElement(),
+    fbText: makeElement(),
+    fbFile: makeElement(),
+    fbPreview: makeElement({ hidden: true }),
+    fbStatus: makeElement(),
+    fbSend: makeElement(),
+    fbCancel: makeElement(),
   };
 
   const documentElement = makeElement({ tagName: "html" });
@@ -410,4 +426,12 @@ test("once acknowledged, later switches to OpenAI do not confirm again", async (
 
   assert.equal(again.confirmCalls.length, 0, "already acknowledged in this browser — no dialog");
   assert.equal(again.fetchCalls.length, 1, "the switch itself still proceeds");
+});
+
+// The feedback modal is a new, self-contained addition; just confirm its
+// entry points are present in the initial markup.
+test("the feedback control and dialog are present in the chat page", () => {
+  const page = renderChatPage("private");
+  assert.match(page, /id="fbOpen"/);
+  assert.match(page, /id="fbDialog"/);
 });

@@ -20,7 +20,7 @@ const STYLE = `
   }
 
   #modebar { flex: 0 0 auto; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
-             padding:.5rem .9rem; border-bottom:1px solid #8886; }
+             padding:.5rem 1rem; border-bottom:1px solid #8886; }
   #modebar h1 { font-size:1rem; margin:0; font-weight:700; }
   #modebar[data-mode="private"] { background:#e6f4ee; border-color:#2f6f5e; }
   #modebar[data-mode="openai"]  { background:#f2a13d; border-color:#8a4c00; }
@@ -40,9 +40,10 @@ const STYLE = `
   #modeOpenai[aria-pressed="true"]  { background:#d17b1e; color:#fff; }
   #modebar a.cleanerlink { margin-left:.85rem; font-size:.9rem; }
 
-  #answers { flex:1 1 auto; overflow-y:auto; min-height:0; padding:1rem 1rem 0; }
-  #answers article { max-width:46rem; margin:0 auto; padding:.15rem 0; }
-  #answers article.agent { padding-bottom:.55rem; border-bottom:1px solid #8882; margin-bottom:.45rem; }
+  #answers { flex:1 1 auto; overflow-y:auto; min-height:0; padding:.75rem 1rem 0; }
+  #answers article { padding:.15rem 0; }
+  #answers article.you { margin-left:2.25rem; }
+  #answers article.agent { padding-bottom:.6rem; border-bottom:1px solid #8882; margin-bottom:.5rem; }
   .role { font-size:.66rem; font-weight:700; text-transform:uppercase;
           letter-spacing:.05em; color:#8a8a8a; margin:0 0 .1rem; }
   #answers p { margin:.3rem 0; }
@@ -50,7 +51,7 @@ const STYLE = `
   #answers ul, #answers ol { padding-left:1.4rem; }
   #answers table { border-collapse:collapse; width:100%; }
   #answers th, #answers td { border:1px solid #8886; padding:.35rem .6rem; text-align:left; }
-  .mdtable-wrap { overflow-x:auto; max-width:46rem; margin:0 auto; }
+  .mdtable-wrap { overflow-x:auto; }
   code { font-family: ui-monospace, monospace; background:#8882; padding:.1rem .3rem; border-radius:4px; }
 
   #status { flex:0 0 auto; min-height:1.25rem; padding:0 1rem; color:#595959; font-size:.9rem; }
@@ -66,6 +67,19 @@ const STYLE = `
 
   #answers[data-track="private"] article[data-track="openai"],
   #answers[data-track="openai"] article[data-track="private"] { display:none; }
+
+  #fbDialog { width:min(34rem, 92vw); border:1px solid #8886; border-radius:10px;
+              padding:1.25rem 1.4rem; color:inherit; }
+  #fbDialog::backdrop { background:rgba(0,0,0,.4); }
+  #fbDialog h2 { margin:0 0 .5rem; font-size:1.15rem; }
+  #fbDialog label { display:block; font-weight:600; margin:.7rem 0 .25rem; }
+  #fbText { width:100%; min-height:6rem; font:inherit; padding:.5rem; box-sizing:border-box; }
+  #fbDialog .fbnote { color:#777; font-size:.85rem; margin:.5rem 0; }
+  #fbPreview { display:block; max-width:100%; max-height:9rem; margin:.5rem 0;
+               border:1px solid #8886; border-radius:6px; }
+  #fbPreview[hidden] { display:none; }
+  #fbStatus { min-height:1.2rem; color:#595959; font-size:.9rem; margin:.4rem 0; }
+  #fbSend, #fbCancel { font:inherit; padding:.45rem 1rem; margin-right:.5rem; margin-top:.4rem; }
 `;
 
 // The login error is the only place a string crosses into this page's markup.
@@ -110,7 +124,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
   <h1>Advisor chat</h1>
   <span class="modenote" id="modenote">${
     priv
-      ? "Local, FERPA-approved models. Student information may be used."
+      ? "Clemson-hosted AI models — your data stays on Clemson systems."
       : "De-identified data only — do NOT enter student names, IDs, or grades."
   }</span>
   <div id="modeswitch" role="group" aria-label="Model mode">
@@ -118,6 +132,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
     <button id="modeOpenai" type="button" class="seg" aria-pressed="${priv ? "false" : "true"}">OpenAI</button>
   </div>
   <a class="cleanerlink" href="cleaner" target="_blank" rel="noopener">Clean a document ↗</a>
+  <button id="fbOpen" class="cleanerlink" type="button">Feedback</button>
 </div>
 
 <div id="status" role="status" aria-live="polite"></div>
@@ -132,6 +147,20 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
   <button id="export" type="button">Export chat history</button>
   <button id="schedule" type="button" hidden>Open proposed schedule</button>
 </form>
+
+<dialog id="fbDialog">
+  <h2>Request a feature or report an issue</h2>
+  <label for="fbText">What's on your mind?</label>
+  <textarea id="fbText" required></textarea>
+  <p class="fbnote">Screenshots stay on this server — they are never sent
+  anywhere else. Please avoid including student names or IDs.</p>
+  <label for="fbFile">Attach a screenshot (optional)</label>
+  <input id="fbFile" type="file" accept="image/*">
+  <img id="fbPreview" alt="Screenshot preview" hidden>
+  <div id="fbStatus" role="status" aria-live="polite"></div>
+  <button id="fbSend" type="button">Send</button>
+  <button id="fbCancel" type="button">Cancel</button>
+</dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -432,7 +461,7 @@ async function switchMode(next) {
     $("modePrivate").setAttribute("aria-pressed", priv ? "true" : "false");
     $("modeOpenai").setAttribute("aria-pressed", priv ? "false" : "true");
     $("modenote").textContent = priv
-      ? "Local, FERPA-approved models. Student information may be used."
+      ? "Clemson-hosted AI models — your data stays on Clemson systems."
       : "De-identified data only \\u2014 do NOT enter student names, IDs, or grades.";
     $("schedule").hidden = true;
     status.textContent = "Now on the " + (priv ? "Private" : "OpenAI") + " track.";
@@ -440,6 +469,102 @@ async function switchMode(next) {
 }
 $("modePrivate").addEventListener("click", () => switchMode("private"));
 $("modeOpenai").addEventListener("click", () => switchMode("openai"));
+
+// ---- Feature request / feedback -----------------------------------------
+// Local-only: the screenshot never leaves this server (see POST /feedback).
+// Downscaled through a canvas before it is stored, so a full-resolution
+// phone photo does not blow up the request body.
+
+const fbDialog = $("fbDialog"), fbText = $("fbText"), fbFile = $("fbFile"),
+      fbPreview = $("fbPreview"), fbStatus = $("fbStatus"),
+      fbSend = $("fbSend"), fbCancel = $("fbCancel");
+let fbScreenshot = null;
+
+async function downscaleToDataUrl(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const max = 1800;
+  const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
+async function attachImage(blob) {
+  try {
+    fbScreenshot = await downscaleToDataUrl(blob);
+    fbPreview.src = fbScreenshot;
+    fbPreview.hidden = false;
+  } catch (err) {
+    fbStatus.textContent = "Could not attach that image \\u2014 you can still send text.";
+  }
+}
+
+function resetFeedbackForm() {
+  fbText.value = "";
+  fbFile.value = "";
+  fbPreview.hidden = true;
+  fbPreview.src = "";
+  fbScreenshot = null;
+  fbStatus.textContent = "";
+}
+
+$("fbOpen").addEventListener("click", () => {
+  fbStatus.textContent = "";
+  fbDialog.showModal();
+});
+
+fbFile.addEventListener("change", () => {
+  const file = fbFile.files && fbFile.files[0];
+  if (file) attachImage(file);
+});
+
+fbDialog.addEventListener("paste", (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type && item.type.indexOf("image/") === 0) {
+      const blob = item.getAsFile();
+      if (blob) attachImage(blob);
+      break;
+    }
+  }
+});
+
+fbSend.addEventListener("click", async () => {
+  const description = fbText.value.trim();
+  if (!description) {
+    fbStatus.textContent = "Please describe the issue or request first.";
+    return;
+  }
+  fbStatus.textContent = "Sending\\u2026";
+  try {
+    const r = await fetch("feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description, screenshot: fbScreenshot }),
+    });
+    const data = await r.json();
+    if (r.ok && data.saved) {
+      fbStatus.textContent = "Thanks \\u2014 sent.";
+      setTimeout(() => {
+        resetFeedbackForm();
+        fbDialog.close();
+      }, 800);
+    } else {
+      fbStatus.textContent = "Could not send \\u2014 try again.";
+    }
+  } catch (err) {
+    fbStatus.textContent = "Could not send \\u2014 try again.";
+  }
+});
+
+fbCancel.addEventListener("click", () => {
+  resetFeedbackForm();
+  fbDialog.close();
+});
 </script>`,
     ` data-mode="${mode}"`,
   );

@@ -36,15 +36,17 @@ test("the persona carries the rules that keep answers grounded", () => {
   assert.match(p, /catalog year/i, "catalog-year discipline");
   assert.match(p, /petitions/i, "the exceptions boundary");
   assert.match(p, /empty/i, "the empty-result rule");
-  assert.doesNotMatch(
+  assert.match(
     p,
     /list-skills|get-skill-docs/,
-    "the advisor no longer retrieves skills at runtime — its guidance lives in tool descriptions, not skill discovery",
+    "the advisor retrieves skills on demand through the host list-skills / " +
+      "get-skill-docs tools (advisor-skills.ts) — the persona must point at them",
   );
 });
 
-// The three skills total ~6,500 tokens. Inlining them would spend a tenth of a
-// 64k window on every turn — the budget the 2026-07-21 payload work reclaimed.
+// The relevant skills total a few thousand tokens. Inlining them would spend
+// real budget on every turn — the budget the 2026-07-21 payload work
+// reclaimed — even when the question does not need them.
 test("skill bodies are NOT inlined into the system prompt", () => {
   const p = loadSystemPrompt();
   assert.ok(p.length < 8000, `system prompt is ${p.length} chars — skills inlined?`);

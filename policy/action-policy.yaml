@@ -630,6 +630,19 @@ data_egress:
       basis: "vLLM on Clemson-owned DGX Spark (gcspark.clemson.edu); on-premises Clemson-managed hardware, reached over the campus network via plaintext HTTP"
       authorized: true
 
+    # Clemson RCD LLM cluster — CAMPUS-HOSTED models at llm.rcd.clemson.edu/v1
+    # (the "/v1" path, NOT the "/openai/v1" passthrough). Clemson-operated,
+    # open-weight models on Clemson infrastructure; content stays inside Clemson
+    # and reaches no third party, so this route is FERPA-cleared for identifiable
+    # student data. Same host and credential as clemson_llm_gateway_openai, but a
+    # DIFFERENT service on a different path — kept as a separate record precisely
+    # because their FERPA status differs.
+    - provider: clemson_rcd_vllm
+      scope: external
+      sends: [subject, body]
+      basis: "Clemson-operated RCD LLM cluster, campus-hosted models at llm.rcd.clemson.edu/v1 over TLS with a Clemson-issued key; content stays within Clemson infrastructure and is not forwarded to any third party"
+      authorized: true
+
   # Model backends that a CONSUMING AGENT (a paired MCP client) may attest to.
   # An agent's per-agent token is minted only if its --provider is listed here
   # with authorized: true, and the server re-checks this on every request. This

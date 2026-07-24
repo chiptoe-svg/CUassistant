@@ -224,8 +224,10 @@ export const ADVISOR_SESSION_TTL_MS = Number(
  * see CHAIN_EGRESS_PROVIDER in advisor-agent.ts. This list is what the egress
  * gate checks; there is no separate provider setting.
  */
+// Private track's provider chain: fp8 (RCD campus, FERPA-OK) first, SGLang-Spark
+// fallback. The OpenAI track chain is fixed in advisor-agent.ts, not env-driven.
 export const ADVISOR_PROVIDER_CHAIN = (
-  process.env.ADVISOR_PROVIDER_CHAIN || "spark,openai"
+  process.env.ADVISOR_PROVIDER_CHAIN || "rcd,spark"
 )
   .split(",")
   .map((s) => s.trim())
@@ -233,6 +235,12 @@ export const ADVISOR_PROVIDER_CHAIN = (
 export const ADVISOR_MODEL = process.env.ADVISOR_MODEL || "qwen3.6-35b-a3b";
 export const ADVISOR_BASE_URL =
   process.env.ADVISOR_BASE_URL || "http://gcspark.clemson.edu:8080/v1";
+/** RCD campus fp8 model (Private track primary), dialed at CLEMSON_LLM_BASE_URL. */
+export const ADVISOR_RCD_MODEL =
+  process.env.ADVISOR_RCD_MODEL || "qwen3.6-35b-a3b-fp8";
+/** OpenAI-track model. gpt-5.5 does tools+reasoning; gpt-5.6-sol must NOT be used here. */
+export const ADVISOR_OPENAI_MODEL =
+  process.env.ADVISOR_OPENAI_MODEL || "gpt-5.5";
 /**
  * Read a positive-number env var, falling back on anything that is not one.
  *

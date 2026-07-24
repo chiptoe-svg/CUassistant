@@ -42,10 +42,13 @@ import {
   ADVISOR_MAX_REQUEST_TOKENS,
   ADVISOR_MAX_ROUNDS,
   ADVISOR_MODEL,
+  ADVISOR_OPENAI_MODEL,
   ADVISOR_PROVIDER_CHAIN,
+  ADVISOR_RCD_MODEL,
   ADVISOR_TEMPERATURE,
   ADVISOR_TURN_TIMEOUT_MS,
   CLEMSON_LLM_API_KEY,
+  CLEMSON_LLM_BASE_URL,
   CLEMSON_LLM_OPENAI_BASE_URL,
   OPENAI_API_KEY,
 } from "./config.js";
@@ -111,6 +114,14 @@ const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, ChainDestination>> = {
   // a direct-to-OpenAI egress that no current policy record describes.
   openai: {
     policyProvider: "clemson_llm_gateway_openai",
+    hosts: ["llm.rcd.clemson.edu"],
+  },
+  // Clemson RCD campus models at llm.rcd.clemson.edu/v1 — the FERPA-OK local
+  // route (distinct from the openai passthrough on /openai/v1, same host). The
+  // gate checks only the host; the FERPA distinction between /v1 and /openai/v1
+  // is carried by which track uses which label (see MODE_CHAINS).
+  rcd: {
+    policyProvider: "clemson_rcd_vllm",
     hosts: ["llm.rcd.clemson.edu"],
   },
 };
@@ -246,6 +257,23 @@ export interface ProviderTarget {
  * off this, so both see the same `baseUrl`.
  */
 function providerModel(name: string): Model<never> | null {
+  if (name === "rcd") {
+    // Same Qwen thinking shape as spark (identical model family), dialed at the
+    // RCD campus /v1 endpoint with the gateway key.
+    return {
+      id: ADVISOR_RCD_MODEL,
+      name: ADVISOR_RCD_MODEL,
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: CLEMSON_LLM_BASE_URL,
+      reasoning: true,
+      compat: { thinkingFormat: "qwen-chat-template" },
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 65536,
+      maxTokens: 8192,
+    } as unknown as Model<never>;
+  }
   if (name === "spark") {
     return {
       id: ADVISOR_MODEL,
@@ -274,7 +302,7 @@ function providerModel(name: string): Model<never> | null {
     } as unknown as Model<never>;
   }
   if (name === "openai") {
-    const id = process.env.ADVISOR_OPENAI_MODEL || "gpt-5.4";
+    const id = ADVISOR_OPENAI_MODEL;
     const registry = getModel("openai", id as never) as unknown as Model<never>;
     // pi-ai's registry HARDCODES baseUrl: https://api.openai.com/v1 for every
     // OpenAI model, and pi-ai dials `model.baseUrl` — it never consults
@@ -310,7 +338,7 @@ function resolveProvider(name: string): ProviderTarget | null {
   // on this path. OPENAI_API_KEY is still accepted as a fallback so an
   // environment that has not been re-provisioned yet keeps working.
   const gatewayKey = CLEMSON_LLM_API_KEY || OPENAI_API_KEY;
-  if (name === "openai" && !gatewayKey) return null;
+  if ((name === "openai" || name === "rcd") && !gatewayKey) return null;
   return {
     name,
     apiKey:

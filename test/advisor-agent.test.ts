@@ -36,7 +36,11 @@ test("the persona carries the rules that keep answers grounded", () => {
   assert.match(p, /catalog year/i, "catalog-year discipline");
   assert.match(p, /petitions/i, "the exceptions boundary");
   assert.match(p, /empty/i, "the empty-result rule");
-  assert.match(p, /list-skills/, "skills are retrieved, not inlined");
+  assert.doesNotMatch(
+    p,
+    /list-skills|get-skill-docs/,
+    "the advisor no longer retrieves skills at runtime — its guidance lives in tool descriptions, not skill discovery",
+  );
 });
 
 // The three skills total ~6,500 tokens. Inlining them would spend a tenth of a

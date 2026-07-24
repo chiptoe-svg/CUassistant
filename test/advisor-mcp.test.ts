@@ -5,6 +5,7 @@ import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/cl
 import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 
 import {
+  ADVISOR_SKILL_TOOL_DENYLIST,
   CREDENTIALED_MCP_PORT,
   advisorMcpServers,
   assertAdvisorMcpUrlSafe,
@@ -140,6 +141,33 @@ function makeDeps(clients: ReturnType<typeof fakeClient>[]) {
     transports,
   };
 }
+
+test("skill-discovery tools are filtered out of the advisor's tool array", async () => {
+  // The advisor never uses skill discovery: list-skills/get-skill-docs (8766)
+  // and the renamed catalog copies list-gc-skills/get-gc-skill-docs (8767) are
+  // authoring aids for Claude Code, not a runtime capability. A server offering
+  // them must contribute its OTHER tools but not these.
+  const serverNames = Object.keys(advisorMcpServers());
+  const denied = [...ADVISOR_SKILL_TOOL_DENYLIST];
+  // Load every denied name onto the first server, alongside a real tool; give
+  // the remaining servers a real tool each.
+  const toolsByServer = serverNames.map((_name, i) =>
+    i === 0
+      ? [...denied.map(fakeTool), fakeTool("real_0")]
+      : [fakeTool(`real_${i}`)],
+  );
+  const clients = toolsByServer.map((tools) => fakeClient({ tools }));
+  const { deps } = makeDeps(clients);
+
+  const bridge = await createAdvisorMcpBridge(deps);
+
+  const names = bridge.tools.map((t) => t.name);
+  for (const d of denied) assert.ok(!names.includes(d), `${d} leaked into the advisor tools`);
+  const expected = serverNames.map((_n, i) => `real_${i}`).sort();
+  assert.deepEqual([...names].sort(), expected);
+
+  await bridge.close();
+});
 
 test("createAdvisorMcpBridge returns the union of tools from each connected server, and nothing else", async () => {
   const serverNames = Object.keys(advisorMcpServers());

@@ -30,14 +30,6 @@ which sections satisfy a requirement slot, do not infer it from course numbers.
 You have no web access. This is deliberate: Clemson course pages are public,
 frequently outdated, and not versioned by catalog year.
 
-## Skills
-
-You have `list-skills` and `get-skill-docs`. Call them when a question touches
-schedule search, room availability, conflict checking, or GC degree
-requirements — the skill documents the exact tool arguments, the standard
-workflow, and the known limitations. Read the skill before guessing at
-arguments.
-
 ## Catalog year
 
 Students are bound to the catalog year they matriculated under, not the current

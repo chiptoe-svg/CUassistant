@@ -5,22 +5,27 @@
 // call (the UI has a stop control), and compaction when a conversation outgrows
 // the window.
 //
-// The tool array is bridge.tools and nothing else. nanoclaw's harness also
-// passes createFetchTool(), createWebSearchTool(), and createCodingTools(); all
-// three are omitted here. "Answers come from the MCP tools or not at all" is
-// therefore structural - the agent has no other capability to reach for -
-// rather than a flag telling it not to. The one exception is propose_schedule,
-// the single host tool: it reaches nothing and writes nothing, it hands
-// validated structured data back to the host for rendering.
+// The tool array is bridge.tools plus a small number of host tools and
+// nothing else. nanoclaw's harness also passes createFetchTool(),
+// createWebSearchTool(), and createCodingTools(); all three are omitted here.
+// "Answers come from the MCP tools or not at all" is therefore structural -
+// the agent has no other capability to reach for - rather than a flag telling
+// it not to. The host tools are propose_schedule (reaches nothing, writes
+// nothing, hands validated structured data back to the host for rendering)
+// and list-skills / get-skill-docs (read-only lookups over the skill index,
+// see advisor-skills.ts).
 //
 // The bridge is built ONCE at startup and shared. Building it per request would
 // pay listTools() latency every turn and churn connections against the MCP
 // servers; all three transports are HTTP, so sharing is safe.
 //
 // Skills are NOT inlined into the system prompt. They are retrieved on demand
-// through the bridge's list-skills / get-skill-docs tools. The three relevant
-// skills total ~6,500 tokens; inlining them would spend a tenth of a 64k window
-// on every turn.
+// through the host's list-skills / get-skill-docs tools (advisor-skills.ts) -
+// the MCP servers' own versions of those tools are filtered out of
+// bridge.tools by ADVISOR_SKILL_TOOL_DENYLIST, so the advisor sees exactly one
+// pair, allowlisted to the advising skills. The relevant skills total a few
+// thousand tokens; inlining them all would spend real budget on every turn
+// even when the question does not need them.
 
 import { mkdtempSync, readFileSync } from "node:fs";
 import { cp, rm } from "node:fs/promises";
@@ -56,6 +61,7 @@ import { log } from "./log.js";
 import { isEgressAuthorized } from "./policy.js";
 import { createAdvisorMcpBridge } from "./advisor-mcp.js";
 import { createProposeScheduleTool } from "./advisor-artifacts.js";
+import { createSkillTools } from "./advisor-skills.js";
 import type { AdvisorMode, AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
@@ -681,14 +687,25 @@ async function runWithProvider(
     // "off" — the harness default — would send enable_thinking:false, which is
     // NOT what the endpoint docs prescribe for this model.
     thinkingLevel: "medium",
-    // bridge.tools plus EXACTLY ONE host tool. propose_schedule writes
-    // nothing — it hands validated structured data back to the host, which
-    // renders the document. Nothing else joins this array; "answers come from
-    // the MCP tools or not at all" stays structural.
+    // bridge.tools plus the host tools. propose_schedule writes nothing — it
+    // hands validated structured data back to the host, which renders the
+    // document. list-skills / get-skill-docs are read-only lookups over the
+    // combined skill index (this repo's skills/ + gc_advisor's); the MCP
+    // versions of those two tools are filtered out of bridge.tools by
+    // ADVISOR_SKILL_TOOL_DENYLIST in advisor-mcp.ts so these host versions —
+    // allowlisted to the advising skills — are the only ones the advisor
+    // sees. Nothing else joins this array; "answers come from the MCP tools
+    // or not at all" stays structural.
     //
-    // Built per turn because it closes over the session it writes the proposed
-    // schedule onto.
-    tools: [...bridge!.tools, createProposeScheduleTool(session)],
+    // propose_schedule is built per turn because it closes over the session
+    // it writes the proposed schedule onto; createSkillTools() has no such
+    // dependency but is built alongside it for symmetry and because it is
+    // cheap (a directory scan happens per call, not per construction).
+    tools: [
+      ...bridge!.tools,
+      createProposeScheduleTool(session),
+      ...createSkillTools(),
+    ],
     systemPrompt: loadSystemPrompt(),
     streamOptions: { cacheRetention: "short" },
     getApiKeyAndHeaders: async () => ({ apiKey: target.apiKey }),

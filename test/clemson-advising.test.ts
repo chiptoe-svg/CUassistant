@@ -334,7 +334,7 @@ async function callSchedule(args: Record<string, unknown>) {
       : (JSON.parse((res.content[0] as { text: string }).text) as {
           total_matched: number;
           sections: Array<{ crn: string; [k: string]: unknown }>;
-          sections_without_meetings: Array<{ crn: string; [k: string]: unknown }>;
+          note?: string;
           applied_constraints: Record<string, unknown>;
         }),
   };
@@ -376,11 +376,11 @@ test("find-sections-by-schedule: a section on a day outside days_within is exclu
   assert.ok(crns.includes("90003"), "Monday-only section 90003 fits days_within 'MW'");
 });
 
-test("find-sections-by-schedule: days_within routes an async (no-meeting) section into sections_without_meetings", async () => {
+test("find-sections-by-schedule: a time/day query excludes async (no-meeting) sections and reports the count in a note", async () => {
   const { body } = await callSchedule({ term: TERM, credits: 3, days_within: "MWF" });
   assert.ok(body);
   const sectionCrns = body!.sections.map((s) => s.crn);
-  assert.ok(!sectionCrns.includes("90007"), "async section must not be in sections");
-  const asyncCrns = body!.sections_without_meetings.map((s) => s.crn);
-  assert.ok(asyncCrns.includes("90007"), "async section must be surfaced, not silently dropped");
+  assert.ok(!sectionCrns.includes("90007"), "async section can't fit a day/time slot — excluded from sections");
+  assert.equal("sections_without_meetings" in body!, false, "no async pile is returned for a time query");
+  assert.match(body!.note ?? "", /async/i, "the excluded async count is surfaced in a note");
 });

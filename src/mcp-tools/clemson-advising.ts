@@ -864,7 +864,11 @@ export const findSectionsBySchedule: McpToolDefinition = {
       }
 
       const matches: Record<string, unknown>[] = [];
-      const sectionsWithoutMeetings: Record<string, unknown>[] = [];
+      // Async/online sections (no meeting rows) can't fit a specific time slot,
+      // so a time/day query EXCLUDES them — but count them for a one-line note
+      // rather than dumping the whole (often huge) pile into the result, which
+      // buries the real time-matches and overwhelms the model.
+      let asyncSkipped = 0;
 
       for (const row of sectionRows) {
         // open_only and avoid_conflict_with apply to every section —
@@ -899,16 +903,11 @@ export const findSectionsBySchedule: McpToolDefinition = {
           meetings,
         };
 
-        // A section with no meeting rows (async/online) can't be confirmed
-        // against a time/day rule — it goes in a separate array rather than
-        // being vacuously included or silently dropped.
+        // A section with no meeting rows (async/online) can't fit a specific
+        // time/day slot. Count it (surfaced as a one-line note) and exclude it
+        // from a time search rather than dumping it into the result.
         if (timeDayConstraintGiven && !hasMeetings) {
-          sectionsWithoutMeetings.push({
-            ...base,
-            note:
-              "No meeting times on file (async/online section) — cannot " +
-              "confirm it satisfies the time/day constraint(s); review manually.",
-          });
+          asyncSkipped++;
           continue;
         }
 
@@ -943,19 +942,29 @@ export const findSectionsBySchedule: McpToolDefinition = {
       }
 
       const totalMatched = matches.length;
-      const sections = matches.slice(0, 60);
+      const CAP = 25;
+      const sections = matches.slice(0, CAP);
+
+      const notes: string[] = [];
+      if (totalMatched > CAP) {
+        notes.push(
+          `${totalMatched} sections fit — showing ${CAP}. Narrow with a subject, exact days, or a tighter time window to see fewer.`,
+        );
+      }
+      if (asyncSkipped > 0) {
+        notes.push(
+          `${asyncSkipped} async/online section(s) also match the credit/seat filters but have no scheduled time, so they can't fit a slot — excluded from this time search.`,
+        );
+      }
 
       const result: Record<string, unknown> = {
         term,
         applied_constraints: appliedConstraints,
         total_matched: totalMatched,
         sections,
-        sections_without_meetings: sectionsWithoutMeetings,
         _source: `Banner schedule ${meta.fetchedAt}`,
       };
-      if (totalMatched > 60) {
-        result.note = `${totalMatched} sections match — showing 60. Add constraints (credits, a tighter time, or a subject) to narrow.`;
-      }
+      if (notes.length) result.note = notes.join(" ");
 
       return okJson(result);
     } finally {

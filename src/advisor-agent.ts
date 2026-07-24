@@ -744,8 +744,14 @@ async function runWithProvider(
     }
     return undefined;
   });
-  harness.on("tool_call", () => {
+  harness.on("tool_call", (event) => {
     toolCalls++;
+    // Tool NAME only — the input can carry student information and must not be
+    // logged. The sequence of names is enough to see a loop/thrash in the log.
+    log.info("advisor tool call", {
+      session: session.id,
+      tool: (event as unknown as { toolName?: string })?.toolName ?? "?",
+    });
     return undefined;
   });
   // Kept as the GRACEFUL bound for the ordinary path: it stops the loop after

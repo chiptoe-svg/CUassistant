@@ -10,6 +10,11 @@ import {
   sessionCount,
   resetSessionsForTest,
   disposeAllSessions,
+  createClient,
+  getActiveSession,
+  switchActive,
+  clearActive,
+  resetClientsForTest,
 } from "../src/advisor-session.ts";
 
 test("a session gets its own working directory and Pi session root", () => {
@@ -101,4 +106,38 @@ test("disposeAllSessions is safe with no live sessions", () => {
 test("createSession defaults to private mode and honors an explicit mode", () => {
   assert.equal(createSession("shared").mode, "private");
   assert.equal(createSession("shared", "openai").mode, "openai");
+});
+
+// --- client two-track layer -------------------------------------------------
+
+test("client owns two tracks; switching preserves both", () => {
+  resetSessionsForTest();
+  resetClientsForTest();
+  const { clientId, session: priv } = createClient("shared", "private");
+  assert.equal(priv.mode, "private");
+  const oai = switchActive(clientId, "openai");
+  assert.equal(oai.mode, "openai");
+  assert.notEqual(oai.id, priv.id);
+  // switching back returns the SAME private session — not disposed
+  assert.equal(switchActive(clientId, "private").id, priv.id);
+});
+
+test("clearActive disposes only the active track", () => {
+  resetSessionsForTest();
+  resetClientsForTest();
+  const { clientId } = createClient("shared", "private");
+  const oai = switchActive(clientId, "openai");
+  switchActive(clientId, "private");
+  const fresh = clearActive(clientId);
+  assert.equal(fresh.mode, "private");
+  assert.equal(switchActive(clientId, "openai").id, oai.id); // openai track untouched
+});
+
+test("getActiveSession returns the active track", () => {
+  resetSessionsForTest();
+  resetClientsForTest();
+  const { clientId } = createClient("shared", "openai");
+  assert.equal(getActiveSession(clientId)?.session.mode, "openai");
+  assert.equal(getActiveSession(undefined), undefined);
+  assert.equal(getActiveSession("nope"), undefined);
 });

@@ -139,3 +139,67 @@ export function disposeAllSessions(): number {
 export function resetSessionsForTest(): void {
   for (const id of [...sessions.keys()]) clearSession(id);
 }
+
+// A client is a browser (identified by the session cookie). It owns up to two
+// sessions — one per mode — and an active mode. Switching swaps `active`; the
+// non-active track persists. The `sessions` map above remains the source of
+// truth for directories, so disposeAllSessions()/sweepExpired() already reap
+// both tracks; this map holds only pointers (no directories of its own).
+interface ClientTracks {
+  advisorId: string;
+  active: AdvisorMode;
+  ids: Partial<Record<AdvisorMode, string>>;
+}
+const clients = new Map<string, ClientTracks>();
+
+function resolveTrack(client: ClientTracks, mode: AdvisorMode): AdvisorSession {
+  // Lazily (re)create — the target track may never have been visited, or an idle
+  // track may have been swept by TTL. Either way the advisor gets a live session.
+  let s = getSession(client.ids[mode]);
+  if (!s) {
+    s = createSession(client.advisorId, mode);
+    client.ids[mode] = s.id;
+  }
+  return s;
+}
+
+export function createClient(
+  advisorId: string,
+  active: AdvisorMode = "private",
+): { clientId: string; session: AdvisorSession } {
+  const clientId = crypto.randomBytes(24).toString("base64url");
+  const session = createSession(advisorId, active);
+  clients.set(clientId, { advisorId, active, ids: { [active]: session.id } });
+  return { clientId, session };
+}
+
+export function getActiveSession(
+  clientId: string | undefined,
+): { session: AdvisorSession } | undefined {
+  if (!clientId) return undefined;
+  const client = clients.get(clientId);
+  if (!client) return undefined;
+  return { session: resolveTrack(client, client.active) };
+}
+
+export function switchActive(clientId: string, mode: AdvisorMode): AdvisorSession {
+  const client = clients.get(clientId);
+  if (!client) throw new Error("unknown advisor client");
+  client.active = mode;
+  return resolveTrack(client, mode);
+}
+
+export function clearActive(clientId: string): AdvisorSession {
+  const client = clients.get(clientId);
+  if (!client) throw new Error("unknown advisor client");
+  const cur = client.ids[client.active];
+  if (cur) clearSession(cur);
+  const s = createSession(client.advisorId, client.active);
+  client.ids[client.active] = s.id;
+  return s;
+}
+
+/** Test seam: drop all client pointers (does not dispose sessions — use resetSessionsForTest for that). */
+export function resetClientsForTest(): void {
+  clients.clear();
+}

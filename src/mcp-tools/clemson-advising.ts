@@ -584,10 +584,12 @@ export const findSectionsBySchedule: McpToolDefinition = {
       "seats' or 'something that fits my open Tue/Thu block.' Unlike " +
       "search-clemson-classes (needs a subject) and find-eligible-sections " +
       "(needs a GC requirement slot), this searches by schedule fit. " +
-      "Requires at least one constraint besides term. Results are capped; " +
-      "if too broad it returns the match count and asks to narrow. Returns " +
-      "CRN, course, title, credits, seats, meetings, instructor; " +
-      "async/no-meeting sections come back separately.",
+      "Requires at least one constraint besides term. Narrow with subject, " +
+      "days_within, a time window, or min_seats (minimum open seats). Sections " +
+      "come back most-open-first. If too many fit, it returns needs_narrowing " +
+      "with the total and a by_subject breakdown INSTEAD of a list — relay the " +
+      "count, suggest a subject area or tighter constraint, and re-run. " +
+      "Async/online sections (no meeting time) are excluded from a time search.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -650,6 +652,12 @@ export const findSectionsBySchedule: McpToolDefinition = {
           type: "boolean",
           description:
             "Optional. If true, excludes sections with seats_available <= 0.",
+        },
+        min_seats: {
+          type: "number",
+          description:
+            "Optional. Only sections with at least this many seats available. " +
+            "Use to narrow a broad result to sections with real room (e.g. 5).",
         },
       },
       required: ["term"],
@@ -723,10 +731,14 @@ export const findSectionsBySchedule: McpToolDefinition = {
         : null;
 
     const openOnly = args.open_only === true;
+    const minSeats =
+      typeof args.min_seats === "number" && Number.isFinite(args.min_seats)
+        ? args.min_seats
+        : undefined;
 
-    // Bounding-constraint check: open_only / exclude_days / avoid_conflict_with
-    // alone don't bound the scan — they only filter within whatever the
-    // bounding constraints already narrowed it to.
+    // Bounding-constraint check: open_only / min_seats / exclude_days /
+    // avoid_conflict_with alone don't bound the scan — they only filter within
+    // whatever the bounding constraints already narrowed it to.
     if (
       credits === undefined &&
       subject === undefined &&
@@ -761,6 +773,7 @@ export const findSectionsBySchedule: McpToolDefinition = {
     if (excludeDaySet) appliedConstraints.exclude_days = [...excludeDaySet];
     if (avoidConflictWith) appliedConstraints.avoid_conflict_with = avoidConflictWith;
     if (openOnly) appliedConstraints.open_only = true;
+    if (minSeats !== undefined) appliedConstraints.min_seats = minSeats;
 
     const schedDb = openScheduleDb(term);
     if (!schedDb)
@@ -871,9 +884,10 @@ export const findSectionsBySchedule: McpToolDefinition = {
       let asyncSkipped = 0;
 
       for (const row of sectionRows) {
-        // open_only and avoid_conflict_with apply to every section —
+        // open_only / min_seats / avoid_conflict_with apply to every section —
         // including zero-meeting (async) ones — and can exclude it outright.
         if (openOnly && row.seats_available <= 0) continue;
+        if (minSeats !== undefined && row.seats_available < minSeats) continue;
         if (conflictingCrns?.has(row.crn)) continue;
 
         const mgMap = meetingMap.get(row.crn);
@@ -941,30 +955,53 @@ export const findSectionsBySchedule: McpToolDefinition = {
         matches.push(base);
       }
 
-      const totalMatched = matches.length;
-      const CAP = 25;
-      const sections = matches.slice(0, CAP);
+      // Most-open sections first — for filling a slot, room to add matters.
+      matches.sort(
+        (a, b) => (b.seats_available as number) - (a.seats_available as number),
+      );
 
-      const notes: string[] = [];
-      if (totalMatched > CAP) {
-        notes.push(
-          `${totalMatched} sections fit — showing ${CAP}. Narrow with a subject, exact days, or a tighter time window to see fewer.`,
-        );
-      }
-      if (asyncSkipped > 0) {
-        notes.push(
-          `${asyncSkipped} async/online section(s) also match the credit/seat filters but have no scheduled time, so they can't fit a slot — excluded from this time search.`,
-        );
+      const totalMatched = matches.length;
+      const NARROW_THRESHOLD = 15;
+      const asyncNote =
+        asyncSkipped > 0
+          ? ` ${asyncSkipped} async/online section(s) also match the credit/seat filters but have no scheduled time, so they can't fit a slot and were excluded.`
+          : "";
+
+      // Too many to list usefully in a chat: return a subject breakdown so the
+      // advisor can ask the student to narrow (with concrete suggestions) rather
+      // than dumping a long list.
+      if (totalMatched > NARROW_THRESHOLD) {
+        const bySubject = new Map<string, number>();
+        for (const m of matches) {
+          const subj = String(m.subject_course ?? "").match(/^[A-Za-z]+/)?.[0] ?? "?";
+          bySubject.set(subj, (bySubject.get(subj) ?? 0) + 1);
+        }
+        const by_subject = [...bySubject.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 12)
+          .map(([subject, count]) => ({ subject, count }));
+        return okJson({
+          term,
+          applied_constraints: appliedConstraints,
+          total_matched: totalMatched,
+          needs_narrowing: true,
+          by_subject,
+          _source: `Banner schedule ${meta.fetchedAt}`,
+          note:
+            `${totalMatched} sections fit — too many to list well. Ask the advisor to narrow first: ` +
+            `a subject area (the most common are in by_subject), tighter days/time, or more open ` +
+            `seats (min_seats).` + asyncNote,
+        });
       }
 
       const result: Record<string, unknown> = {
         term,
         applied_constraints: appliedConstraints,
         total_matched: totalMatched,
-        sections,
+        sections: matches,
         _source: `Banner schedule ${meta.fetchedAt}`,
       };
-      if (notes.length) result.note = notes.join(" ");
+      if (asyncNote) result.note = asyncNote.trim();
 
       return okJson(result);
     } finally {

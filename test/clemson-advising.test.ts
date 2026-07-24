@@ -333,7 +333,9 @@ async function callSchedule(args: Record<string, unknown>) {
       ? null
       : (JSON.parse((res.content[0] as { text: string }).text) as {
           total_matched: number;
-          sections: Array<{ crn: string; [k: string]: unknown }>;
+          sections?: Array<{ crn: string; seats_available?: number; [k: string]: unknown }>;
+          needs_narrowing?: boolean;
+          by_subject?: Array<{ subject: string; count: number }>;
           note?: string;
           applied_constraints: Record<string, unknown>;
         }),
@@ -357,29 +359,36 @@ test("find-sections-by-schedule: credits + days_within + starts_at matches the M
     starts_at: "1220",
   });
   assert.ok(body);
-  const crns = body!.sections.map((s) => s.crn);
+  const crns = (body!.sections ?? []).map((s) => s.crn);
   assert.ok(crns.includes("90020"), "ENGL1010 MWF 12:20 section should match");
 });
 
 test("find-sections-by-schedule: open_only excludes a zero-seat section", async () => {
   const { body } = await callSchedule({ term: TERM, credits: 3, open_only: true });
   assert.ok(body);
-  const crns = body!.sections.map((s) => s.crn);
+  const crns = (body!.sections ?? []).map((s) => s.crn);
   assert.ok(!crns.includes("90006"), "full section 90006 should be excluded by open_only");
 });
 
 test("find-sections-by-schedule: a section on a day outside days_within is excluded", async () => {
   const { body } = await callSchedule({ term: TERM, credits: 3, days_within: "MW" });
   assert.ok(body);
-  const crns = body!.sections.map((s) => s.crn);
+  const crns = (body!.sections ?? []).map((s) => s.crn);
   assert.ok(!crns.includes("90001"), "Friday-only section 90001 does not fit days_within 'MW'");
   assert.ok(crns.includes("90003"), "Monday-only section 90003 fits days_within 'MW'");
+});
+
+test("find-sections-by-schedule: min_seats filters by available seats and is echoed", async () => {
+  const { body } = await callSchedule({ term: TERM, credits: 3, min_seats: 999 });
+  assert.ok(body);
+  assert.equal(body!.applied_constraints.min_seats, 999);
+  assert.equal(body!.total_matched, 0, "no section has 999 open seats — all filtered out");
 });
 
 test("find-sections-by-schedule: a time/day query excludes async (no-meeting) sections and reports the count in a note", async () => {
   const { body } = await callSchedule({ term: TERM, credits: 3, days_within: "MWF" });
   assert.ok(body);
-  const sectionCrns = body!.sections.map((s) => s.crn);
+  const sectionCrns = (body!.sections ?? []).map((s) => s.crn);
   assert.ok(!sectionCrns.includes("90007"), "async section can't fit a day/time slot — excluded from sections");
   assert.equal("sections_without_meetings" in body!, false, "no async pile is returned for a time query");
   assert.match(body!.note ?? "", /async/i, "the excluded async count is surfaced in a note");

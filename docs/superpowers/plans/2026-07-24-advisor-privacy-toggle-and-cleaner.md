@@ -639,10 +639,14 @@ const lastMode = new Map<string, AdvisorMode>();
         const cid = parseCookies(req.headers.cookie)[SESSION_COOKIE];
         const active = getActiveSession(cid);
         return active
-          ? html(res, 200, renderChatPage(active.session.mode))
+          ? html(res, 200, renderChatPage())
           : html(res, 200, renderLoginPage());
       }
 ```
+
+(`renderChatPage()` is still the zero-arg version at this point; Task 6 adds the
+`mode` parameter AND updates this call site to `renderChatPage(active.session.mode)`.
+Keeping it arg-less here keeps Task 5's typecheck green.)
 
 In `/login`, replace `const session = createSession("shared");` (~line 259) and its cookie:
 
@@ -738,7 +742,7 @@ npm run typecheck
 git add src/advisor-server.ts test/advisor-server.test.ts
 git commit -m "feat(advisor): two-track server (/mode swap, OpenAI PII consent gate, /clear active)"
 ```
-Expected: PASS. (If `renderChatPage` still takes zero args at this point, `renderChatPage(active.session.mode)` compiles because the extra arg is ignored until Task 6; keep the call site as written.)
+Expected: PASS. (`GET /` calls the zero-arg `renderChatPage()` here; Task 6 adds the `mode` parameter and updates this call site to pass `active.session.mode`.)
 
 ---
 
@@ -746,6 +750,7 @@ Expected: PASS. (If `renderChatPage` still takes zero args at this point, `rende
 
 **Files:**
 - Modify: `src/advisor-ui.ts` (`renderChatPage(mode)`)
+- Modify: `src/advisor-server.ts` (the `GET /` call site — pass the active mode)
 - Test: `test/advisor-ui.test.ts`
 
 **Interfaces:**
@@ -953,12 +958,20 @@ $("modeToggle").addEventListener("click", async () => {
 
 (This replaces the entire previous `renderChatPage` body. The original inline handlers are folded in above — verify the returned string still contains `#status`, `#answers`, `#composer`, all buttons, and the stop/clear/export/schedule handlers.)
 
-- [ ] **Step 5: Run + typecheck + commit**
+- [ ] **Step 5: Pass the active mode from the server.** In `src/advisor-server.ts`, update the `GET /` handler so the banner reflects the active track at first paint. Change `renderChatPage()` to `renderChatPage(active.session.mode)`:
+
+```ts
+        return active
+          ? html(res, 200, renderChatPage(active.session.mode))
+          : html(res, 200, renderLoginPage());
+```
+
+- [ ] **Step 6: Run + typecheck + commit**
 
 ```bash
 node --import tsx --test test/advisor-ui.test.ts
 npm run typecheck
-git add src/advisor-ui.ts test/advisor-ui.test.ts
+git add src/advisor-ui.ts src/advisor-server.ts test/advisor-ui.test.ts
 git commit -m "feat(advisor): mode banner + toggle, per-track transcript, OpenAI consent dialog"
 ```
 Expected: PASS.

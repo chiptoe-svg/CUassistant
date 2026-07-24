@@ -14,10 +14,13 @@ interface FakeElement {
   className: string;
   disabled: boolean;
   hidden: boolean;
+  scrollTop: number;
+  scrollHeight: number;
   children: FakeElement[];
   listeners: Record<string, (...args: unknown[]) => unknown>;
   dataset: Record<string, string>;
   append(...nodes: FakeElement[]): void;
+  appendChild(node: FakeElement): FakeElement;
   replaceChildren(): void;
   addEventListener(type: string, handler: (...args: unknown[]) => unknown): void;
   focus(): void;
@@ -34,11 +37,22 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     className: "",
     disabled: false,
     hidden: false,
+    scrollTop: 0,
+    scrollHeight: 0,
     children: [],
     listeners: {},
     dataset: {},
     append(...nodes) {
       this.children.push(...nodes);
+      // Mimic the real DOM's read-only, recursively-concatenated textContent
+      // so tests can assert on rendered structure (e.g. a <ul>'s aggregate
+      // text) the same way they'd assert on a real element.
+      this.textContent = this.children.map((c) => c.textContent).join("");
+    },
+    appendChild(node) {
+      this.children.push(node);
+      this.textContent = this.children.map((c) => c.textContent).join("");
+      return node;
     },
     replaceChildren() {
       this.children = [];
@@ -49,6 +63,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     focus() {},
     setAttribute(name, value) {
       if (name === "data-track") this.dataset.track = value;
+      if (name === "data-mode") this.dataset.mode = value;
     },
     querySelectorAll(selector) {
       // Only the one selector shape the script actually uses:
@@ -81,20 +96,30 @@ async function runChatSubmit(responseBody: unknown) {
     export: makeElement(),
     schedule: makeElement({ hidden: true }),
     modebar: makeElement(),
-    modeToggle: makeElement(),
-    modelabel: makeElement(),
+    modePrivate: makeElement(),
+    modeOpenai: makeElement(),
     modenote: makeElement(),
   };
 
   const fetchCalls: Array<[string, unknown]> = [];
+  const documentElement = makeElement({ tagName: "html" });
+  const localStorageStore: Record<string, string> = {};
   const sandbox: Record<string, unknown> = {
     document: {
       getElementById: (id: string) => elements[id],
       createElement: (tag: string) => makeElement({ tagName: tag }),
+      createTextNode: (text: string) => makeElement({ tagName: "#text", textContent: text }),
+      documentElement,
     },
     fetch: async (url: string, opts: unknown) => {
       fetchCalls.push([url, opts]);
       return { ok: true, json: async () => responseBody };
+    },
+    localStorage: {
+      getItem: (k: string) => (Object.hasOwn(localStorageStore, k) ? localStorageStore[k] : null),
+      setItem: (k: string, v: string) => {
+        localStorageStore[k] = v;
+      },
     },
     location: {},
   };
@@ -151,6 +176,57 @@ test("the client fetches chat once and appends the answer exactly once", async (
 
   const answerParagraph = assistantArticles[0].children.find((child) => child.tagName === "p");
   assert.equal(answerParagraph?.textContent, "Room capacity is 30.");
+});
+
+// The agent's answer is untrusted Markdown-ish prose. It must be built as
+// real DOM nodes (never innerHTML) so **bold**, bullets, and pipe tables
+// render as structure instead of raw punctuation noise.
+test("markdown in an agent answer renders as real elements, not raw syntax", async () => {
+  const md =
+    "Here is **the plan**:\n\n" +
+    "- Meet advisor\n" +
+    "- Register\n\n" +
+    "| Course | Seats |\n" +
+    "|---|---|\n" +
+    "| CS101 | 30 |\n";
+  const { elements } = await runChatSubmit({ text: md });
+
+  const assistantArticle = elements.answers.children.find((article) =>
+    article.children.some((child) => child.textContent === "Advisor chat"),
+  );
+  assert.ok(assistantArticle, "expected an assistant article");
+
+  const para = assistantArticle!.children.find((c) => c.tagName === "p");
+  assert.ok(para, "expected a paragraph for the intro line");
+  const strong = para!.children.find((c) => c.tagName === "strong");
+  assert.equal(strong?.textContent, "the plan", "**bold** must become a <strong>, not literal asterisks");
+  assert.doesNotMatch(para!.textContent, /\*\*/, "no raw markdown syntax should leak into text nodes");
+
+  const list = assistantArticle!.children.find((c) => c.tagName === "ul");
+  assert.ok(list, "expected a <ul> for the bullet block");
+  assert.equal(list!.children.length, 2);
+  assert.equal(list!.children[0]?.textContent, "Meet advisor");
+
+  const tableWrap = assistantArticle!.children.find((c) => c.className === "mdtable-wrap");
+  assert.ok(tableWrap, "expected the table wrapped in a scrollable container");
+  const table = tableWrap!.children.find((c) => c.tagName === "table");
+  assert.ok(table, "expected a real <table>, not a literal pipe row");
+});
+
+// A plain answer with no markdown syntax at all must still collapse to a
+// single <p> whose textContent is the whole line (existing test-compat
+// contract), even when it happens to contain a blank line.
+test("a markdown-free multi-line answer still yields plain text nodes", async () => {
+  const text = "Room capacity is\n\n[Stopped — this answer is partial.]";
+  const { elements } = await runChatSubmit({ text, outcome: "aborted" });
+  const article = elements.answers.children.find((a) =>
+    a.children.some((c) => c.tagName === "h2" && String(c.textContent).indexOf("Advisor chat") === 0),
+  );
+  const rendered = article!.children
+    .filter((c) => c.tagName === "p")
+    .map((c) => c.textContent)
+    .join("");
+  assert.equal(rendered, text, "no bold/list/table syntax means textContent must reflect the source exactly");
 });
 
 test("every control has an accessible name", () => {
@@ -224,4 +300,114 @@ test("renderChatPage reflects the mode at first paint and links the cleaner", ()
   assert.match(oai, /data-mode="openai"/);
   assert.match(oai, /de-identified/i);
   assert.match(oai, /needsConsent/); // the consent handler is present in the script
+});
+
+// page() must place the mode attribute on <html> itself (not just a centered
+// column) so the whole-page background can react to it.
+test("page() emits the mode attribute on the <html> element", () => {
+  const oai = renderChatPage("openai");
+  assert.match(oai, /<html lang="en" data-mode="openai">/);
+  const priv = renderChatPage("private");
+  assert.match(priv, /<html lang="en" data-mode="private">/);
+});
+
+// Extracts and runs the chat page's inline <script>, then clicks #modeToggle
+// once. Returns the fake elements/documentElement so tests can assert on the
+// confirm-once gate and how far data-mode propagated.
+async function runModeToggle(
+  opts: {
+    confirmReturns?: boolean;
+    localStorageStore?: Record<string, string>;
+    fetchMode?: string;
+  } = {},
+) {
+  const match = renderChatPage("private").match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(match, "expected an inline <script> in the chat page");
+  const script = match[1];
+
+  const elements: Record<string, FakeElement> = {
+    status: makeElement(),
+    answers: makeElement(),
+    composer: makeElement(),
+    message: makeElement({ value: "" }),
+    send: makeElement(),
+    stop: makeElement({ disabled: true }),
+    clear: makeElement(),
+    export: makeElement(),
+    schedule: makeElement({ hidden: true }),
+    modebar: makeElement(),
+    modePrivate: makeElement(),
+    modeOpenai: makeElement(),
+    modenote: makeElement(),
+  };
+
+  const documentElement = makeElement({ tagName: "html" });
+  const fetchCalls: Array<[string, unknown]> = [];
+  const confirmCalls: string[] = [];
+  const store = opts.localStorageStore ?? {};
+
+  const sandbox: Record<string, unknown> = {
+    document: {
+      getElementById: (id: string) => elements[id],
+      createElement: (tag: string) => makeElement({ tagName: tag }),
+      createTextNode: (text: string) => makeElement({ tagName: "#text", textContent: text }),
+      documentElement,
+    },
+    fetch: async (url: string, reqOpts: unknown) => {
+      fetchCalls.push([url, reqOpts]);
+      return { ok: true, json: async () => ({ mode: opts.fetchMode ?? "openai" }) };
+    },
+    confirm: (msg: string) => {
+      confirmCalls.push(msg);
+      return opts.confirmReturns ?? true;
+    },
+    localStorage: {
+      getItem: (k: string) => (Object.hasOwn(store, k) ? store[k] : null),
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+    },
+    location: {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(script, sandbox);
+
+  await elements.modeOpenai.listeners.click();
+
+  return { elements, fetchCalls, confirmCalls, store, documentElement };
+}
+
+// The OpenAI-switch confirm() used to fire on every toggle. It should only
+// interrupt the advisor the first time per browser; the persistent modebar
+// warning is the standing reminder after that.
+test("switching to OpenAI confirms once, remembers it, and sets data-mode on <html>", async () => {
+  const store: Record<string, string> = {};
+  const first = await runModeToggle({ confirmReturns: true, localStorageStore: store });
+
+  assert.equal(first.confirmCalls.length, 1, "first switch to OpenAI must confirm");
+  assert.equal(store["advisor.openaiAck"], "1", "OK must persist the acknowledgement");
+  assert.equal(first.fetchCalls.length, 1, "an accepted confirm must proceed to switch modes");
+  assert.equal(first.fetchCalls[0][0], "mode");
+  assert.equal(
+    first.documentElement.dataset.mode,
+    "openai",
+    "the whole page's data-mode must follow the switch, not just the modebar",
+  );
+});
+
+test("cancelling the first-time OpenAI confirm does not switch and does not remember", async () => {
+  const store: Record<string, string> = {};
+  const cancelled = await runModeToggle({ confirmReturns: false, localStorageStore: store });
+
+  assert.equal(cancelled.confirmCalls.length, 1);
+  assert.equal(store["advisor.openaiAck"], undefined, "Cancel must not set the acknowledgement flag");
+  assert.equal(cancelled.fetchCalls.length, 0, "cancelling at the confirm must not switch modes");
+});
+
+test("once acknowledged, later switches to OpenAI do not confirm again", async () => {
+  const store: Record<string, string> = { "advisor.openaiAck": "1" };
+  const again = await runModeToggle({ confirmReturns: true, localStorageStore: store });
+
+  assert.equal(again.confirmCalls.length, 0, "already acknowledged in this browser — no dialog");
+  assert.equal(again.fetchCalls.length, 1, "the switch itself still proceeds");
 });

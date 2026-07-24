@@ -7,10 +7,22 @@
 // Client-side only. The raw document is parsed here; only the sanitized module
 // output ever leaves this tab, by copy or download.
 
-import * as pdfjsLib from "./vendor/pdfjs/pdf.mjs";
 import { degreeWorksModule } from "./modules/degree-works.js";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.mjs";
+// pdf.js is loaded LAZILY, on the first PDF, not at module top level. A static
+// import that throws (pdfjs 4.x needs a very recent browser, e.g.
+// Promise.withResolvers) would kill this whole script before initModules()
+// runs — leaving an empty module dropdown and a dead page. Deferring it keeps
+// the registry, the module selector, and the paste-text path working even if
+// PDF support is unavailable; a PDF load then fails on its own with a message.
+let _pdfjs = null;
+async function pdfjs() {
+  if (!_pdfjs) {
+    _pdfjs = await import("./vendor/pdfjs/pdf.mjs");
+    _pdfjs.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.mjs";
+  }
+  return _pdfjs;
+}
 
 const MODULES = [degreeWorksModule]; // add a module object here to add a duty
 
@@ -44,7 +56,8 @@ function syncModuleUi() {
 }
 
 async function extractPdfText(buffer) {
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const lib = await pdfjs();
+  const pdf = await lib.getDocument({ data: buffer }).promise;
   const lines = [];
   for (let p = 1; p <= pdf.numPages; p += 1) {
     const page = await pdf.getPage(p);

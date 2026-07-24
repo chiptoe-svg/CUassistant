@@ -48,6 +48,13 @@ const STYLE = `
           letter-spacing:.05em; color:#8a8a8a; margin:0 0 .1rem; }
   #answers p { margin:.3rem 0; }
   #answers article.you .msg { font-style:italic; color:#555; margin:.1rem 0 .3rem; }
+  .dots { display:inline-flex; gap:.35rem; padding:.35rem 0; }
+  .dots span { width:.5rem; height:.5rem; border-radius:50%; background:#9a9a9a;
+               animation:blink 1.2s infinite ease-in-out both; }
+  .dots span:nth-child(2) { animation-delay:.2s; }
+  .dots span:nth-child(3) { animation-delay:.4s; }
+  @keyframes blink { 0%,80%,100% { opacity:.2; transform:scale(.7); }
+                     40% { opacity:1; transform:scale(1); } }
   #answers ul, #answers ol { padding-left:1.4rem; }
   #answers table { border-collapse:collapse; width:100%; }
   #answers th, #answers td { border:1px solid #8886; padding:.35rem .6rem; text-align:left; }
@@ -365,6 +372,28 @@ function addAnswer(role, text) {
   }
   answers.append(art);
   answers.scrollTop = answers.scrollHeight;   // keep the newest turn in view
+  return art;
+}
+
+// An animated "typing" placeholder shown while the turn runs, so the UI never
+// looks frozen. Replaced by the real answer (or removed on error/cancel).
+function addThinking() {
+  const art = document.createElement("article");
+  art.dataset.track = uiMode;
+  art.className = "agent thinking";
+  const h = document.createElement("h2");
+  h.className = "role"; h.textContent = "Advisor chat";
+  const dots = document.createElement("div");
+  dots.className = "dots";
+  dots.append(
+    document.createElement("span"),
+    document.createElement("span"),
+    document.createElement("span"),
+  );
+  art.append(h, dots);
+  answers.append(art);
+  answers.scrollTop = answers.scrollHeight;
+  return art;
 }
 
 // POST a message; transparently handle the OpenAI PII 409. Returns the final
@@ -397,14 +426,24 @@ $("composer").addEventListener("submit", async (e) => {
   const message = $("message").value.trim();
   if (!message) return;
   $("send").disabled = true; $("stop").disabled = false;
-  status.textContent = "Checking the schedule\\u2026";
+  // Optimistic: move the question into the pane and clear the box right away,
+  // then show an animated "thinking" indicator so it never looks frozen.
+  const you = addAnswer("You", message);
+  $("message").value = "";
+  const thinking = addThinking();
+  status.textContent = "Thinking\\u2026";
   try {
     const r = await send(message, false);
-    if (!r) return;                      // cancelled at consent — leave text as-is
+    if (!r) {
+      // Consent cancelled — roll back the optimistic echo and restore the text.
+      thinking.remove();
+      you.remove();
+      $("message").value = message;
+      return;
+    }
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "request failed");
-    addAnswer("You", message);           // committed to sending; reflect it now
-    $("message").value = "";
+    thinking.remove();
     if (data.schedule) $("schedule").hidden = false;
     if (data.outcome === "aborted") {
       addAnswer("Advisor chat \\u2014 stopped", data.text);
@@ -414,6 +453,7 @@ $("composer").addEventListener("submit", async (e) => {
       status.textContent = "Response ready.";
     }
   } catch (err) {
+    thinking.remove();
     status.textContent = "Something went wrong. Please try again.";
   } finally {
     $("send").disabled = false; $("stop").disabled = true; $("message").focus();

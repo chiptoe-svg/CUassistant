@@ -17,6 +17,7 @@ interface FakeElement {
   scrollTop: number;
   scrollHeight: number;
   children: FakeElement[];
+  parent?: FakeElement;
   listeners: Record<string, (...args: unknown[]) => unknown>;
   dataset: Record<string, string>;
   append(...nodes: FakeElement[]): void;
@@ -43,6 +44,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     listeners: {},
     dataset: {},
     append(...nodes) {
+      for (const n of nodes) n.parent = this;
       this.children.push(...nodes);
       // Mimic the real DOM's read-only, recursively-concatenated textContent
       // so tests can assert on rendered structure (e.g. a <ul>'s aggregate
@@ -50,6 +52,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
       this.textContent = this.children.map((c) => c.textContent).join("");
     },
     appendChild(node) {
+      node.parent = this;
       this.children.push(node);
       this.textContent = this.children.map((c) => c.textContent).join("");
       return node;
@@ -72,7 +75,13 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
       const track = match?.[1];
       return this.children.filter((c) => (track ? c.dataset.track === track : true));
     },
-    remove() {},
+    remove() {
+      const kids = this.parent?.children;
+      if (kids) {
+        const i = kids.indexOf(this);
+        if (i >= 0) kids.splice(i, 1);
+      }
+    },
     ...overrides,
   };
 }

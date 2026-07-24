@@ -892,3 +892,14 @@ test("POST /feedback with a description and screenshot saves both to disk", asyn
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// The course hover-card lookup is gated like every other non-login route, and
+// a path that cannot be a course code 404s without touching the catalog DB.
+test("GET /course requires auth and 404s for a non-code path", async () => {
+  const noauth = await fetch(`${base}/course/GC4061`);
+  assert.equal(noauth.status, 401, "an unauthenticated lookup must be rejected");
+
+  const cookie = cookieFrom(await login());
+  const junk = await fetch(`${base}/course/not-a-code`, { headers: { cookie } });
+  assert.equal(junk.status, 404, "junk that never normalizes to a code is a clean 404");
+});

@@ -53,6 +53,7 @@ import {
 import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
 import { renderSchedule } from "./advisor-artifacts.js";
 import { flagLikelyPrivate } from "./advisor-pii-detect.js";
+import { lookupCourse } from "./advisor-catalog.js";
 
 const MAX_BODY_BYTES = 5_000_000;
 
@@ -342,6 +343,18 @@ export function createAdvisorServer(
       const active = getActiveSession(cid);
       if (!active) return json(res, 401, { error: "session expired" });
       const session = active.session;
+
+      // Course hover-card lookup. The client linkifies course codes in answers
+      // and fetches title/credits/description here on hover. Public catalog data
+      // (read-only gc_advisor.db), so it rides the session cookie but carries no
+      // student information.
+      if (method === "GET" && url.pathname.startsWith("/course/")) {
+        const raw = decodeURIComponent(url.pathname.slice("/course/".length));
+        const course = lookupCourse(raw);
+        return course
+          ? json(res, 200, course)
+          : json(res, 404, { error: "no catalog entry" });
+      }
 
       if (method === "GET" && url.pathname === "/cleaner") {
         // Redirect to the trailing-slash form so the page's RELATIVE asset URLs

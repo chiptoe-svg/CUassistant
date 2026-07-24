@@ -159,6 +159,23 @@ test("login page posts to login and shows an error when given one", () => {
   assert.match(renderLoginPage("Incorrect password."), /Incorrect password\./);
 });
 
+// Course codes in an answer become hover-card links, but only real 4-digit
+// codes — a 5-digit CRN or a 3-digit token must stay plain text.
+test("course codes in an answer are linkified; CRNs and non-codes are not", async () => {
+  const { elements } = await runChatSubmit({ text: "GC 4061 pairs with CS101, not CRN 80836." });
+  const article = elements.answers.children.find((a) =>
+    a.children.some((c) => c.tagName === "h2" && String(c.textContent).indexOf("Advisor chat") === 0),
+  );
+  const para = article!.children.find((c) => c.tagName === "p");
+  const links = para!.children.filter((c) => c.tagName === "a");
+  assert.equal(links.length, 1, "exactly one course link — GC 4061 only");
+  assert.equal(links[0].className, "course");
+  assert.equal(links[0].dataset.code, "GC 4061");
+  assert.equal(links[0].textContent, "GC 4061");
+  // The rendered text still reads exactly as written — nothing dropped or dup'd.
+  assert.equal(para!.textContent, "GC 4061 pairs with CS101, not CRN 80836.");
+});
+
 // Live regions only announce changes detected AFTER they are in the
 // accessibility tree, so both must be present and empty in the initial HTML.
 test("both live regions are mounted without conversation content", () => {

@@ -88,6 +88,20 @@ const STYLE = `
   #examples li:last-child { border-bottom:0; }
   #answers[data-track="private"]:has(article[data-track="private"]) #examples,
   #answers[data-track="openai"]:has(article[data-track="openai"]) #examples { display:none; }
+  /* Course-code links + hover card. The dotted underline signals "hover for
+     info" without shouting; the card is a fixed-position popover on <body>. */
+  a.course { color:inherit; cursor:help; text-decoration:underline;
+             text-decoration-style:dotted; text-decoration-color:#3a7bd5;
+             text-underline-offset:2px; }
+  a.course:hover, a.course:focus { text-decoration-style:solid; outline:none; }
+  #coursecard { position:fixed; z-index:50; max-width:22rem; max-height:15rem;
+                overflow:auto; background:Canvas; color:CanvasText;
+                border:1px solid #8886; border-radius:8px; padding:.55rem .7rem;
+                box-shadow:0 6px 24px #0004; font-size:.9rem; line-height:1.4; }
+  #coursecard .cc-head { font-size:.95rem; }
+  #coursecard .cc-cr { color:#888; font-weight:400; }
+  #coursecard .cc-title { font-weight:600; margin:.15rem 0 .35rem; }
+  #coursecard .cc-desc { margin:0; }
 
   #fbDialog { width:min(34rem, 92vw); border:1px solid #8886; border-radius:10px;
               padding:1.25rem 1.4rem; color:inherit; }
@@ -252,6 +266,33 @@ function splitBlocks(text) {
   return blocks;
 }
 
+// Course-code linkifier. Matches tokens like "GC 4061" (2-4 uppercase letters,
+// an optional space, then exactly 4 digits) so they can carry a hover card. The
+// (?!\\d) tail keeps 5-digit CRNs from matching, and a section suffix like
+// "GC 4061-002" linkifies only the "GC 4061" part.
+const COURSE_RE = /([A-Z]{2,4})[ \\u00a0]?(\\d{4})(?!\\d)/g;
+
+// Appends a plain-text run to parent, wrapping any course codes in it as
+// <a class="course" data-code="GC 4061"> links. Everything else is a text node,
+// so this stays XSS-safe. Used everywhere a raw text run would be appended.
+function appendText(parent, str) {
+  COURSE_RE.lastIndex = 0;
+  let last = 0, m;
+  while ((m = COURSE_RE.exec(str)) !== null) {
+    const before = m.index === 0 ? "" : str.charAt(m.index - 1);
+    if (before && /[A-Za-z0-9]/.test(before)) continue;   // mid-token, not a code
+    if (m.index > last) parent.append(document.createTextNode(str.slice(last, m.index)));
+    const a = document.createElement("a");
+    a.className = "course";
+    a.href = "#";
+    a.dataset.code = m[1] + " " + m[2];   // normalized "SUBJ 1234" for lookup
+    a.textContent = m[0];                 // display keeps the original spacing
+    parent.append(a);
+    last = m.index + m[0].length;
+  }
+  if (last < str.length) parent.append(document.createTextNode(str.slice(last)));
+}
+
 // Appends **bold** and \\u0060code\\u0060 spans (and plain text runs) as
 // child nodes of parent, using only createTextNode/createElement.
 function appendInline(parent, text) {
@@ -264,21 +305,21 @@ function appendInline(parent, text) {
     if (b !== -1 && (c === -1 || b < c)) { idx = b; kind = "b"; }
     else if (c !== -1) { idx = c; kind = "c"; }
     if (idx === -1) {
-      parent.append(document.createTextNode(text.slice(i)));
+      appendText(parent, text.slice(i));
       return;
     }
     if (kind === "b") {
       const end = text.indexOf("**", idx + 2);
-      if (end === -1) { parent.append(document.createTextNode(text.slice(i))); return; }
-      if (idx > i) parent.append(document.createTextNode(text.slice(i, idx)));
+      if (end === -1) { appendText(parent, text.slice(i)); return; }
+      if (idx > i) appendText(parent, text.slice(i, idx));
       const strong = document.createElement("strong");
-      strong.textContent = text.slice(idx + 2, end);
+      appendText(strong, text.slice(idx + 2, end));   // course codes link inside **bold** too
       parent.append(strong);
       i = end + 2;
     } else {
       const end = text.indexOf(BT, idx + 1);
-      if (end === -1) { parent.append(document.createTextNode(text.slice(i))); return; }
-      if (idx > i) parent.append(document.createTextNode(text.slice(i, idx)));
+      if (end === -1) { appendText(parent, text.slice(i)); return; }
+      if (idx > i) appendText(parent, text.slice(i, idx));
       const codeEl = document.createElement("code");
       codeEl.textContent = text.slice(idx + 1, end);
       parent.append(codeEl);
@@ -352,7 +393,7 @@ function renderParagraph(container, lines) {
 function renderMarkdown(container, text) {
   if (!hasMarkdown(text)) {
     const p = document.createElement("p");
-    p.textContent = text;
+    appendText(p, text);   // still linkifies course codes in an otherwise-plain answer
     container.append(p);
     return;
   }
@@ -581,6 +622,104 @@ async function switchMode(next) {
 }
 $("modePrivate").addEventListener("click", () => switchMode("private"));
 $("modeOpenai").addEventListener("click", () => switchMode("openai"));
+
+// ---- Course hover cards --------------------------------------------------
+// Course codes in answers are linkified (a.course, data-code). Hovering or
+// focusing one shows a small card with the catalog title, credits, and
+// description \\u2014 fetched read-only from GET /course/<code> and cached per
+// code. The card content comes from the catalog DB, never the model, and is
+// inserted with textContent only (XSS-safe).
+const courseCache = new Map();
+let courseCard = null, courseHideTimer = null;
+
+function ensureCourseCard() {
+  if (courseCard) return courseCard;
+  courseCard = document.createElement("div");
+  courseCard.id = "coursecard";
+  courseCard.hidden = true;
+  courseCard.addEventListener("mouseenter", () => {
+    if (courseHideTimer) { clearTimeout(courseHideTimer); courseHideTimer = null; }
+  });
+  courseCard.addEventListener("mouseleave", scheduleHideCard);
+  document.body.append(courseCard);
+  return courseCard;
+}
+
+function scheduleHideCard() {
+  if (courseHideTimer) clearTimeout(courseHideTimer);
+  courseHideTimer = setTimeout(() => { if (courseCard) courseCard.hidden = true; }, 150);
+}
+
+function positionCard(card, rect) {
+  const gap = 6, margin = 12;
+  card.style.top = (rect.bottom + gap) + "px";
+  let left = rect.left;
+  const maxLeft = document.documentElement.clientWidth - card.offsetWidth - margin;
+  if (left > maxLeft) left = Math.max(margin, maxLeft);
+  card.style.left = left + "px";
+}
+
+function fillCard(card, data) {
+  card.replaceChildren();
+  const head = document.createElement("div");
+  head.className = "cc-head";
+  const code = document.createElement("strong");
+  code.textContent = data.code;
+  head.append(code);
+  if (data.credits) {
+    const cr = document.createElement("span");
+    cr.className = "cc-cr";
+    cr.textContent = " \\u00b7 " + data.credits + " cr";
+    head.append(cr);
+  }
+  card.append(head);
+  if (data.title) {
+    const t = document.createElement("div");
+    t.className = "cc-title";
+    t.textContent = data.title;
+    card.append(t);
+  }
+  const d = document.createElement("p");
+  d.className = "cc-desc";
+  d.textContent = data.description || "No catalog description on file.";
+  card.append(d);
+}
+
+function loadCourse(code) {
+  if (courseCache.has(code)) return courseCache.get(code);
+  const p = fetch("course/" + encodeURIComponent(code))
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  courseCache.set(code, p);
+  return p;
+}
+
+async function showCourseCard(link) {
+  const code = link.dataset.code;
+  if (!code) return;
+  if (courseHideTimer) { clearTimeout(courseHideTimer); courseHideTimer = null; }
+  const card = ensureCourseCard();
+  card.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "cc-desc";
+  loading.textContent = code + " \\u2026";
+  card.append(loading);
+  card.hidden = false;
+  positionCard(card, link.getBoundingClientRect());
+  const data = await loadCourse(code);
+  if (card.hidden) return;                 // pointer already left before it loaded
+  fillCard(card, data || { code: code, description: "No catalog entry found." });
+  positionCard(card, link.getBoundingClientRect());
+}
+
+function courseLinkFrom(e) {
+  return e.target && e.target.closest ? e.target.closest("a.course") : null;
+}
+answers.addEventListener("mouseover", (e) => { const l = courseLinkFrom(e); if (l) showCourseCard(l); });
+answers.addEventListener("mouseout", (e) => { if (courseLinkFrom(e)) scheduleHideCard(); });
+answers.addEventListener("focusin", (e) => { const l = courseLinkFrom(e); if (l) showCourseCard(l); });
+answers.addEventListener("focusout", (e) => { if (courseLinkFrom(e)) scheduleHideCard(); });
+answers.addEventListener("click", (e) => { const l = courseLinkFrom(e); if (l) { e.preventDefault(); showCourseCard(l); } });
 
 // ---- Feature request / feedback -----------------------------------------
 // Local-only: the screenshot never leaves this server (see POST /feedback).

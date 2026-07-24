@@ -29,10 +29,14 @@ export interface TurnRecord {
   at: number;
 }
 
+export type AdvisorMode = "private" | "openai";
+
 export interface AdvisorSession {
   id: string;
   /** Always "shared" until Phase 2 wires per-advisor identity. */
   advisorId: string;
+  /** Private routes to FERPA-OK local models; OpenAI routes de-identified data to gpt-5.5. */
+  mode: AdvisorMode;
   workDir: string;
   piSessionRoot: string;
   history: TurnRecord[];
@@ -49,11 +53,15 @@ export interface AdvisorSession {
 
 const sessions = new Map<string, AdvisorSession>();
 
-export function createSession(advisorId: string): AdvisorSession {
+export function createSession(
+  advisorId: string,
+  mode: AdvisorMode = "private",
+): AdvisorSession {
   const id = crypto.randomBytes(24).toString("base64url");
   const session: AdvisorSession = {
     id,
     advisorId,
+    mode,
     workDir: mkdtempSync(path.join(tmpdir(), "advisor-work-")),
     piSessionRoot: mkdtempSync(path.join(tmpdir(), "advisor-pi-")),
     history: [],

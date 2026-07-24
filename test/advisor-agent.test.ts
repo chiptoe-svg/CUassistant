@@ -20,6 +20,7 @@ import {
   __dialledHostForTest,
   __resolveProviderForTest,
   __runWithProviderForTest,
+  advisorChainForMode,
   assertAdvisorChainAuthorized,
   assertAdvisorTargetAuthorized,
   detectMalformedToolCall,
@@ -239,6 +240,7 @@ function fakeSession(): AdvisorSession {
   return {
     id: "test-session",
     advisorId: "shared",
+    mode: "private",
     workDir: mkdtempSync(path.join(tmpdir(), "advisor-test-work-")),
     piSessionRoot: mkdtempSync(path.join(tmpdir(), "advisor-test-pi-")),
     history: [],
@@ -1276,4 +1278,9 @@ test("rcd chain entry is egress-authorized and dials the RCD campus host", () =>
 
 test("rcd resolves the RCD campus host", () => {
   assert.equal(__dialledHostForTest("rcd"), "llm.rcd.clemson.edu");
+});
+
+test("advisorChainForMode: private is rcd,spark and openai is openai-only", () => {
+  assert.deepEqual([...advisorChainForMode("private")], ["rcd", "spark"]);
+  assert.deepEqual([...advisorChainForMode("openai")], ["openai"]);
 });

@@ -56,7 +56,7 @@ import { log } from "./log.js";
 import { isEgressAuthorized } from "./policy.js";
 import { createAdvisorMcpBridge } from "./advisor-mcp.js";
 import { createProposeScheduleTool } from "./advisor-artifacts.js";
-import type { AdvisorSession } from "./advisor-session.js";
+import type { AdvisorMode, AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
 
@@ -125,6 +125,19 @@ const CHAIN_EGRESS_PROVIDER: Readonly<Record<string, ChainDestination>> = {
     hosts: ["llm.rcd.clemson.edu"],
   },
 };
+
+// The provider chain is a function of the session's mode. Private never lists
+// the `openai` label, so a Private turn is structurally unable to dial the OpenAI
+// passthrough — that is what makes the "Private" claim honest. OpenAI has no
+// fallback: a failure surfaces rather than silently retrying elsewhere.
+const MODE_CHAINS: Readonly<Record<AdvisorMode, readonly string[]>> = {
+  private: ADVISOR_PROVIDER_CHAIN,
+  openai: ["openai"],
+};
+
+export function advisorChainForMode(mode: AdvisorMode): readonly string[] {
+  return MODE_CHAINS[mode];
+}
 
 /**
  * The host pi-ai will dial for a model, read off the MODEL OBJECT.
@@ -223,8 +236,12 @@ export function assertAdvisorTargetAuthorized(
 export async function initAdvisorTools(): Promise<void> {
   // Fail at startup on a misconfigured chain rather than at the first turn.
   // runAdvisorTurn re-checks each entry it actually reaches; this is the early
-  // warning, not the gate.
-  assertAdvisorChainAuthorized(ADVISOR_PROVIDER_CHAIN);
+  // warning, not the gate. Both mode chains are asserted — an unauthorized
+  // OpenAI-track entry must not slip through because only the private chain
+  // was checked.
+  for (const chain of Object.values(MODE_CHAINS)) {
+    assertAdvisorChainAuthorized(chain);
+  }
   bridge = await createAdvisorMcpBridge();
   log.info("advisor tools ready", { tools: bridge.tools.length });
 }
@@ -800,6 +817,7 @@ async function runWithProvider(
     log.info("advisor turn complete", {
       session: session.id,
       advisorId: session.advisorId,
+      mode: session.mode,
       provider: target.name,
       model: target.model.id,
       rounds,
@@ -965,7 +983,7 @@ export async function runAdvisorTurn(
   if (!bridge) throw new Error("advisor tools not initialised");
 
   const errors: string[] = [];
-  for (const name of ADVISOR_PROVIDER_CHAIN) {
+  for (const name of MODE_CHAINS[session.mode]) {
     // Resolve FIRST, then gate. The gate has to see the model object that pi-ai
     // will dial — it reads `model.baseUrl` and nothing else — so checking before
     // the target exists would be checking a configuration string instead of the

@@ -97,3 +97,8 @@ test("disposeAllSessions is safe with no live sessions", () => {
   resetSessionsForTest();
   assert.equal(disposeAllSessions(), 0);
 });
+
+test("createSession defaults to private mode and honors an explicit mode", () => {
+  assert.equal(createSession("shared").mode, "private");
+  assert.equal(createSession("shared", "openai").mode, "openai");
+});

@@ -1010,4 +1010,131 @@ export const findSectionsBySchedule: McpToolDefinition = {
   },
 };
 
-registerTools([findEligibleSections, findSectionsBySchedule]);
+// ---------------------------------------------------------------------------
+// get-program-requirements — surfaces the requirement_rule rows in
+// gc_advisor.db for any program (minor, certificate, or the GC BS), by name.
+// Unlike find-eligible-sections/find-sections-by-schedule this does NOT open
+// a Banner schedule snapshot — it's a pure read of the catalog DB, so the GC
+// program-loaded restriction that gates those tools doesn't apply here: any
+// of the 133 minors/certificates plus the GC BS can be looked up.
+// ---------------------------------------------------------------------------
+
+interface ProgramRow {
+  id: number;
+  name: string;
+  year: string;
+}
+
+export const getProgramRequirements: McpToolDefinition = {
+  operation: "clemson.gc_program_requirements",
+  tool: {
+    name: "get-program-requirements",
+    description:
+      "Get the requirement rules a Clemson MINOR or CERTIFICATE requires " +
+      "(total credits, required courses, elective rules) from the catalog. " +
+      "Use for 'what does the Accounting minor require?'. Partial/misspelled " +
+      "names return candidate program names to pick from. NOTE: only " +
+      "Graphic Communications, BS has a full semester-by-semester plan — use " +
+      "get-gc-program-plan for that; other full majors are not loaded.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "Program name, e.g. 'Accounting Minor' or 'Cybersecurity Minor'. " +
+            "A partial name returns candidates.",
+        },
+        year: {
+          type: "string",
+          description:
+            "Optional catalog year, e.g. '2025-2026'. Defaults to the latest.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("clemson.gc_program_requirements");
+    } catch (e) {
+      return permissionErr(e);
+    }
+
+    const name = args.name as string | undefined;
+    if (!name || typeof name !== "string" || !name.trim())
+      return err("name is required");
+
+    const year =
+      typeof args.year === "string" && args.year ? args.year : undefined;
+
+    let db: Database.Database;
+    try {
+      db = new Database(GC_ADVISOR_DB, { readonly: true });
+    } catch {
+      return err(
+        `Could not open the Clemson catalog database (gc_advisor.db). It may not be loaded yet.`,
+      );
+    }
+
+    try {
+      const exactRow = db
+        .prepare(
+          `SELECT p.id, p.name, cy.label AS year FROM program p
+           JOIN catalog_year cy ON p.catalog_year_id = cy.id
+           WHERE LOWER(p.name) = LOWER(?) ${year ? "AND cy.label = ?" : ""}
+           ORDER BY cy.label DESC LIMIT 1`,
+        )
+        .get(...(year ? [name, year] : [name])) as ProgramRow | undefined;
+
+      if (!exactRow) {
+        const candidates = db
+          .prepare(
+            "SELECT DISTINCT name FROM program WHERE name LIKE ? ORDER BY name LIMIT 20",
+          )
+          .all(`%${name}%`) as { name: string }[];
+
+        if (candidates.length > 0) {
+          return okJson({
+            query: name,
+            candidates: candidates.map((c) => c.name),
+            note: "No exact match — pick one of these program names and call again.",
+          });
+        }
+
+        return err(
+          `No Clemson program matches "${name}". Check the spelling, or ask for a minor/certificate by its full name.`,
+        );
+      }
+
+      const ruleRows = db
+        .prepare("SELECT slot_type, rule FROM requirement_rule WHERE program_id = ?")
+        .all(exactRow.id) as { slot_type: string; rule: string }[];
+
+      const requirements: Record<string, unknown>[] = [];
+      for (const row of ruleRows) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(row.rule) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        requirements.push({ slot_type: row.slot_type, ...parsed });
+      }
+
+      return okJson({
+        program: exactRow.name,
+        catalog_year: exactRow.year,
+        requirements,
+        _source: "Clemson Online Catalog (gc_advisor)",
+        note:
+          "Minor/certificate requirement rules. Only Graphic Communications, " +
+          "BS has a full semester-by-semester plan (get-gc-program-plan).",
+      });
+    } finally {
+      db.close();
+    }
+  },
+};
+
+registerTools([findEligibleSections, findSectionsBySchedule, getProgramRequirements]);

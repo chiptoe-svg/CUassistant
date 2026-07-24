@@ -20,7 +20,7 @@ const STYLE = `
   }
 
   #modebar { flex: 0 0 auto; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
-             padding:.5rem 1rem; border-bottom:1px solid #8886; }
+             padding:.7rem 1.75rem; border-bottom:1px solid #8886; }
   #modebar h1 { font-size:1rem; margin:0; font-weight:700; }
   #modebar[data-mode="private"] { background:#e6f4ee; border-color:#2f6f5e; }
   #modebar[data-mode="openai"]  { background:#f2a13d; border-color:#8a4c00; }
@@ -40,7 +40,7 @@ const STYLE = `
   #modeOpenai[aria-pressed="true"]  { background:#d17b1e; color:#fff; }
   #modebar a.cleanerlink { margin-left:.85rem; font-size:.9rem; }
 
-  #answers { flex:1 1 auto; overflow-y:auto; min-height:0; padding:.75rem 1rem 0; }
+  #answers { flex:1 1 auto; overflow-y:auto; min-height:0; padding:1rem 1.75rem 0; }
   #answers article { padding:.15rem 0; }
   #answers article.you { margin-left:2.25rem; }
   #answers article.agent { padding-bottom:.6rem; border-bottom:1px solid #8882; margin-bottom:.5rem; }
@@ -54,14 +54,18 @@ const STYLE = `
   .mdtable-wrap { overflow-x:auto; }
   code { font-family: ui-monospace, monospace; background:#8882; padding:.1rem .3rem; border-radius:4px; }
 
-  #status { flex:0 0 auto; min-height:1.25rem; padding:0 1rem; color:#595959; font-size:.9rem; }
+  #status { flex:0 0 auto; min-height:1.25rem; padding:0 1.75rem; color:#595959; font-size:.9rem; }
 
-  #composer { flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:flex-end; gap:.5rem;
-              padding:.75rem 1rem 1rem; border-top:1px solid #8886; }
+  #composer { flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:flex-end; gap:.6rem;
+              padding:.9rem 1.75rem 1.1rem; border-top:1px solid #8886; }
   #composer label { flex-basis:100%; font-weight:600; margin-bottom:.25rem; }
-  #composer textarea { flex:1 1 auto; min-width:12rem; min-height:2.75rem; max-height:8rem;
+  #composer textarea { flex:1 1 auto; min-width:10rem; min-height:2.75rem; max-height:8rem;
                         font:inherit; padding:.5rem; }
-  #composer button { font:inherit; padding:.5rem 1rem; }
+  #composerbtns { display:grid; grid-template-columns:auto auto; gap:.35rem; align-content:end; }
+  #composerbtns button { font:inherit; font-size:.85rem; padding:.35rem .6rem; }
+  #send { grid-column:1 / -1; font-weight:600; }
+  #mic { font-size:1rem; line-height:1; }
+  #mic.live { background:#d33; color:#fff; }
 
   :focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
 
@@ -131,7 +135,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
     <button id="modePrivate" type="button" class="seg" aria-pressed="${priv ? "true" : "false"}">Private</button>
     <button id="modeOpenai" type="button" class="seg" aria-pressed="${priv ? "false" : "true"}">OpenAI</button>
   </div>
-  <a class="cleanerlink" href="cleaner" target="_blank" rel="noopener">Clean a document ↗</a>
+  <a class="cleanerlink" href="cleaner/" target="_blank" rel="noopener">Clean a document ↗</a>
   <button id="fbOpen" class="cleanerlink" type="button">Feedback</button>
 </div>
 
@@ -140,12 +144,15 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
 
 <form id="composer">
   <label for="message">Your question</label>
-  <textarea id="message" name="message" required></textarea>
-  <button id="send" type="submit">Send</button>
-  <button id="stop" type="button" disabled>Stop</button>
-  <button id="clear" type="button">Clear session</button>
-  <button id="export" type="button">Export chat history</button>
-  <button id="schedule" type="button" hidden>Open proposed schedule</button>
+  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for a new line"></textarea>
+  <div id="composerbtns">
+    <button id="send" type="submit">Send</button>
+    <button id="mic" type="button" aria-label="Dictate your question" title="Dictate">🎙</button>
+    <button id="stop" type="button" disabled>Stop</button>
+    <button id="clear" type="button" title="Clear session">Clear</button>
+    <button id="export" type="button" title="Export chat history">Export</button>
+    <button id="schedule" type="button" hidden>Open proposed schedule</button>
+  </div>
 </form>
 
 <dialog id="fbDialog">
@@ -434,6 +441,35 @@ $("clear").addEventListener("click", async () => {
 
 $("export").addEventListener("click", () => { location.href = "export"; });
 $("schedule").addEventListener("click", () => { window.open("export/schedule", "_blank", "noopener"); });
+
+// Enter sends; Shift+Enter inserts a newline — the expected chat behavior.
+$("message").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); }
+});
+
+// Voice dictation. The browser's SpeechRecognition transcribes into the box.
+// NOTE: in Chrome this streams audio to Google for transcription — same as the
+// curriculum tool's voice input. Hidden entirely where the API is absent.
+const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+if (SR) {
+  let rec = null, live = false;
+  const stopMic = () => { live = false; $("mic").classList.remove("live"); };
+  $("mic").addEventListener("click", () => {
+    if (live && rec) { rec.stop(); return; }
+    rec = new SR();
+    rec.lang = "en-US"; rec.interimResults = false;
+    rec.onresult = (ev) => {
+      const t = Array.from(ev.results).map((r) => r[0].transcript).join(" ").trim();
+      const el = $("message");
+      el.value = (el.value.trim() ? el.value.trim() + " " : "") + t;
+      el.focus();
+    };
+    rec.onend = stopMic; rec.onerror = stopMic;
+    live = true; $("mic").classList.add("live"); rec.start();
+  });
+} else {
+  $("mic").hidden = true;   // no speech support in this browser
+}
 
 async function switchMode(next) {
   if (next === uiMode) return;                    // already there — no-op

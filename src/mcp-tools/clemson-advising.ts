@@ -565,4 +565,403 @@ export const findEligibleSections: McpToolDefinition = {
   },
 };
 
-registerTools([findEligibleSections]);
+// ---------------------------------------------------------------------------
+// find-sections-by-schedule — schedule-fit search with NO subject/requirement
+// required. This is find-eligible-sections minus the gc_advisor.db join
+// (no ATTACH, no program/rule/prereq) — a pure query over the Banner
+// schedule snapshot, for "any 3-credit course that fits MWF 12:20 with
+// open seats" style requests where the caller doesn't have a subject or a
+// GC requirement slot in hand.
+// ---------------------------------------------------------------------------
+
+export const findSectionsBySchedule: McpToolDefinition = {
+  operation: "clemson.find_sections_by_schedule",
+  tool: {
+    name: "find-sections-by-schedule",
+    description:
+      "Finds sections in a term that fit scheduling constraints across ALL " +
+      "departments — use for 'any 3-credit course that meets MWF 12:20 with " +
+      "seats' or 'something that fits my open Tue/Thu block.' Unlike " +
+      "search-clemson-classes (needs a subject) and find-eligible-sections " +
+      "(needs a GC requirement slot), this searches by schedule fit. " +
+      "Requires at least one constraint besides term. Results are capped; " +
+      "if too broad it returns the match count and asks to narrow. Returns " +
+      "CRN, course, title, credits, seats, meetings, instructor; " +
+      "async/no-meeting sections come back separately.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        term: {
+          type: "string",
+          description: "Term code, e.g. 202608.",
+        },
+        credits: {
+          type: "number",
+          description:
+            "Match sections whose credit_hours is within 0.01 of this value.",
+        },
+        subject: {
+          type: "string",
+          description:
+            "Optional subject prefix to narrow to, e.g. 'CPSC'.",
+        },
+        days_within: {
+          type: "string",
+          description:
+            "The days the student is free, e.g. 'MWF' or 'TR'. A section " +
+            "qualifies only if EVERY one of its meeting days is in this " +
+            "set (a MW course fits 'MWF'; a MWF course does NOT fit 'MW').",
+        },
+        starts_at: {
+          type: "string",
+          description:
+            "Optional HHMM string, e.g. '1220'. At least one of the " +
+            "section's meetings must start exactly at this time.",
+        },
+        no_meeting_before: {
+          type: "string",
+          description:
+            "Optional HHMM string, e.g. '0900'. Excludes a section if ANY " +
+            "of its meetings starts before this time.",
+        },
+        no_meeting_after: {
+          type: "string",
+          description:
+            "Optional HHMM string, e.g. '1700'. Excludes a section if ANY " +
+            "of its meetings ends after this time.",
+        },
+        exclude_days: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional day codes to avoid, e.g. ['F'] (M T W R F S U). " +
+            "Excludes a section if ANY of its meetings falls on one of " +
+            "these days.",
+        },
+        avoid_conflict_with: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional CRNs already on the student's schedule. Excludes a " +
+            "section if any of its meetings time-conflicts (same day, " +
+            "overlapping interval) with any meeting of these CRNs.",
+        },
+        open_only: {
+          type: "boolean",
+          description:
+            "Optional. If true, excludes sections with seats_available <= 0.",
+        },
+      },
+      required: ["term"],
+    },
+  },
+  async handler(args) {
+    try {
+      assertMcpOperation("clemson.find_sections_by_schedule");
+    } catch (e) {
+      return permissionErr(e);
+    }
+
+    const term = args.term as string | undefined;
+    if (!term) return err("term is required");
+
+    const credits = typeof args.credits === "number" ? args.credits : undefined;
+
+    const subject =
+      typeof args.subject === "string" && args.subject ? args.subject : undefined;
+
+    const daysWithin =
+      typeof args.days_within === "string" && args.days_within
+        ? args.days_within.toUpperCase()
+        : undefined;
+
+    const startsAt =
+      typeof args.starts_at === "string" && args.starts_at ? args.starts_at : undefined;
+    let startsAtMins: number | null = null;
+    if (startsAt !== undefined) {
+      startsAtMins = hhmmToMins(startsAt);
+      if (startsAtMins === null)
+        return err(
+          `starts_at must be an HHMM string, e.g. "1220" (got "${startsAt}").`,
+        );
+    }
+
+    const noMeetingBefore =
+      typeof args.no_meeting_before === "string" && args.no_meeting_before
+        ? args.no_meeting_before
+        : undefined;
+    let noMeetingBeforeMins: number | null = null;
+    if (noMeetingBefore !== undefined) {
+      noMeetingBeforeMins = hhmmToMins(noMeetingBefore);
+      if (noMeetingBeforeMins === null)
+        return err(
+          `no_meeting_before must be an HHMM string, e.g. "0900" (got "${noMeetingBefore}").`,
+        );
+    }
+
+    const noMeetingAfter =
+      typeof args.no_meeting_after === "string" && args.no_meeting_after
+        ? args.no_meeting_after
+        : undefined;
+    let noMeetingAfterMins: number | null = null;
+    if (noMeetingAfter !== undefined) {
+      noMeetingAfterMins = hhmmToMins(noMeetingAfter);
+      if (noMeetingAfterMins === null)
+        return err(
+          `no_meeting_after must be an HHMM string, e.g. "1700" (got "${noMeetingAfter}").`,
+        );
+    }
+
+    const excludeDaySet =
+      Array.isArray(args.exclude_days) && args.exclude_days.length > 0
+        ? new Set((args.exclude_days as string[]).map((d) => d.toUpperCase()))
+        : null;
+
+    const avoidConflictWith =
+      Array.isArray(args.avoid_conflict_with) && args.avoid_conflict_with.length > 0
+        ? (args.avoid_conflict_with as string[])
+        : null;
+
+    const openOnly = args.open_only === true;
+
+    // Bounding-constraint check: open_only / exclude_days / avoid_conflict_with
+    // alone don't bound the scan — they only filter within whatever the
+    // bounding constraints already narrowed it to.
+    if (
+      credits === undefined &&
+      subject === undefined &&
+      daysWithin === undefined &&
+      startsAtMins === null &&
+      noMeetingBeforeMins === null &&
+      noMeetingAfterMins === null
+    ) {
+      return err(
+        "Give at least one bounding constraint besides term — credits, " +
+          "subject, days_within, starts_at, or a no_meeting_before/after " +
+          "window — so this doesn't scan the whole term.",
+      );
+    }
+
+    // Whether a section's meetings can be judged against a time/day rule at
+    // all — zero-meeting (async) sections can't be, see the filtering loop.
+    const timeDayConstraintGiven =
+      daysWithin !== undefined ||
+      startsAtMins !== null ||
+      noMeetingBeforeMins !== null ||
+      noMeetingAfterMins !== null ||
+      excludeDaySet !== null;
+
+    const appliedConstraints: Record<string, unknown> = {};
+    if (credits !== undefined) appliedConstraints.credits = credits;
+    if (subject !== undefined) appliedConstraints.subject = subject;
+    if (daysWithin !== undefined) appliedConstraints.days_within = daysWithin;
+    if (startsAtMins !== null) appliedConstraints.starts_at = startsAt;
+    if (noMeetingBeforeMins !== null) appliedConstraints.no_meeting_before = noMeetingBefore;
+    if (noMeetingAfterMins !== null) appliedConstraints.no_meeting_after = noMeetingAfter;
+    if (excludeDaySet) appliedConstraints.exclude_days = [...excludeDaySet];
+    if (avoidConflictWith) appliedConstraints.avoid_conflict_with = avoidConflictWith;
+    if (openOnly) appliedConstraints.open_only = true;
+
+    const schedDb = openScheduleDb(term);
+    if (!schedDb)
+      return err(
+        `No Banner snapshot available for term ${term}. Try again after the 05:00 daily refresh.`,
+      );
+
+    try {
+      const conditions: string[] = ["term = ?"];
+      const bindings: unknown[] = [term];
+      if (credits !== undefined) {
+        conditions.push("ABS(credit_hours - ?) < 0.01");
+        bindings.push(credits);
+      }
+      if (subject !== undefined) {
+        conditions.push("subject_course LIKE ?");
+        bindings.push(`${normCode(subject)}%`);
+      }
+
+      const meta = getScheduleDbMeta(schedDb);
+
+      const sectionRows = schedDb
+        .prepare(
+          `SELECT crn, subject_course, section, title, credit_hours,
+                  seats_available, enrollment, max_enrollment, open
+           FROM sections
+           WHERE ${conditions.join(" AND ")}
+           ORDER BY subject_course, section`,
+        )
+        .all(...bindings) as SectionRow[];
+
+      if (sectionRows.length === 0) {
+        return okJson({
+          term,
+          applied_constraints: appliedConstraints,
+          total_matched: 0,
+          sections: [],
+          sections_without_meetings: [],
+          note: "No sections in this term match the given credits/subject.",
+          _source: `Banner schedule ${meta.fetchedAt}`,
+        });
+      }
+
+      const crns = sectionRows.map((r) => r.crn);
+      const crnPhs = crns.map(() => "?").join(",");
+
+      // avoid_conflict_with: same combined-meetings + findConflicts approach
+      // as find-eligible-sections.
+      let conflictingCrns: Set<string> | null = null;
+      if (avoidConflictWith) {
+        const combinedCrns = [...new Set([...crns, ...avoidConflictWith])];
+        const allMeetings = getMeetingsForCrns(schedDb, term, combinedCrns);
+        const conflicts = findConflicts(allMeetings);
+        const avoidSet = new Set(avoidConflictWith);
+        conflictingCrns = new Set<string>();
+        for (const c of conflicts) {
+          if (avoidSet.has(c.crn_a) && !avoidSet.has(c.crn_b)) conflictingCrns.add(c.crn_b);
+          else if (avoidSet.has(c.crn_b) && !avoidSet.has(c.crn_a)) conflictingCrns.add(c.crn_a);
+        }
+      }
+
+      const meetingRows = schedDb
+        .prepare(
+          `SELECT crn, day, start_min, end_min, building, room, type
+           FROM meetings WHERE term = ? AND crn IN (${crnPhs})
+             AND start_min IS NOT NULL AND end_min IS NOT NULL`,
+        )
+        .all(term, ...crns) as MeetingRow[];
+
+      const instructorRows = schedDb
+        .prepare(
+          `SELECT crn, name, email, primary_i
+           FROM instructors WHERE term = ? AND crn IN (${crnPhs})`,
+        )
+        .all(term, ...crns) as InstructorRow[];
+
+      type MGroup = {
+        startMin: number; endMin: number;
+        building: string | null; room: string | null; type: string | null;
+        days: string[];
+      };
+      const DAY_ORDER = "MTWRFSU";
+      const meetingMap = new Map<string, Map<string, MGroup>>();
+      for (const m of meetingRows) {
+        if (!meetingMap.has(m.crn)) meetingMap.set(m.crn, new Map());
+        const key = `${m.start_min}:${m.end_min}:${m.building ?? ""}:${m.room ?? ""}:${m.type ?? ""}`;
+        const byInterval = meetingMap.get(m.crn)!;
+        if (!byInterval.has(key)) {
+          byInterval.set(key, {
+            startMin: m.start_min ?? 0, endMin: m.end_min ?? 0,
+            building: m.building, room: m.room, type: m.type, days: [],
+          });
+        }
+        byInterval.get(key)!.days.push(m.day);
+      }
+
+      const instMap = new Map<string, Array<{ name: string; email: string | null; primary: boolean }>>();
+      for (const i of instructorRows) {
+        if (!instMap.has(i.crn)) instMap.set(i.crn, []);
+        instMap.get(i.crn)!.push({ name: i.name, email: i.email, primary: i.primary_i === 1 });
+      }
+
+      const matches: Record<string, unknown>[] = [];
+      const sectionsWithoutMeetings: Record<string, unknown>[] = [];
+
+      for (const row of sectionRows) {
+        // open_only and avoid_conflict_with apply to every section —
+        // including zero-meeting (async) ones — and can exclude it outright.
+        if (openOnly && row.seats_available <= 0) continue;
+        if (conflictingCrns?.has(row.crn)) continue;
+
+        const mgMap = meetingMap.get(row.crn);
+        const hasMeetings = !!mgMap && mgMap.size > 0;
+        const meetings = mgMap
+          ? [...mgMap.values()].map((mg) => ({
+              days: [...mg.days].sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b)).join(""),
+              beginTime: minsToHHMM(mg.startMin),
+              endTime: minsToHHMM(mg.endMin),
+              building: mg.building,
+              room: mg.room,
+              type: mg.type,
+            }))
+          : [];
+
+        const base = {
+          crn: row.crn,
+          subject_course: row.subject_course,
+          section: row.section,
+          title: row.title,
+          credit_hours: row.credit_hours,
+          seats_available: row.seats_available,
+          enrollment: row.enrollment,
+          max_enrollment: row.max_enrollment,
+          open: row.open === 1,
+          instructors: instMap.get(row.crn) ?? [],
+          meetings,
+        };
+
+        // A section with no meeting rows (async/online) can't be confirmed
+        // against a time/day rule — it goes in a separate array rather than
+        // being vacuously included or silently dropped.
+        if (timeDayConstraintGiven && !hasMeetings) {
+          sectionsWithoutMeetings.push({
+            ...base,
+            note:
+              "No meeting times on file (async/online section) — cannot " +
+              "confirm it satisfies the time/day constraint(s); review manually.",
+          });
+          continue;
+        }
+
+        if (timeDayConstraintGiven && hasMeetings) {
+          const mgs = [...mgMap!.values()];
+          let violates = false;
+
+          if (daysWithin !== undefined) {
+            for (const mg of mgs) {
+              if (mg.days.some((d) => !daysWithin.includes(d))) {
+                violates = true;
+                break;
+              }
+            }
+          }
+          if (!violates && startsAtMins !== null) {
+            if (!mgs.some((mg) => mg.startMin === startsAtMins)) violates = true;
+          }
+          if (!violates && noMeetingBeforeMins !== null) {
+            if (mgs.some((mg) => mg.startMin < noMeetingBeforeMins!)) violates = true;
+          }
+          if (!violates && noMeetingAfterMins !== null) {
+            if (mgs.some((mg) => mg.endMin > noMeetingAfterMins!)) violates = true;
+          }
+          if (!violates && excludeDaySet) {
+            if (mgs.some((mg) => mg.days.some((d) => excludeDaySet.has(d)))) violates = true;
+          }
+          if (violates) continue;
+        }
+
+        matches.push(base);
+      }
+
+      const totalMatched = matches.length;
+      const sections = matches.slice(0, 60);
+
+      const result: Record<string, unknown> = {
+        term,
+        applied_constraints: appliedConstraints,
+        total_matched: totalMatched,
+        sections,
+        sections_without_meetings: sectionsWithoutMeetings,
+        _source: `Banner schedule ${meta.fetchedAt}`,
+      };
+      if (totalMatched > 60) {
+        result.note = `${totalMatched} sections match — showing 60. Add constraints (credits, a tighter time, or a subject) to narrow.`;
+      }
+
+      return okJson(result);
+    } finally {
+      schedDb.close();
+    }
+  },
+};
+
+registerTools([findEligibleSections, findSectionsBySchedule]);

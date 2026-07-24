@@ -97,7 +97,9 @@ function buildGcAdvisorFixture(): void {
 buildGcAdvisorFixture();
 
 const { writeScheduleDb } = await import("../src/clemson-schedule-db.ts");
-const { findEligibleSections } = await import("../src/mcp-tools/clemson-advising.ts");
+const { findEligibleSections, findSectionsBySchedule } = await import(
+  "../src/mcp-tools/clemson-advising.ts"
+);
 import type { ClemsonTermSnapshot } from "../src/clemson-classes.ts";
 
 function meeting(days: string, beginTime: string, endTime: string) {
@@ -193,6 +195,16 @@ const SNAP: ClemsonTermSnapshot = {
       instructionalMethod: null, creditHours: 3, enrollment: 10, maxEnrollment: 20,
       seatsAvailable: 5, waitCount: 0, waitCapacity: 0, open: true, instructors: [],
       meetings: [meeting("M", "1200", "1300")],
+    },
+    // ENGL1010-001: MWF 12:20-13:10, 3 credits, open seats — target match for
+    // find-sections-by-schedule's credits+days_within+starts_at test. Not in
+    // any explicit_courses list, so it's invisible to find-eligible-sections.
+    {
+      term: TERM, termDescription: "Fall 2026", crn: "90020", subjectCourse: "ENGL1010",
+      section: "001", title: "Composition", campus: "Main", scheduleType: "Lecture",
+      instructionalMethod: null, creditHours: 3, enrollment: 10, maxEnrollment: 20,
+      seatsAvailable: 10, waitCount: 0, waitCapacity: 0, open: true, instructors: [],
+      meetings: [meeting("MWF", "1220", "1310")],
     },
   ],
 };
@@ -305,4 +317,70 @@ test("applied_constraints echoes back exactly what was passed", async () => {
   // normalized to uppercase
   assert.deepEqual(out.applied_constraints.exclude_days, ["F"]);
   assert.equal(out.applied_constraints.open_only, true);
+});
+
+// ---------------------------------------------------------------------------
+// find-sections-by-schedule — schedule-fit search with no subject/requirement
+// required. Reuses the same schedule DB fixture written above (no gc_advisor
+// join at all).
+// ---------------------------------------------------------------------------
+
+async function callSchedule(args: Record<string, unknown>) {
+  const res = await findSectionsBySchedule.handler(args);
+  return {
+    res,
+    body: res.isError
+      ? null
+      : (JSON.parse((res.content[0] as { text: string }).text) as {
+          total_matched: number;
+          sections: Array<{ crn: string; [k: string]: unknown }>;
+          sections_without_meetings: Array<{ crn: string; [k: string]: unknown }>;
+          applied_constraints: Record<string, unknown>;
+        }),
+  };
+}
+
+test("find-sections-by-schedule: missing bounding constraint returns a clear error", async () => {
+  const { res } = await callSchedule({ term: TERM });
+  assert.equal(res.isError, true);
+  assert.match(
+    (res.content[0] as { text: string }).text,
+    /at least one bounding constraint/,
+  );
+});
+
+test("find-sections-by-schedule: credits + days_within + starts_at matches the MWF 12:20 section", async () => {
+  const { body } = await callSchedule({
+    term: TERM,
+    credits: 3,
+    days_within: "MWF",
+    starts_at: "1220",
+  });
+  assert.ok(body);
+  const crns = body!.sections.map((s) => s.crn);
+  assert.ok(crns.includes("90020"), "ENGL1010 MWF 12:20 section should match");
+});
+
+test("find-sections-by-schedule: open_only excludes a zero-seat section", async () => {
+  const { body } = await callSchedule({ term: TERM, credits: 3, open_only: true });
+  assert.ok(body);
+  const crns = body!.sections.map((s) => s.crn);
+  assert.ok(!crns.includes("90006"), "full section 90006 should be excluded by open_only");
+});
+
+test("find-sections-by-schedule: a section on a day outside days_within is excluded", async () => {
+  const { body } = await callSchedule({ term: TERM, credits: 3, days_within: "MW" });
+  assert.ok(body);
+  const crns = body!.sections.map((s) => s.crn);
+  assert.ok(!crns.includes("90001"), "Friday-only section 90001 does not fit days_within 'MW'");
+  assert.ok(crns.includes("90003"), "Monday-only section 90003 fits days_within 'MW'");
+});
+
+test("find-sections-by-schedule: days_within routes an async (no-meeting) section into sections_without_meetings", async () => {
+  const { body } = await callSchedule({ term: TERM, credits: 3, days_within: "MWF" });
+  assert.ok(body);
+  const sectionCrns = body!.sections.map((s) => s.crn);
+  assert.ok(!sectionCrns.includes("90007"), "async section must not be in sections");
+  const asyncCrns = body!.sections_without_meetings.map((s) => s.crn);
+  assert.ok(asyncCrns.includes("90007"), "async section must be surfaced, not silently dropped");
 });

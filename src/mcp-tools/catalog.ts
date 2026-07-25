@@ -1,9 +1,83 @@
 // Public GC curriculum tools — backed by the gc_advisor project's query.py CLI
 // (see src/gc-curriculum.ts). Read-only, public catalog data, no credentials.
+import Database from "better-sqlite3";
+
 import { getGcProgramPlan, listGcCatalogYears, getGcRequirementRules, getGcGenEd, getGcCourse, auditGcProgress } from "../gc-curriculum.js";
+import { GC_ADVISOR_DB } from "../config.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
+
+// GC core courses come in lecture/lab pairs: a graded lecture (e.g. GC 4060)
+// and a non-credit lab COREQ (GC 4061) taken together — advisors say "4060"
+// meaning "4060/4061". That pairing isn't in the structured coreq column, but
+// every GC lab's description names its lecture ("Non-credit laboratory to
+// accompany GC 4060."), which links the pair BOTH ways. Surfacing it from the
+// tool (not just hoping the model remembers) is the reliable fix.
+
+export interface CoreqCourse {
+  code: string;
+  title: string | null;
+  credits: string | null;
+  relationship: string;
+}
+
+/** Normalize "gc4060"/"GC 4060" -> "GC 4060" (uppercase subject + space + number). */
+function normCourseCode(raw: string): string | null {
+  const m = /^\s*([A-Za-z]{2,4})\s*(\d{3,4}[A-Za-z]?)\s*$/.exec(raw);
+  return m ? `${m[1].toUpperCase()} ${m[2].toUpperCase()}` : null;
+}
+
+/**
+ * Find the lecture/lab coreq paired with `code`, using the lab descriptions as
+ * the link. If `code` is a lab, returns the lecture it accompanies; otherwise
+ * returns the non-credit lab that accompanies `code`. null when there is no
+ * pair (most courses) or the catalog DB is unavailable.
+ */
+export function findCoreqCourse(rawCode: string): CoreqCourse | null {
+  const code = normCourseCode(rawCode);
+  if (!code) return null;
+
+  let db: Database.Database;
+  try {
+    db = new Database(GC_ADVISOR_DB, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+  try {
+    // Is the queried course itself a lab that names its lecture?
+    const self = db
+      .prepare("SELECT description FROM course WHERE code = ? LIMIT 1")
+      .get(code) as { description: string | null } | undefined;
+    const m = self?.description
+      ? /accompany\s+(GC\s*\d{3,4})/i.exec(self.description)
+      : null;
+    if (m) {
+      const lectureCode = normCourseCode(m[1]);
+      const lec = lectureCode
+        ? (db
+            .prepare("SELECT code, title, credits FROM course WHERE code = ? LIMIT 1")
+            .get(lectureCode) as Omit<CoreqCourse, "relationship"> | undefined)
+        : undefined;
+      if (lec) return { ...lec, relationship: "lecture this lab accompanies" };
+    }
+
+    // Otherwise, is there a non-credit lab that accompanies THIS course?
+    const lab = db
+      .prepare(
+        `SELECT code, title, credits FROM course
+         WHERE description LIKE '%accompany%' AND description LIKE ?
+           AND (credits = '0' OR title LIKE '%Laboratory%')
+         LIMIT 1`,
+      )
+      .get(`%${code}%`) as Omit<CoreqCourse, "relationship"> | undefined;
+    if (lab) return { ...lab, relationship: "required non-credit lab (coreq)" };
+
+    return null;
+  } finally {
+    db.close();
+  }
+}
 
 export const catalogYears: McpToolDefinition = {
   operation: "clemson.gc_catalog_years",
@@ -178,7 +252,9 @@ export const course: McpToolDefinition = {
     description:
       "Get details for a Clemson course by code: title, credits, description, " +
       "prerequisites (raw text and parsed course codes). Read-only, no login. " +
-      'Example code: "GC 3010" or "MKTG 3010".',
+      'Example code: "GC 3010" or "MKTG 3010". For a GC lecture/lab pair, the ' +
+      "result also includes a `coreq` (e.g. GC 4060 returns GC 4061, its " +
+      "required non-credit lab) — report both when asked about either.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -200,8 +276,10 @@ export const course: McpToolDefinition = {
     if (!code) return err("code is required");
     try {
       const c = await getGcCourse(code);
+      const coreq = findCoreqCourse(code);
       return okJson({
         ...(c as object),
+        ...(coreq ? { coreq } : {}),
         _source: "Clemson University Online Catalog (gc_advisor)",
       });
     } catch (e) {

@@ -124,8 +124,14 @@ function buildGcAdvisorFixture(): void {
 buildGcAdvisorFixture();
 
 const { writeScheduleDb } = await import("../src/clemson-schedule-db.ts");
-const { findEligibleSections, findSectionsBySchedule, getProgramRequirements, scheduleFreshness } =
-  await import("../src/mcp-tools/clemson-advising.ts");
+const {
+  findEligibleSections,
+  findSectionsBySchedule,
+  getProgramRequirements,
+  scheduleFreshness,
+  overlayLiveSeats,
+  MAX_REFRESH_SUBJECTS,
+} = await import("../src/mcp-tools/clemson-advising.ts");
 import type { ClemsonTermSnapshot } from "../src/clemson-classes.ts";
 
 function meeting(days: string, beginTime: string, endTime: string) {
@@ -516,4 +522,89 @@ test("find-eligible-sections includes data_as_of matching the snapshot", async (
   const res = await findEligibleSections.handler({ ...BASE_ARGS });
   const out = JSON.parse((res.content[0] as { text: string }).text) as Record<string, unknown>;
   assert.equal(out.data_as_of, SNAP.fetchedAt);
+});
+
+// overlayLiveSeats: the opt-in live-seat overlay behind refresh:true. Tested
+// in isolation with a stub live fetcher (no Banner) so the mapping, capping,
+// and partial-failure behavior are deterministic.
+type StubSection = { crn: string; subject_course: string; seats_available: number; enrollment: number; max_enrollment: number; open: boolean };
+
+function stubLive(seatsByCrn: Record<string, { enrollment: number; maxEnrollment: number; seatsAvailable: number; open: boolean }>) {
+  // Returns a fetcher that answers per-subject with only that subject's CRNs.
+  return async ({ subject }: { subject?: string }) => {
+    const sections = Object.entries(seatsByCrn)
+      .filter(([crn]) => crn.startsWith(subject ?? ""))
+      .map(([crn, s]) => ({ crn, subjectCourse: subject, ...s }));
+    return { totalCount: sections.length, sections, snapshotDate: null, scope: "live" as const };
+  };
+}
+
+function sect(crn: string, subjectCourse: string): StubSection {
+  return { crn, subject_course: subjectCourse, seats_available: 1, enrollment: 19, max_enrollment: 20, open: true };
+}
+
+test("overlayLiveSeats overlays live seats onto matching CRNs and reports the count", async () => {
+  const sections = [sect("GC1", "GC 3010"), sect("GC2", "GC 3020")];
+  const summary = await overlayLiveSeats(
+    "202608",
+    sections,
+    stubLive({ GC1: { enrollment: 20, maxEnrollment: 20, seatsAvailable: 0, open: false }, GC2: { enrollment: 5, maxEnrollment: 20, seatsAvailable: 15, open: true } }),
+  );
+  assert.equal(summary.refreshed, true);
+  assert.equal(summary.crns_updated, 2);
+  assert.equal(summary.crns_stale, 0);
+  assert.equal(typeof summary.seats_as_of, "string");
+  // Seats overlaid in place.
+  assert.equal(sections[0].seats_available, 0);
+  assert.equal(sections[0].open, false);
+  assert.equal(sections[1].enrollment, 5);
+});
+
+test("overlayLiveSeats leaves unmatched CRNs stale", async () => {
+  const sections = [sect("GC1", "GC 3010"), sect("GC9", "GC 3090")];
+  const summary = await overlayLiveSeats(
+    "202608",
+    sections,
+    stubLive({ GC1: { enrollment: 20, maxEnrollment: 20, seatsAvailable: 0, open: false } }),
+  );
+  assert.equal(summary.crns_updated, 1);
+  assert.equal(summary.crns_stale, 1);
+  assert.equal(sections[1].seats_available, 1, "unmatched CRN keeps its snapshot seats");
+  assert.match(String(summary.note), /snapshot seats/i);
+});
+
+test("overlayLiveSeats declines when a result spans too many subjects", async () => {
+  // Distinct ALPHA subject prefixes (subjectOf stops at the first digit, so
+  // "SUB0"/"SUB1" would collapse to one subject — use AAA, BBB, ...).
+  const many = Array.from({ length: MAX_REFRESH_SUBJECTS + 1 }, (_, i) =>
+    sect("X" + i, `${String.fromCharCode(65 + i).repeat(3)} 1000`),
+  );
+  const summary = await overlayLiveSeats("202608", many, stubLive({}));
+  assert.equal(summary.refreshed, false);
+  assert.equal(summary.reason, "too_many_subjects");
+  assert.equal(summary.subject_count, MAX_REFRESH_SUBJECTS + 1);
+  // Nothing was mutated.
+  assert.equal(many[0].seats_available, 1);
+});
+
+test("overlayLiveSeats survives a failed subject query, marking those CRNs stale", async () => {
+  const sections = [sect("GC1", "GC 3010"), sect("EN1", "ENGL 1010")];
+  const failing = async ({ subject }: { subject?: string }) => {
+    if (subject === "ENGL") throw new Error("Banner timeout");
+    return { totalCount: 1, sections: [{ crn: "GC1", subjectCourse: "GC", enrollment: 20, maxEnrollment: 20, seatsAvailable: 0, open: false }], snapshotDate: null, scope: "live" as const };
+  };
+  const summary = await overlayLiveSeats("202608", sections, failing);
+  assert.equal(summary.crns_updated, 1);
+  assert.equal(summary.crns_stale, 1);
+  assert.deepEqual(summary.subjects_failed, ["ENGL"]);
+  assert.equal(sections[0].seats_available, 0);
+  assert.equal(sections[1].seats_available, 1);
+});
+
+// The handler leaves the result untouched (no `refresh` block, snapshot seats)
+// when refresh is not requested — the default, network-free path.
+test("find-eligible-sections omits the refresh block when refresh is not set", async () => {
+  const res = await findEligibleSections.handler({ ...BASE_ARGS });
+  const out = JSON.parse((res.content[0] as { text: string }).text) as Record<string, unknown>;
+  assert.equal("refresh" in out, false);
 });

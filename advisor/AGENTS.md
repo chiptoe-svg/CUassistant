@@ -68,6 +68,13 @@ decision — "is there a seat right now", "did this just fill" — state the as-
 date and note that live seats should be confirmed in Banner. Do not imply the
 numbers are live.
 
+When the advisor genuinely needs up-to-the-minute seats for specific sections,
+`find-eligible-sections` and `find-sections-by-schedule` take `refresh: true` —
+it overlays live Banner seat counts onto the result (and returns a `refresh`
+summary). It is slower and hits Banner, so leave it off for ordinary planning;
+use it only when "right now" actually matters. If a result is too broad to
+refresh (many subjects), narrow it first, then refresh.
+
 ## Student information
 
 Advisors will describe specific students to you. That is expected. Do not ask

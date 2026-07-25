@@ -13,9 +13,124 @@ import {
   getMeetingsForCrns,
   findConflicts,
 } from "../clemson-schedule-db.js";
+import { searchClemsonClasses } from "../clemson-classes.js";
 import { assertMcpOperation } from "./permissions.js";
 import { registerTools } from "./server.js";
 import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Live-seat refresh (opt-in). When a caller passes refresh:true, overlay live
+// Banner seat counts onto a snapshot-derived result — a TARGETED re-query of
+// only the subjects already in the result, never a full-term reingest. Capped
+// so a broad, many-subject result can't fan out into a live-Banner storm.
+// ---------------------------------------------------------------------------
+
+/** Max distinct subjects to re-query live before we decline and ask to narrow. */
+export const MAX_REFRESH_SUBJECTS = 8;
+
+/** A section object as returned by the advising tools (snake_case seat fields). */
+export interface OverlaySection {
+  crn: string;
+  subject_course: string;
+  seats_available: number;
+  enrollment: number;
+  max_enrollment: number;
+  open: boolean;
+}
+
+/** The only live-seat fields the overlay reads back, per section. */
+interface LiveSeatRow {
+  crn: string;
+  enrollment: number;
+  maxEnrollment: number;
+  seatsAvailable: number;
+  open: boolean;
+}
+
+type LiveFetcher = (params: {
+  term: string;
+  subject: string;
+  refresh: true;
+}) => Promise<{ sections: LiveSeatRow[] } | null>;
+
+/** Subject prefix of a subject_course, e.g. "GC3010"/"GC 3010" -> "GC". */
+function subjectOf(subjectCourse: string): string {
+  const m = /^([A-Za-z]+)/.exec(subjectCourse.trim());
+  return m ? m[1].toUpperCase() : "";
+}
+
+/**
+ * Overlay live Banner seat counts onto `sections` IN PLACE and return a summary
+ * describing what happened. Groups by subject, re-queries each subject live
+ * (capped at MAX_REFRESH_SUBJECTS), and updates seats for every CRN it can
+ * match; unmatched CRNs keep their snapshot numbers and are counted as stale.
+ * A subject whose live query fails leaves its CRNs stale rather than erroring
+ * the whole call.
+ */
+export async function overlayLiveSeats(
+  term: string,
+  sections: OverlaySection[],
+  fetchLive: LiveFetcher = searchClemsonClasses,
+): Promise<Record<string, unknown>> {
+  const subjects = [...new Set(sections.map((s) => subjectOf(s.subject_course)))].filter(Boolean);
+
+  if (subjects.length > MAX_REFRESH_SUBJECTS) {
+    return {
+      refreshed: false,
+      reason: "too_many_subjects",
+      subject_count: subjects.length,
+      note:
+        `Live refresh spans ${subjects.length} subjects (max ${MAX_REFRESH_SUBJECTS}). ` +
+        `Seats shown are from the daily snapshot — narrow the search (a subject, ` +
+        `tighter days/time, or more open seats) and refresh again for live counts.`,
+    };
+  }
+
+  const results = await Promise.allSettled(
+    subjects.map((subject) => fetchLive({ term, subject, refresh: true })),
+  );
+
+  const live = new Map<string, LiveSeatRow>();
+  const subjectsFailed: string[] = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value) {
+      for (const sec of r.value.sections) live.set(sec.crn, sec);
+    } else {
+      subjectsFailed.push(subjects[i]);
+    }
+  });
+
+  let updated = 0;
+  let stale = 0;
+  for (const s of sections) {
+    const hit = live.get(s.crn);
+    if (hit) {
+      s.seats_available = hit.seatsAvailable;
+      s.enrollment = hit.enrollment;
+      s.max_enrollment = hit.maxEnrollment;
+      s.open = hit.open;
+      updated++;
+    } else {
+      stale++;
+    }
+  }
+
+  return {
+    refreshed: updated > 0,
+    seats_as_of: new Date().toISOString(),
+    subjects_queried: subjects,
+    subjects_failed: subjectsFailed,
+    crns_updated: updated,
+    crns_stale: stale,
+    ...(subjectsFailed.length || stale
+      ? {
+          note:
+            "Some sections could not be refreshed live and still show snapshot " +
+            "seats (crns_stale). Confirm those in Banner.",
+        }
+      : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -254,6 +369,14 @@ export const findEligibleSections: McpToolDefinition = {
           type: "boolean",
           description:
             "Optional. If true, excludes sections with seats_available <= 0.",
+        },
+        refresh: {
+          type: "boolean",
+          description:
+            "Optional, default false. If true, overlay up-to-the-minute seat " +
+            "counts from live Banner onto the returned sections (slower). Leave " +
+            "off for planning — the daily snapshot is fine; pass true only when " +
+            "the advisor needs to know seats RIGHT NOW for a specific section.",
         },
       },
       required: ["term", "slot_type", "completed_courses"],
@@ -554,6 +677,15 @@ export const findEligibleSections: McpToolDefinition = {
       // passed (regression guard).
       if (timeDayConstraintGiven) result.sections_without_meetings = sectionsWithoutMeetings;
 
+      // Opt-in live seat overlay. Mutates `sections` in place, so the returned
+      // seat counts are live for every CRN Banner could match.
+      if (args.refresh === true && sections.length > 0) {
+        result.refresh = await overlayLiveSeats(
+          term,
+          sections as unknown as OverlaySection[],
+        );
+      }
+
       return okJson(result);
     } finally {
       try {
@@ -659,6 +791,15 @@ export const findSectionsBySchedule: McpToolDefinition = {
           description:
             "Optional. Only sections with at least this many seats available. " +
             "Use to narrow a broad result to sections with real room (e.g. 5).",
+        },
+        refresh: {
+          type: "boolean",
+          description:
+            "Optional, default false. If true, overlay up-to-the-minute seat " +
+            "counts from live Banner onto the returned sections (slower). Only " +
+            "applied when the result is a concrete section list; a result that " +
+            "still needs narrowing is not refreshed. Pass true only when the " +
+            "advisor needs seats RIGHT NOW.",
         },
       },
       required: ["term"],
@@ -1006,6 +1147,16 @@ export const findSectionsBySchedule: McpToolDefinition = {
         _source: `Banner schedule ${meta.fetchedAt}`,
       };
       if (asyncNote) result.note = asyncNote.trim();
+
+      // Opt-in live seat overlay — only for a concrete section list (the
+      // needs_narrowing branch above returns before here). Subject-capped
+      // inside overlayLiveSeats.
+      if (args.refresh === true && matches.length > 0) {
+        result.refresh = await overlayLiveSeats(
+          term,
+          matches as unknown as OverlaySection[],
+        );
+      }
 
       return okJson(result);
     } finally {

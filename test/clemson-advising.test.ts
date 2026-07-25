@@ -124,9 +124,8 @@ function buildGcAdvisorFixture(): void {
 buildGcAdvisorFixture();
 
 const { writeScheduleDb } = await import("../src/clemson-schedule-db.ts");
-const { findEligibleSections, findSectionsBySchedule, getProgramRequirements } = await import(
-  "../src/mcp-tools/clemson-advising.ts"
-);
+const { findEligibleSections, findSectionsBySchedule, getProgramRequirements, scheduleFreshness } =
+  await import("../src/mcp-tools/clemson-advising.ts");
 import type { ClemsonTermSnapshot } from "../src/clemson-classes.ts";
 
 function meeting(days: string, beginTime: string, endTime: string) {
@@ -480,4 +479,41 @@ test("get-program-requirements: name matching nothing returns a clear error", as
 test("get-program-requirements: missing name returns a clear error", async () => {
   const res = await getProgramRequirements.handler({});
   assert.equal(res.isError, true);
+});
+
+// get-schedule-freshness: reports the snapshot's data_as_of + age with no
+// Banner load, and says so plainly when a term has not been ingested.
+async function freshness(args: Record<string, unknown>) {
+  const res = await scheduleFreshness.handler(args);
+  assert.notEqual(res.isError, true, (res.content[0] as { text: string }).text);
+  return JSON.parse((res.content[0] as { text: string }).text) as Record<string, unknown>;
+}
+
+test("get-schedule-freshness reports data_as_of and age for an ingested term", async () => {
+  const out = await freshness({ term: TERM });
+  assert.equal(out.has_snapshot, true);
+  assert.equal(out.data_as_of, SNAP.fetchedAt);
+  assert.equal(out.term_description, "Fall 2026");
+  assert.equal(typeof out.age_hours, "number");
+  assert.ok((out.age_hours as number) >= 0);
+});
+
+test("get-schedule-freshness reports has_snapshot:false for a term with no snapshot", async () => {
+  const out = await freshness({ term: "209999" });
+  assert.equal(out.has_snapshot, false);
+  assert.equal(out.data_as_of, undefined);
+  assert.match(String(out.note), /no banner snapshot/i);
+});
+
+test("get-schedule-freshness requires a term", async () => {
+  const res = await scheduleFreshness.handler({});
+  assert.equal(res.isError, true);
+});
+
+// The advising results now carry a machine-readable data_as_of alongside the
+// prose _source, so the agent can cite the snapshot date without parsing text.
+test("find-eligible-sections includes data_as_of matching the snapshot", async () => {
+  const res = await findEligibleSections.handler({ ...BASE_ARGS });
+  const out = JSON.parse((res.content[0] as { text: string }).text) as Record<string, unknown>;
+  assert.equal(out.data_as_of, SNAP.fetchedAt);
 });

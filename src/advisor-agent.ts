@@ -62,6 +62,11 @@ import { isEgressAuthorized } from "./policy.js";
 import { createAdvisorMcpBridge } from "./advisor-mcp.js";
 import { createProposeScheduleTool } from "./advisor-artifacts.js";
 import { createSkillTools } from "./advisor-skills.js";
+import {
+  recordTurn,
+  deriveToolOutcome,
+  type TurnToolRecord,
+} from "./advisor-analytics.js";
 import type { AdvisorMode, AdvisorSession } from "./advisor-session.js";
 
 let bridge: { tools: AgentTool[]; close(): Promise<void> } | null = null;
@@ -665,6 +670,10 @@ async function runWithProvider(
   // Injectable so a test can exercise the ceiling without waiting out the real
   // one. Production always uses the configured value.
   timeoutMs: number = ADVISOR_TURN_TIMEOUT_MS,
+  // Optional PII-free analytics sink. The handlers push tool NAMES + arg KEYS
+  // (never values) and derived outcome booleans here; the caller writes one
+  // record per turn. Absent in tests that don't exercise analytics.
+  turnMeta?: { toolLog: TurnToolRecord[] },
 ): Promise<AdvisorTurnResult> {
   const env = new NodeExecutionEnv({
     cwd: session.workDir,
@@ -746,12 +755,20 @@ async function runWithProvider(
   });
   harness.on("tool_call", (event) => {
     toolCalls++;
+    const toolName = (event as unknown as { toolName?: string })?.toolName ?? "?";
     // Tool NAME only — the input can carry student information and must not be
     // logged. The sequence of names is enough to see a loop/thrash in the log.
-    log.info("advisor tool call", {
-      session: session.id,
-      tool: (event as unknown as { toolName?: string })?.toolName ?? "?",
-    });
+    log.info("advisor tool call", { session: session.id, tool: toolName });
+    // Analytics: record the tool name and its argument KEYS (never values), so
+    // we can see which tools/params get used without touching student data.
+    if (turnMeta) {
+      const inputObj = (event as unknown as { input?: Record<string, unknown> })
+        ?.input;
+      turnMeta.toolLog.push({
+        name: toolName,
+        argKeys: inputObj ? Object.keys(inputObj) : [],
+      });
+    }
     return undefined;
   });
   // Kept as the GRACEFUL bound for the ordinary path: it stops the loop after
@@ -759,7 +776,26 @@ async function runWithProvider(
   // intact (agent-loop.js:454 merges `afterResult.content ?? result.content`).
   // It is no longer the only bound, because it provably cannot cover calls that
   // never reach afterToolCall.
-  harness.on("tool_result", () => {
+  harness.on("tool_result", (event) => {
+    // Analytics: derive empty / needs_narrowing booleans from the result text
+    // (structural flags only — the content itself is never stored) and attach
+    // them to the matching pending tool record.
+    if (turnMeta) {
+      const ev = event as unknown as {
+        toolName?: string;
+        content?: Array<{ type: string; text?: string }>;
+      };
+      const text = (ev.content ?? [])
+        .filter((c) => c.type === "text")
+        .map((c) => c.text ?? "")
+        .join("");
+      const rec = [...turnMeta.toolLog]
+        .reverse()
+        .find(
+          (t) => t.name === ev.toolName && t.empty === undefined && t.needsNarrowing === undefined,
+        );
+      if (rec && text) Object.assign(rec, deriveToolOutcome(text));
+    }
     if (rounds < ADVISOR_MAX_ROUNDS) return undefined;
     hitRoundCap = true;
     return { terminate: true };
@@ -959,6 +995,7 @@ async function runAttempt(
   input: string,
   signal?: AbortSignal,
   timeoutMs?: number,
+  turnMeta?: { toolLog: TurnToolRecord[] },
 ): Promise<AdvisorTurnResult> {
   const attemptRoot = mkdtempSync(path.join(tmpdir(), "advisor-pi-try-"));
   // Any schedule proposed during a discarded attempt is discarded with it, for
@@ -975,6 +1012,7 @@ async function runAttempt(
       input,
       signal,
       timeoutMs,
+      turnMeta,
     );
     // An aborted turn is discarded too: the advisor pressed stop, so the
     // half-finished exchange should not become permanent history.
@@ -1021,8 +1059,27 @@ export async function runAdvisorTurn(
     // reached rather than once at startup, so a fallback is authorized on its
     // own record and not on the primary's.
     assertAdvisorTargetAuthorized(target);
+    // Fresh sink per attempt: a failed attempt's tool calls are discarded with
+    // it, so analytics reflects only the provider that actually answered.
+    const turnMeta = { toolLog: [] as TurnToolRecord[] };
+    const startedAt = Date.now();
     try {
-      const result = await runAttempt(target, session, input, signal);
+      const result = await runAttempt(
+        target,
+        session,
+        input,
+        signal,
+        undefined,
+        turnMeta,
+      );
+      // One PII-free analytics line per answered turn. `input` is used only to
+      // classify the question type here and is never stored.
+      recordTurn(input, {
+        mode: session.mode,
+        outcome: result.outcome,
+        toolLog: turnMeta.toolLog,
+        latencyMs: Date.now() - startedAt,
+      });
       // A stopped turn is the caller's decision, not a provider failure. Do not
       // burn the fallback provider re-running work the advisor cancelled.
       return result;

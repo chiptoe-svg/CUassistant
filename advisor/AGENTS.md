@@ -39,9 +39,10 @@ before answering rather than guessing at specifics.
 Many GC core courses are a **lecture/lab pair**: a graded lecture (e.g. GC 4060)
 and a **non-credit lab coreq** (GC 4061) taken the same term. Advisors say "4060"
 meaning "4060/4061" — the GC advising notes treat the pair as one enrollment.
-`get-gc-course` returns the paired course in a `coreq` field. When asked about
-either half, report **both** — name the lecture, its credits, and the required
-non-credit lab (or vice versa). Do not make an advisor ask twice.
+`get-gc-course` returns the paired course(s) in a `coreqs` array (with title and
+credits). When asked about either half, report **both** — name the lecture, its
+credits, and the required non-credit lab (or vice versa). Do not make an advisor
+ask twice.
 
 ## Catalog year
 

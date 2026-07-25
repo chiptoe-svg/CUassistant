@@ -10,10 +10,11 @@ import { err, okJson, permissionErr, type McpToolDefinition } from "./types.js";
 
 // GC core courses come in lecture/lab pairs: a graded lecture (e.g. GC 4060)
 // and a non-credit lab COREQ (GC 4061) taken together — advisors say "4060"
-// meaning "4060/4061". That pairing isn't in the structured coreq column, but
-// every GC lab's description names its lecture ("Non-credit laboratory to
-// accompany GC 4060."), which links the pair BOTH ways. Surfacing it from the
-// tool (not just hoping the model remembers) is the reliable fix.
+// meaning "4060/4061". gc_advisor now carries this structurally in
+// course.coreq_parsed (a JSON array of codes, both directions), so we read that
+// and just enrich each code with its title/credits (which the column lacks).
+// The description-parse remains only as a transitional fallback for a catalog
+// snapshot old enough to predate the coreq backfill.
 
 export interface CoreqCourse {
   code: string;
@@ -22,61 +23,111 @@ export interface CoreqCourse {
   relationship: string;
 }
 
+interface CourseRow {
+  code: string;
+  title: string | null;
+  credits: string | null;
+}
+
 /** Normalize "gc4060"/"GC 4060" -> "GC 4060" (uppercase subject + space + number). */
 function normCourseCode(raw: string): string | null {
   const m = /^\s*([A-Za-z]{2,4})\s*(\d{3,4}[A-Za-z]?)\s*$/.exec(raw);
   return m ? `${m[1].toUpperCase()} ${m[2].toUpperCase()}` : null;
 }
 
+function isLabLike(title: string | null, credits: string | null): boolean {
+  return credits === "0" || (title ?? "").toLowerCase().includes("laborator");
+}
+
+/** Describe the pair direction from which side is the non-credit lab. */
+function relationshipFor(queried: CourseRow, paired: CourseRow): string {
+  if (isLabLike(paired.title, paired.credits)) return "required non-credit lab (coreq)";
+  if (isLabLike(queried.title, queried.credits)) return "lecture this lab accompanies";
+  return "corequisite";
+}
+
 /**
- * Find the lecture/lab coreq paired with `code`, using the lab descriptions as
- * the link. If `code` is a lab, returns the lecture it accompanies; otherwise
- * returns the non-credit lab that accompanies `code`. null when there is no
- * pair (most courses) or the catalog DB is unavailable.
+ * Return the corequisite course(s) paired with `code`, enriched with title and
+ * credits. Reads the structured coreq_parsed column (authoritative, both
+ * directions); falls back to parsing the lab-description prose only when that
+ * column is empty. Empty array when there is no coreq or the DB is unavailable.
  */
-export function findCoreqCourse(rawCode: string): CoreqCourse | null {
+export function findCoreqs(rawCode: string): CoreqCourse[] {
   const code = normCourseCode(rawCode);
-  if (!code) return null;
+  if (!code) return [];
 
   let db: Database.Database;
   try {
     db = new Database(GC_ADVISOR_DB, { readonly: true, fileMustExist: true });
   } catch {
-    return null;
+    return [];
   }
   try {
-    // Is the queried course itself a lab that names its lecture?
-    const self = db
-      .prepare("SELECT description FROM course WHERE code = ? LIMIT 1")
-      .get(code) as { description: string | null } | undefined;
-    const m = self?.description
-      ? /accompany\s+(GC\s*\d{3,4})/i.exec(self.description)
-      : null;
-    if (m) {
-      const lectureCode = normCourseCode(m[1]);
-      const lec = lectureCode
-        ? (db
-            .prepare("SELECT code, title, credits FROM course WHERE code = ? LIMIT 1")
-            .get(lectureCode) as Omit<CoreqCourse, "relationship"> | undefined)
-        : undefined;
-      if (lec) return { ...lec, relationship: "lecture this lab accompanies" };
+    const queried = db
+      .prepare("SELECT code, title, credits, coreq_parsed, description FROM course WHERE code = ? LIMIT 1")
+      .get(code) as
+      | (CourseRow & { coreq_parsed: string | null; description: string | null })
+      | undefined;
+    if (!queried) return [];
+
+    // Preferred path: the structured coreq_parsed JSON array.
+    let codes: string[] = [];
+    if (queried.coreq_parsed) {
+      try {
+        const arr = JSON.parse(queried.coreq_parsed);
+        if (Array.isArray(arr)) codes = arr.filter((x): x is string => typeof x === "string");
+      } catch {
+        /* malformed — fall through to the prose fallback */
+      }
     }
 
-    // Otherwise, is there a non-credit lab that accompanies THIS course?
-    const lab = db
-      .prepare(
-        `SELECT code, title, credits FROM course
-         WHERE description LIKE '%accompany%' AND description LIKE ?
-           AND (credits = '0' OR title LIKE '%Laboratory%')
-         LIMIT 1`,
-      )
-      .get(`%${code}%`) as Omit<CoreqCourse, "relationship"> | undefined;
-    if (lab) return { ...lab, relationship: "required non-credit lab (coreq)" };
+    if (codes.length === 0) {
+      const fb = deriveCoreqFromDescription(db, code, queried.description);
+      return fb ? [{ ...fb, relationship: relationshipFor(queried, fb) }] : [];
+    }
 
-    return null;
+    const out: CoreqCourse[] = [];
+    for (const raw of codes) {
+      const norm = normCourseCode(raw);
+      if (!norm) continue;
+      const row = db
+        .prepare("SELECT code, title, credits FROM course WHERE code = ? LIMIT 1")
+        .get(norm) as CourseRow | undefined;
+      const paired: CourseRow = row ?? { code: norm, title: null, credits: null };
+      out.push({ ...paired, relationship: relationshipFor(queried, paired) });
+    }
+    return out;
   } finally {
     db.close();
   }
+}
+
+/** Transitional fallback: derive the pair from the lab-description prose the way
+ *  we did before gc_advisor populated coreq_parsed. Single result or null. */
+function deriveCoreqFromDescription(
+  db: Database.Database,
+  code: string,
+  description: string | null,
+): CourseRow | null {
+  // Is the queried course itself a lab that names its lecture?
+  const m = description ? /accompany\s+(GC\s*\d{3,4})/i.exec(description) : null;
+  if (m) {
+    const lectureCode = normCourseCode(m[1]);
+    const lec = lectureCode
+      ? (db.prepare("SELECT code, title, credits FROM course WHERE code = ? LIMIT 1").get(lectureCode) as CourseRow | undefined)
+      : undefined;
+    if (lec) return lec;
+  }
+  // Otherwise, is there a non-credit lab that accompanies THIS course?
+  const lab = db
+    .prepare(
+      `SELECT code, title, credits FROM course
+       WHERE description LIKE '%accompany%' AND description LIKE ?
+         AND (credits = '0' OR title LIKE '%Laboratory%')
+       LIMIT 1`,
+    )
+    .get(`%${code}%`) as CourseRow | undefined;
+  return lab ?? null;
 }
 
 export const catalogYears: McpToolDefinition = {
@@ -252,9 +303,10 @@ export const course: McpToolDefinition = {
     description:
       "Get details for a Clemson course by code: title, credits, description, " +
       "prerequisites (raw text and parsed course codes). Read-only, no login. " +
-      'Example code: "GC 3010" or "MKTG 3010". For a GC lecture/lab pair, the ' +
-      "result also includes a `coreq` (e.g. GC 4060 returns GC 4061, its " +
-      "required non-credit lab) — report both when asked about either.",
+      'Example code: "GC 3010" or "MKTG 3010". For a course with a corequisite ' +
+      "(notably GC lecture/lab pairs), the result also includes a `coreqs` array " +
+      "with the paired course(s) and their title/credits (e.g. GC 4060 returns " +
+      "GC 4061, its required non-credit lab) — report them when asked about either.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -276,10 +328,10 @@ export const course: McpToolDefinition = {
     if (!code) return err("code is required");
     try {
       const c = await getGcCourse(code);
-      const coreq = findCoreqCourse(code);
+      const coreqs = findCoreqs(code);
       return okJson({
         ...(c as object),
-        ...(coreq ? { coreq } : {}),
+        ...(coreqs.length ? { coreqs } : {}),
         _source: "Clemson University Online Catalog (gc_advisor)",
       });
     } catch (e) {

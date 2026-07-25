@@ -666,10 +666,11 @@ function fillCard(card, data) {
   const code = document.createElement("strong");
   code.textContent = data.code;
   head.append(code);
-  if (data.credits) {
+  const credits = data.credits && String(data.credits).trim();
+  if (credits && credits !== "0") {   // 0-credit labs: skip the "0 cr" line
     const cr = document.createElement("span");
     cr.className = "cc-cr";
-    cr.textContent = " \\u00b7 " + data.credits + " cr";
+    cr.textContent = " \\u00b7 " + credits + " cr";
     head.append(cr);
   }
   card.append(head);

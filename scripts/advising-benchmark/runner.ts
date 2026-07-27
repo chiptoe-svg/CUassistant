@@ -336,6 +336,83 @@ export function classifyFailureClass(input: ClassifyInput): FailureClass {
 }
 
 // ---------------------------------------------------------------------------
+// SSE assembly (pure) — reconstruct one completion from a streamed response.
+// We stream (Spark protocol: the campus network kills idle ~20s sockets, and a
+// non-streamed long generation looks idle), then reassemble the deltas into the
+// same {content, tool_calls, finish_reason, usage} shape the non-streamed path
+// produced, so the agentic loop downstream is unchanged. Qwen returns
+// chain-of-thought in a separate `reasoning` delta which is NOT the answer — we
+// deliberately ignore it and keep only `content`.
+// ---------------------------------------------------------------------------
+
+export interface StreamedCompletion {
+  content: string;
+  toolCalls: Array<{ id: string; name: string; arguments: string }>;
+  finishReason: string | null;
+  usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined;
+  /** True once any well-formed chunk was seen — distinguishes an empty stream
+   *  (unparseable) from a real but content-less turn. */
+  sawChunk: boolean;
+}
+
+export function parseSseCompletion(sse: string): StreamedCompletion {
+  let content = "";
+  let finishReason: string | null = null;
+  let usage: { prompt_tokens?: unknown; completion_tokens?: unknown } | undefined;
+  let sawChunk = false;
+  const byIndex = new Map<number, { id: string; name: string; arguments: string }>();
+
+  for (const line of sse.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("data:")) continue;
+    const payload = t.slice(5).trim();
+    if (payload === "" || payload === "[DONE]") continue;
+    let chunk: {
+      choices?: Array<{
+        delta?: {
+          content?: unknown;
+          tool_calls?: Array<{
+            index?: unknown;
+            id?: unknown;
+            function?: { name?: unknown; arguments?: unknown };
+          }>;
+        };
+        finish_reason?: unknown;
+      }>;
+      usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
+    };
+    try {
+      chunk = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    sawChunk = true;
+    if (chunk.usage) usage = chunk.usage;
+    const choice = chunk.choices?.[0];
+    if (!choice) continue;
+    if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
+    const delta = choice.delta ?? {};
+    if (typeof delta.content === "string") content += delta.content;
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        const idx = typeof tc.index === "number" ? tc.index : 0;
+        const cur = byIndex.get(idx) ?? { id: "", name: "", arguments: "" };
+        if (typeof tc.id === "string" && tc.id) cur.id = tc.id;
+        const fn = tc.function ?? {};
+        if (typeof fn.name === "string" && fn.name) cur.name = fn.name;
+        if (typeof fn.arguments === "string") cur.arguments += fn.arguments;
+        byIndex.set(idx, cur);
+      }
+    }
+  }
+
+  const toolCalls = [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, v]) => v);
+  return { content, toolCalls, finishReason, usage, sawChunk };
+}
+
+// ---------------------------------------------------------------------------
 // Network — the live agentic loop. Cannot be unit-tested without network; kept
 // as thin as possible so every decision above lives in a pure function.
 // ---------------------------------------------------------------------------
@@ -444,7 +521,11 @@ export async function runScenarioTrial(
         model: candidate.model,
         messages,
         tools,
-        stream: false,
+        // Stream every request: the campus network kills idle ~20s sockets, so a
+        // long non-streamed generation gets dropped mid-response. include_usage
+        // asks the server for a final usage chunk (ignored if unsupported).
+        stream: true,
+        stream_options: { include_usage: true },
         [tokenLimitKey]: ADVISOR_MAX_OUTPUT_TOKENS,
       },
       candidate.family,
@@ -473,57 +554,59 @@ export async function runScenarioTrial(
       answer = err instanceof Error ? err.message : String(err);
       break;
     }
-    latencyMsPerCompletion.push(Date.now() - t0);
     status = res.status;
-    const raw = await res.text();
+    // Read the ENTIRE stream before stopping the clock. When streaming, fetch()
+    // resolves at the response headers (first token), so timing here rather than
+    // above measures true end-to-end latency — comparable to the non-streamed
+    // baseline — not time-to-first-token. Reading also keeps bytes flowing, which
+    // is what prevents the campus network's idle-~20s socket kill.
+    let raw: string;
+    try {
+      raw = await res.text();
+    } catch (err) {
+      latencyMsPerCompletion.push(Date.now() - t0);
+      answer = err instanceof Error ? err.message : String(err);
+      break; // stream dropped mid-read -> unparseable (bodyParsed stays false)
+    }
+    latencyMsPerCompletion.push(Date.now() - t0);
     if (!res.ok) {
       answer = raw.slice(0, 400);
       break;
     }
 
-    let choice: Record<string, unknown> | undefined;
-    try {
-      const parsed = JSON.parse(raw) as {
-        choices?: Array<Record<string, unknown>>;
-        usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
-      };
-      usage = accumulateUsage(usage, extractUsage(parsed.usage));
-      choice = parsed.choices?.[0];
-    } catch {
-      break; // bodyParsed stays false -> classifyFailureClass: unparseable
-    }
-    if (!choice) break;
+    const assembled = parseSseCompletion(raw);
+    if (!assembled.sawChunk) break; // empty/garbage stream -> unparseable
+    usage = accumulateUsage(usage, extractUsage(assembled.usage));
     bodyParsed = true;
-    finishReason =
-      typeof choice.finish_reason === "string" ? choice.finish_reason : null;
-    const msg = (choice.message ?? {}) as Record<string, unknown>;
-    const calls =
-      (msg.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+    finishReason = assembled.finishReason;
+    const calls = assembled.toolCalls;
 
     if (calls.length === 0) {
-      answer = String(msg.content ?? "");
+      answer = assembled.content;
       break;
     }
 
     toolCallCount += calls.length;
     messages.push({
       role: "assistant",
-      content: msg.content ?? null,
-      tool_calls: calls,
+      content: assembled.content || null,
+      tool_calls: calls.map((c) => ({
+        id: c.id,
+        type: "function",
+        function: { name: c.name, arguments: c.arguments },
+      })),
     });
     for (const tc of calls) {
-      const fn = (tc.function ?? {}) as Record<string, unknown>;
-      const name = String(fn.name ?? "");
-      toolNames.push(name);
+      toolNames.push(tc.name);
       let args: unknown = {};
       try {
-        args = JSON.parse(String(fn.arguments ?? "{}"));
+        args = JSON.parse(tc.arguments || "{}");
       } catch {
         args = {};
       }
       let content: string;
       try {
-        content = await execTool(name, args);
+        content = await execTool(tc.name, args);
       } catch (err) {
         content = JSON.stringify({
           error: err instanceof Error ? err.message : String(err),

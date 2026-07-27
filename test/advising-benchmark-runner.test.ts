@@ -20,6 +20,7 @@ import {
   extractUsage,
   MODEL_PANEL,
   parseArgs,
+  parseSseCompletion,
   type ClassifyInput,
   type UsageTotals,
 } from "../scripts/advising-benchmark/runner.ts";
@@ -400,5 +401,49 @@ describe("parseArgs", () => {
   it("rejects a non-numeric or non-positive --trials rather than silently defaulting", () => {
     assert.throws(() => parseArgs(["--trials", "nope"]));
     assert.throws(() => parseArgs(["--trials", "0"]));
+  });
+});
+
+// parseSseCompletion: reassemble a streamed chat-completion back into the same
+// {content, tool_calls, finish_reason, usage} shape the non-streamed path gave,
+// so the agentic loop is unchanged. Streaming is mandatory on the campus network
+// (idle ~20s sockets get killed); the reassembly is the pure part we can test.
+describe("parseSseCompletion", () => {
+  it("concatenates content deltas and reads finish_reason + usage", () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"role":"assistant"}}]}',
+      'data: {"choices":[{"delta":{"content":"Sec"}}]}',
+      'data: {"choices":[{"delta":{"content":"tion 001 fits."}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+      'data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":8}}',
+      "data: [DONE]",
+    ].join("\n\n");
+    const r = parseSseCompletion(sse);
+    assert.equal(r.content, "Section 001 fits.");
+    assert.equal(r.finishReason, "stop");
+    assert.equal(r.toolCalls.length, 0);
+    assert.deepEqual(extractUsage(r.usage), { promptTokens: 120, completionTokens: 8 });
+    assert.equal(r.sawChunk, true);
+  });
+
+  it("assembles a tool call whose name and arguments arrive across chunks", () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get-gc-course"}}]}}]}',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"code\\":"}}]}}]}',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"GC 4060\\"}"}}]}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+      "data: [DONE]",
+    ].join("\n\n");
+    const r = parseSseCompletion(sse);
+    assert.equal(r.toolCalls.length, 1);
+    assert.equal(r.toolCalls[0].id, "call_1");
+    assert.equal(r.toolCalls[0].name, "get-gc-course");
+    assert.deepEqual(JSON.parse(r.toolCalls[0].arguments), { code: "GC 4060" });
+    assert.equal(r.finishReason, "tool_calls");
+  });
+
+  it("reports sawChunk=false for an empty/garbage stream (-> unparseable)", () => {
+    assert.equal(parseSseCompletion("").sawChunk, false);
+    assert.equal(parseSseCompletion(": keep-alive\n\ndata: [DONE]").sawChunk, false);
   });
 });

@@ -6,6 +6,8 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 
 import {
+  ADVISOR_MCP_ALUMNI_TOKEN,
+  ADVISOR_MCP_ALUMNI_URL,
   ADVISOR_MCP_CATALOG_URL,
   ADVISOR_MCP_PUBLIC_URL,
   ADVISOR_MCP_WIKI_TOKEN,
@@ -142,9 +144,9 @@ function mcpToolToPiTool(
 /**
  * Reject an advisor MCP URL that points at the CREDENTIALED server's port.
  *
- * The server array is fixed at three entries, so no fourth server can be added
- * — but each entry's URL comes from the environment, so a slot can be
- * SUBSTITUTED. `ADVISOR_MCP_PUBLIC_URL=http://127.0.0.1:8765/` puts the
+ * The server array is a fixed list in code — a new server means editing
+ * advisorMcpServers() — but each entry's URL comes from the environment, so a
+ * slot can be SUBSTITUTED. `ADVISOR_MCP_PUBLIC_URL=http://127.0.0.1:8765/` puts the
  * credentialed server (send-outlook-mail, send-gmail, calendar writes) into the
  * agent's tool array, and when MCP_AUTH_TOKEN is unset that server is
  * loopback-open, so the substitution needs no credential at all.
@@ -199,7 +201,7 @@ export function assertAdvisorMcpUrlSafe(serverName: string, url: string): void {
 }
 
 /**
- * The agent's entire data surface. Three servers, declared in one place.
+ * The agent's entire data surface. Four servers, declared in one place.
  *
  * 8765 is deliberately absent: it carries send-outlook-mail, send-gmail, and
  * calendar writes. Pi is handed an explicit tool array, so a server that is not
@@ -225,6 +227,7 @@ export function advisorMcpServers(): Record<string, McpServerConfig> {
     cu_public: withAuth(ADVISOR_MCP_PUBLIC_URL, MCP_PUBLIC_AUTH_TOKEN),
     cu_catalog: withAuth(ADVISOR_MCP_CATALOG_URL, MCP_CATALOG_AUTH_TOKEN),
     gc_curriculum_wiki: withAuth(ADVISOR_MCP_WIKI_URL, ADVISOR_MCP_WIKI_TOKEN),
+    gc_alumni: withAuth(ADVISOR_MCP_ALUMNI_URL, ADVISOR_MCP_ALUMNI_TOKEN),
   };
   for (const [name, config] of Object.entries(servers)) {
     assertAdvisorMcpUrlSafe(name, config.url);

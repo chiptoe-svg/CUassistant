@@ -13,11 +13,12 @@ import {
 } from "../src/advisor-mcp.ts";
 import { MCP_HTTP_PORT } from "../src/config.ts";
 
-test("exactly the three intended servers are configured", () => {
+test("exactly the four intended servers are configured", () => {
   const servers = advisorMcpServers();
   assert.deepEqual(Object.keys(servers).sort(), [
     "cu_catalog",
     "cu_public",
+    "gc_alumni",
     "gc_curriculum_wiki",
   ]);
 });

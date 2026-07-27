@@ -317,6 +317,12 @@ export const ADVISOR_MCP_WIKI_URL =
   process.env.ADVISOR_MCP_WIKI_URL || "http://127.0.0.1:3000/api/mcp";
 /** Bearer token for the curriculum wiki MCP, which requires auth (401 without). */
 export const ADVISOR_MCP_WIKI_TOKEN = process.env.ADVISOR_MCP_WIKI_TOKEN || "";
+// GC alumni-outcomes MCP (aggregate graduate career data — first jobs, salaries,
+// skills, industries, next steps). Loopback so the bearer stays on-box; the
+// endpoint is plain HTTP. Requires auth (401 without).
+export const ADVISOR_MCP_ALUMNI_URL =
+  process.env.ADVISOR_MCP_ALUMNI_URL || "http://127.0.0.1:8012/mcp";
+export const ADVISOR_MCP_ALUMNI_TOKEN = process.env.ADVISOR_MCP_ALUMNI_TOKEN || "";
 
 // --- Advisor voice input: local Whisper via OMLX (on-host STT) ---
 // The advisor's mic records audio in the browser and posts it to /transcribe,

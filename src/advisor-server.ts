@@ -224,8 +224,24 @@ function json(res: http.ServerResponse, status: number, data: unknown): void {
   res.end(JSON.stringify(data));
 }
 
-function sessionCookie(id: string): string {
-  return `${SESSION_COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/`;
+/**
+ * Whether the client reached us over HTTPS, per Caddy's X-Forwarded-Proto. Same
+ * trust model as clientIp: behind the TLS vhost Caddy sets this header (and
+ * replaces any client-forged forwarding headers), so it is reliable; a direct
+ * loopback dev request over plain http has no header. Used to gate the Secure
+ * cookie attribute so production cookies are HTTPS-only without breaking local
+ * http testing.
+ */
+function requestIsHttps(req: http.IncomingMessage): boolean {
+  const proto = req.headers["x-forwarded-proto"];
+  const raw = Array.isArray(proto) ? proto[0] : proto;
+  return (raw?.split(",")[0]?.trim().toLowerCase() ?? "") === "https";
+}
+
+function sessionCookie(id: string, secure: boolean): string {
+  return `${SESSION_COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/${
+    secure ? "; Secure" : ""
+  }`;
 }
 
 /**
@@ -332,7 +348,7 @@ export function createAdvisorServer(
         // both mount points, which is also why the UI uses relative URLs.
         res.writeHead(302, {
           Location: "./",
-          "Set-Cookie": sessionCookie(clientId),
+          "Set-Cookie": sessionCookie(clientId, requestIsHttps(req)),
         });
         return res.end();
       }

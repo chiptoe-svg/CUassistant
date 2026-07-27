@@ -152,6 +152,24 @@ test("a correct password sets an HttpOnly session cookie and redirects", async (
   assert.match(set, /advisor_sid=/);
   assert.match(set, /HttpOnly/);
   assert.match(set, /SameSite=Strict/);
+  // Plain loopback (no X-Forwarded-Proto) omits Secure so local http testing works.
+  assert.doesNotMatch(set, /Secure/);
+});
+
+test("behind Caddy TLS (X-Forwarded-Proto: https) the session cookie is Secure", async () => {
+  const res = await fetch(`${base}/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Forwarded-Proto": "https",
+    },
+    body: new URLSearchParams({ password: "test-password" }).toString(),
+    redirect: "manual",
+  });
+  const set = res.headers.get("set-cookie")!;
+  assert.match(set, /Secure/);
+  assert.match(set, /HttpOnly/);
+  assert.match(set, /SameSite=Strict/);
 });
 
 test("an authenticated chat turn returns the agent's answer", async () => {

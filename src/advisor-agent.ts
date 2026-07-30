@@ -62,6 +62,7 @@ import { isEgressAuthorized } from "./policy.js";
 import { createAdvisorMcpBridge } from "./advisor-mcp.js";
 import { createProposeScheduleTool } from "./advisor-artifacts.js";
 import { createSkillTools } from "./advisor-skills.js";
+import { createHealthTool } from "./advisor-health.js";
 import {
   recordTurn,
   deriveToolOutcome,
@@ -714,6 +715,7 @@ async function runWithProvider(
       ...bridge!.tools,
       createProposeScheduleTool(session),
       ...createSkillTools(),
+      createHealthTool(),
     ],
     systemPrompt: loadSystemPrompt(),
     streamOptions: { cacheRetention: "short" },

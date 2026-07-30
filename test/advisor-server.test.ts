@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 // config.ts reads env at module load, so the password has to be in place
 // before advisor-server pulls it in. Hence the dynamic import.
 process.env.ADVISOR_PASSWORD = "test-password";
+process.env.ADVISOR_HEALTH_TOKEN = "test-health-token";
 
 const { createAdvisorServer, resetLoginRateLimitForTest, resetLastModeForTest } =
   await import("../src/advisor-server.ts");
@@ -30,6 +31,9 @@ beforeEach(() => {
 const seen: string[] = [];
 let turnBehaviour: "complete" | "aborted" | "throw" = "complete";
 
+// Injected so /health never touches the live MCP servers. Flip to drive the
+// unhealthy (503) path.
+let healthHealthy = true;
 const server = createAdvisorServer({
   runTurn: async (session, input) => {
     seen.push(session.id);
@@ -44,6 +48,13 @@ const server = createAdvisorServer({
       outcome: "complete" as const,
     };
   },
+  checkHealth: async () => ({
+    healthy: healthHealthy,
+    checkedAt: "2026-07-30T00:00:00.000Z",
+    servers: [
+      { name: "cu_public", reachable: healthHealthy, toolCount: 9, latencyMs: 5 },
+    ],
+  }),
 });
 
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -920,4 +931,40 @@ test("GET /course requires auth and 404s for a non-code path", async () => {
   const cookie = cookieFrom(await login());
   const junk = await fetch(`${base}/course/not-a-code`, { headers: { cookie } });
   assert.equal(junk.status, 404, "junk that never normalizes to a code is a clean 404");
+});
+
+// GET /health is for an external monitor: reachable without a login cookie, but
+// gated by its own bearer token, and the status code alone signals up/down.
+test("GET /health rejects a missing or wrong bearer token", async () => {
+  const none = await fetch(`${base}/health`);
+  assert.equal(none.status, 401);
+  const wrong = await fetch(`${base}/health`, {
+    headers: { authorization: "Bearer nope" },
+  });
+  assert.equal(wrong.status, 401);
+});
+
+test("GET /health with the right token returns 200 + health JSON (no login needed)", async () => {
+  healthHealthy = true;
+  const res = await fetch(`${base}/health`, {
+    headers: { authorization: "Bearer test-health-token" },
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { healthy: boolean; servers: unknown[] };
+  assert.equal(body.healthy, true);
+  assert.ok(Array.isArray(body.servers));
+});
+
+test("GET /health returns 503 when any data source is down", async () => {
+  healthHealthy = false;
+  try {
+    const res = await fetch(`${base}/health`, {
+      headers: { authorization: "Bearer test-health-token" },
+    });
+    assert.equal(res.status, 503, "a monitor keys on the status code");
+    const body = (await res.json()) as { healthy: boolean };
+    assert.equal(body.healthy, false);
+  } finally {
+    healthHealthy = true;
+  }
 });

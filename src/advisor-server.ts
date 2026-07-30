@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ADVISOR_HEALTH_TOKEN,
   ADVISOR_HTTP_HOST,
   ADVISOR_PASSWORD,
   ADVISOR_PORT,
@@ -54,6 +55,7 @@ import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
 import { renderSchedule } from "./advisor-artifacts.js";
 import { flagLikelyPrivate } from "./advisor-pii-detect.js";
 import { lookupCourse } from "./advisor-catalog.js";
+import { checkSystemHealth, type SystemHealth } from "./advisor-health.js";
 
 const MAX_BODY_BYTES = 5_000_000;
 
@@ -238,6 +240,13 @@ function requestIsHttps(req: http.IncomingMessage): boolean {
   return (raw?.split(",")[0]?.trim().toLowerCase() ?? "") === "https";
 }
 
+/** Constant-time check of the GET /health bearer against ADVISOR_HEALTH_TOKEN.
+ *  Fail closed: an empty configured token rejects everything (checkPassword). */
+function healthTokenOk(req: http.IncomingMessage): boolean {
+  const m = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
+  return m ? checkPassword(m[1]!.trim(), ADVISOR_HEALTH_TOKEN) : false;
+}
+
 function sessionCookie(id: string, secure: boolean): string {
   return `${SESSION_COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/${
     secure ? "; Secure" : ""
@@ -306,9 +315,14 @@ export function resetLastModeForTest(): void {
 }
 
 export function createAdvisorServer(
-  deps: { runTurn?: RunTurn } = {},
+  deps: {
+    runTurn?: RunTurn;
+    /** Injectable so tests exercise /health without live MCP connections. */
+    checkHealth?: () => Promise<SystemHealth>;
+  } = {},
 ): http.Server {
   const runTurn = deps.runTurn ?? runAdvisorTurn;
+  const checkHealth = deps.checkHealth ?? checkSystemHealth;
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -351,6 +365,16 @@ export function createAdvisorServer(
           "Set-Cookie": sessionCookie(clientId, requestIsHttps(req)),
         });
         return res.end();
+      }
+
+      // System health for an external monitor/agent. BEFORE the session-cookie
+      // gate (a monitor has no login) but gated by its own bearer token so it is
+      // not world-readable. 200 when every data source is reachable, 503 when
+      // any is down, so a monitor can key on the status code alone.
+      if (method === "GET" && url.pathname === "/health") {
+        if (!healthTokenOk(req)) return json(res, 401, { error: "unauthorized" });
+        const health = await checkHealth();
+        return json(res, health.healthy ? 200 : 503, health);
       }
 
       const auth = authenticate(req);

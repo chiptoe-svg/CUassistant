@@ -219,6 +219,13 @@ export const ADVISOR_SESSION_TTL_MS = Number(
   process.env.ADVISOR_SESSION_TTL_MS || 2 * 60 * 60 * 1000,
 );
 /**
+ * Bearer token for the unauthenticated-by-cookie GET /health endpoint, so an
+ * external monitor/agent can poll system health without a login session. Fail
+ * closed: when empty the endpoint rejects every request (401), so it is off
+ * until deliberately configured.
+ */
+export const ADVISOR_HEALTH_TOKEN = process.env.ADVISOR_HEALTH_TOKEN || "";
+/**
  * Tried in order: on-prem first, paid fallback (mirrors ask_gc). Every entry
  * reached must map to an authorized destination in policy/action-policy.yaml —
  * see CHAIN_EGRESS_PROVIDER in advisor-agent.ts. This list is what the egress

@@ -6,6 +6,7 @@ export interface CleanerResult {
     courses: { code: string; prefix: string | null; number: string | null; title: string; term: string; credits: number; status: string }[];
     [k: string]: unknown;
   };
+  markdown: string;
   warnings: string[];
   metrics: { label: string; value: string }[];
   preview: string;

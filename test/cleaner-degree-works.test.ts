@@ -34,6 +34,17 @@ test("sanitized output carries no PII and no grades", () => {
   assert.ok(!out.preview.includes("C12345678"));
 });
 
+test("emits a readable Markdown table built only from whitelisted fields", () => {
+  const out = degreeWorksModule.clean(SAMPLE);
+  assert.match(out.markdown, /\| Code \| Title \| Term \| Cr \| Status \|/);
+  assert.match(out.markdown, /GC 1040/);
+  assert.match(out.markdown, /Introduction to Graphic Communications/);
+  // The privacy property must hold for the Markdown too, not just the JSON.
+  assert.ok(!out.markdown.includes("C12345678"), "student ID leaked to markdown");
+  assert.ok(!out.markdown.includes("3.45"), "GPA leaked to markdown");
+  assert.ok(!out.markdown.includes("John"), "name leaked to markdown");
+});
+
 test("warns when the catalog year is missing", () => {
   const out = degreeWorksModule.clean(SAMPLE.replace(/Catalog year: 2023-2024/, ""));
   assert.ok(out.warnings.some((w) => /Catalog year was not found/i.test(w)));

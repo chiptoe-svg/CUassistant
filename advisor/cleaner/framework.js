@@ -8,6 +8,7 @@
 // output ever leaves this tab, by copy or download.
 
 import { degreeWorksModule } from "./modules/degree-works.js";
+import { bannerScheduleModule } from "./modules/banner-schedule.js";
 
 // pdf.js is loaded LAZILY, on the first PDF, not at module top level. A static
 // import that throws (pdfjs 4.x needs a very recent browser, e.g.
@@ -24,7 +25,7 @@ async function pdfjs() {
   return _pdfjs;
 }
 
-const MODULES = [degreeWorksModule]; // add a module object here to add a duty
+const MODULES = [degreeWorksModule, bannerScheduleModule]; // add a module object here to add a duty
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -93,7 +94,10 @@ function run(rawText, sourceLabel) {
   try {
     const result = activeModule().clean(rawText);
     current = result;
-    els.output.value = JSON.stringify(result.sanitized, null, 2);
+    // The copyable output is readable Markdown (built by the module from its
+    // whitelisted fields); fall back to JSON only if a module omits it.
+    els.output.value =
+      result.markdown ?? JSON.stringify(result.sanitized, null, 2);
     els.preview.value = result.preview;
     renderSummary(result.metrics);
     renderMessages(result.warnings, "warning");
@@ -143,14 +147,14 @@ els.cleanPaste.addEventListener("click", () => {
 els.copyButton.addEventListener("click", async () => {
   if (!current) return;
   await navigator.clipboard.writeText(els.output.value);
-  els.status.textContent = "Sanitized output copied.";
+  els.status.textContent = "Markdown copied.";
 });
 els.downloadButton.addEventListener("click", () => {
   if (!current) return;
-  const blob = new Blob([els.output.value + "\n"], { type: "application/json" });
+  const blob = new Blob([els.output.value + "\n"], { type: "text/markdown" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = current.schema + ".json"; a.click();
+  a.href = url; a.download = current.schema + ".md"; a.click();
   URL.revokeObjectURL(url);
 });
 

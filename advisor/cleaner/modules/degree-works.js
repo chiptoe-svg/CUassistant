@@ -21,9 +21,11 @@ export const degreeWorksModule = {
     const { progress, warnings } = parseDegreeWorks(cleanLines, text, "");
     const completed = progress.courses.filter((c) => c.status === "completed").length;
     const inProgress = progress.courses.filter((c) => c.status === "in_progress").length;
+    const ledger = makeCourseLedger(progress);
     return {
       schema: "gc-course-ledger-v1",
-      sanitized: makeCourseLedger(progress),
+      sanitized: ledger,
+      markdown: ledgerToMarkdown(ledger),
       warnings,
       metrics: [
         { label: "Catalog year", value: progress.catalogYear ?? "—" },
@@ -393,6 +395,51 @@ function makeCourseLedger(progress) {
     creditsApplied: progress.creditsApplied,
     courses
   };
+}
+
+// Render the sanitized ledger as a readable Markdown document. Built ONLY from
+// the whitelisted ledger fields (never the raw preview), so the privacy property
+// is preserved: names, IDs, GPA, and grades cannot reach this output.
+function ledgerToMarkdown(ledger) {
+  const title = ledger.programName || ledger.major || "Degree Works";
+  const parts = [`# ${title}${ledger.degree ? ` (${ledger.degree})` : ""}`];
+
+  const meta = [];
+  if (ledger.catalogYear) meta.push(`Catalog year ${ledger.catalogYear}`);
+  if (ledger.creditsApplied != null || ledger.creditsRequired != null) {
+    meta.push(
+      `Credits applied ${ledger.creditsApplied ?? "?"}/${ledger.creditsRequired ?? "?"}`,
+    );
+  }
+  if (Array.isArray(ledger.minors) && ledger.minors.length) {
+    meta.push(
+      `Minor: ${ledger.minors.map((m) => (m.status ? `${m.name} (${m.status})` : m.name)).join(", ")}`,
+    );
+  }
+  if (meta.length) parts.push(meta.join(" · "));
+
+  const courses = Array.isArray(ledger.courses) ? ledger.courses : [];
+  if (courses.length === 0) {
+    parts.push("\n_No courses parsed._");
+  } else {
+    parts.push(
+      "",
+      "| Code | Title | Term | Cr | Status |",
+      "| --- | --- | --- | --- | --- |",
+      ...courses.map(
+        (c) =>
+          `| ${mdCell(c.code)} | ${mdCell(c.title)} | ${mdCell(c.term)} | ${
+            Number.isFinite(c.credits) ? c.credits : "?"
+          } | ${mdCell(c.status)} |`,
+      ),
+    );
+  }
+
+  return parts.join("\n");
+}
+
+function mdCell(value) {
+  return String(value ?? "").replace(/\|/g, "\\|");
 }
 
 function dedupeCourses(courses) {

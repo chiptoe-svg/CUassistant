@@ -186,7 +186,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
 
 <form id="composer">
   <label for="message">Your question</label>
-  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for newline · /sched then paste a schedule to clean it"></textarea>
+  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for newline · /sched then paste a schedule from the student profile to format it"></textarea>
   <div id="composerbtns">
     <button id="send" type="submit">Send</button>
     <button id="mic" type="button" aria-label="Dictate your question" title="Dictate">🎙</button>

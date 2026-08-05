@@ -345,6 +345,29 @@ test("renderChatPage reflects the mode at first paint and links the cleaner", ()
   assert.match(oai, /needsConsent/); // the consent handler is present in the script
 });
 
+test("wires a /sched composer command sharing the cleaner's schedule parser", () => {
+  const page = renderChatPage("private");
+  // Shares the SAME module as the cleaner tab — no duplicated parser, no drift.
+  assert.match(page, /<script type="module">/);
+  assert.match(
+    page,
+    /import \{ bannerScheduleModule \} from "\.\/cleaner\/modules\/banner-schedule\.js"/,
+  );
+  assert.match(page, /bannerScheduleModule\.clean\(/);
+  // Capture-phase submit interception so it runs before the send handler.
+  assert.match(page, /addEventListener\("submit",[\s\S]*?,\s*true\)/);
+  // Discoverable from the composer placeholder.
+  assert.match(page, /placeholder="[^"]*\/sched[^"]*"/);
+});
+
+// The /sched command is a client-side text transform, so it must be present and
+// identical regardless of mode (it runs before any routing decision).
+test("the /sched command is wired in both private and openai mode", () => {
+  for (const mode of ["private", "openai"] as const) {
+    assert.match(renderChatPage(mode), /cleaner\/modules\/banner-schedule\.js/);
+  }
+});
+
 // page() must place the mode attribute on <html> itself (not just a centered
 // column) so the whole-page background can react to it.
 test("page() emits the mode attribute on the <html> element", () => {

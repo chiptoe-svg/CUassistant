@@ -65,7 +65,7 @@
       <select id="moduleSelect" aria-describedby="moduleDesc"></select>
       <label for="pdfInput">PDF</label>
       <input id="pdfInput" type="file" accept="application/pdf">
-      <button id="copyButton" type="button" disabled>Copy sanitized output</button>
+      <button id="copyButton" type="button" disabled>Copy Markdown</button>
       <button id="downloadButton" class="secondary" type="button" disabled>Download</button>
       <span id="status">Choose what to clean, then load a PDF or paste text.</span>
       <span id="moduleDesc"></span>
@@ -81,8 +81,8 @@
     <div id="summary" aria-live="polite"></div>
 
     <div class="grid">
-      <section><h2>Sanitized output</h2>
-        <textarea id="output" spellcheck="false" aria-label="Sanitized output"></textarea></section>
+      <section><h2>Cleaned output (Markdown)</h2>
+        <textarea id="output" spellcheck="false" aria-label="Cleaned output (Markdown)"></textarea></section>
       <section><h2>Source preview (private lines removed)</h2>
         <textarea id="preview" spellcheck="false" aria-label="Source preview"></textarea></section>
     </div>

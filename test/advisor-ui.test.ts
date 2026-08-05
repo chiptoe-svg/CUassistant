@@ -89,7 +89,10 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
 // Extracts and runs the chat page's inline <script> against a fake DOM and a
 // fake fetch, then submits the composer once. Returns the recorded fetch
 // calls and the fake elements so callers can assert on the resulting DOM.
-async function runChatSubmit(responseBody: unknown) {
+async function runChatSubmit(
+  responseBody: unknown,
+  userMessage = "What room fits 30 students?",
+) {
   const match = renderChatPage("private").match(/<script>([\s\S]*?)<\/script>/);
   assert.ok(match, "expected an inline <script> in the chat page");
   const script = match[1];
@@ -98,7 +101,7 @@ async function runChatSubmit(responseBody: unknown) {
     status: makeElement(),
     answers: makeElement(),
     composer: makeElement(),
-    message: makeElement({ value: "What room fits 30 students?" }),
+    message: makeElement({ value: userMessage }),
     send: makeElement(),
     stop: makeElement({ disabled: true }),
     clear: makeElement(),
@@ -254,6 +257,35 @@ test("markdown in an agent answer renders as real elements, not raw syntax", asy
   assert.ok(tableWrap, "expected the table wrapped in a scrollable container");
   const table = tableWrap!.children.find((c) => c.tagName === "table");
   assert.ok(table, "expected a real <table>, not a literal pipe row");
+});
+
+// A /sched-cleaned schedule lands in the user's OWN bubble as a Markdown table;
+// it must render as a real <table>, not one flowing line of pipes.
+test("a table in the user's own message renders as a real table, not raw pipes", async () => {
+  const table =
+    "**Registered schedule — term 202608 — 1 course, 3 credits**\n\n" +
+    "| Code | Title | CRN | Cr | Status | Instructor |\n" +
+    "| --- | --- | --- | --- | --- | --- |\n" +
+    "| GC 1010 001 | Orientation | 80763 | 3 | Web Registered | Chip Tonkin |\n";
+  const { elements } = await runChatSubmit({ text: "ok" }, table);
+  const you = elements.answers.children.find((a) =>
+    a.children.some((c) => c.tagName === "h2" && c.textContent === "You"),
+  );
+  assert.ok(you, "expected a You article");
+  const wrap = you!.children.find((c) => c.className === "mdtable-wrap");
+  assert.ok(wrap, "expected the user's table wrapped, not printed as pipes");
+  assert.ok(wrap!.children.some((c) => c.tagName === "table"), "expected a real <table> in the You bubble");
+});
+
+// An ordinary question (no table) must keep the plain italic .msg path.
+test("a plain user message still renders as the italic .msg paragraph", async () => {
+  const { elements } = await runChatSubmit({ text: "ok" }, "What are the GC 4061 conflicts?");
+  const you = elements.answers.children.find((a) =>
+    a.children.some((c) => c.tagName === "h2" && c.textContent === "You"),
+  );
+  const msg = you!.children.find((c) => c.className === "msg");
+  assert.ok(msg, "expected the plain path to keep the .msg paragraph");
+  assert.equal(msg!.textContent, "What are the GC 4061 conflicts?");
 });
 
 // A plain answer with no markdown syntax at all must still collapse to a

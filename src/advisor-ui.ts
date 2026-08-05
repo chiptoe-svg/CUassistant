@@ -416,6 +416,18 @@ function renderMarkdown(container, text) {
 }
 // ---------------------------------------------------------------------------
 
+// True when the text contains a Markdown table (a "| … |" line immediately
+// followed by a separator row) — the same shape renderMarkdown recognizes. Used
+// to format a pasted/cleaned schedule in the user's own bubble instead of
+// printing it as one flowing line of pipes.
+function hasTable(text) {
+  const lines = String(text).split("\\n").map((l) => l.trim());
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (lines[i].charAt(0) === "|" && isSeparatorRow(lines[i + 1])) return true;
+  }
+  return false;
+}
+
 function addAnswer(role, text) {
   const art = document.createElement("article");
   art.dataset.track = uiMode;
@@ -426,6 +438,8 @@ function addAnswer(role, text) {
   art.append(h);
   if (agent) {
     renderMarkdown(art, text);           // agent output — markdown, XSS-safe
+  } else if (hasTable(text)) {
+    renderMarkdown(art, text);           // e.g. a /sched schedule — render the table, not raw pipes
   } else {
     const p = document.createElement("p");
     p.className = "msg";

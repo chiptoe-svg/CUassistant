@@ -186,7 +186,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
 
 <form id="composer">
   <label for="message">Your question</label>
-  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for a new line"></textarea>
+  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for newline · /sched then paste a schedule to clean it"></textarea>
   <div id="composerbtns">
     <button id="send" type="submit">Send</button>
     <button id="mic" type="button" aria-label="Dictate your question" title="Dictate">🎙</button>
@@ -817,6 +817,34 @@ fbCancel.addEventListener("click", () => {
   resetFeedbackForm();
   fbDialog.close();
 });
+</script>
+<script type="module">
+// /sched <pasted Banner rows>: expand a registered-schedule paste into a clean
+// Markdown table using the SAME parser as the cleaner tab (no drift). The first
+// Send expands the paste in place for review; the second Send submits the cleaned
+// table. Runs in the CAPTURE phase on document so it fires before (and can stop)
+// the main send handler, leaving the classic script untouched. Works identically
+// in private and openai mode - it only rewrites the outgoing text, before routing.
+import { bannerScheduleModule } from "./cleaner/modules/banner-schedule.js";
+document.addEventListener("submit", (e) => {
+  if (!e.target || e.target.id !== "composer") return;
+  const box = document.getElementById("message");
+  const raw = box ? box.value : "";
+  const m = raw.match(/^\\s*\\/sched\\b([\\s\\S]*)$/);
+  if (!m) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const st = document.getElementById("status");
+  const body = m[1].replace(/^[ \\t]*\\r?\\n?/, "");
+  if (!body.trim()) {
+    if (st) st.textContent = "Paste your Banner schedule rows after /sched, then press Send.";
+    box.focus();
+    return;
+  }
+  box.value = bannerScheduleModule.clean(body).markdown;
+  if (st) st.textContent = "Schedule cleaned \\u2014 review, then press Send.";
+  box.focus();
+}, true);
 </script>`,
     ` data-mode="${mode}"`,
   );

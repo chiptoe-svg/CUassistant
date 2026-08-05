@@ -343,3 +343,24 @@ export const ADVISOR_WHISPER_URL =
 export const ADVISOR_WHISPER_KEY = process.env.ADVISOR_WHISPER_KEY || "";
 export const ADVISOR_WHISPER_MODEL =
   process.env.ADVISOR_WHISPER_MODEL || "whisper-large-v3-turbo-asr-fp16";
+
+// Health probe for the OMLX on-host inference server (the same server that
+// backs local Whisper above). GET /v1/models is a lightweight liveness +
+// readiness check: it confirms OMLX is up, authenticated, and has models
+// loaded, without running inference. Auth reuses ADVISOR_WHISPER_KEY (same
+// server). The advisor's system health check gates on OMLX only when that key
+// is set — an unset key means OMLX isn't configured on this host.
+export const ADVISOR_OMLX_MODELS_URL =
+  process.env.ADVISOR_OMLX_MODELS_URL || "http://127.0.0.1:8000/v1/models";
+
+// Health probe for the DGX Spark inference gateway. GET /spark/health (port
+// 9099) is a dedicated liveness endpoint, separate from the :8080/v1 inference
+// endpoint the advisor actually dials for prompts. It has its own bearer token
+// (ADVISOR_SPARK_HEALTH_TOKEN). The advisor's system health check gates on Spark
+// only when that token is set — an unset token means Spark isn't configured for
+// health checking on this host, so it's omitted rather than reported as down.
+export const ADVISOR_SPARK_HEALTH_URL =
+  process.env.ADVISOR_SPARK_HEALTH_URL ||
+  "http://130.127.162.68:9099/spark/health";
+export const ADVISOR_SPARK_HEALTH_TOKEN =
+  process.env.SPARK_HEALTH_TOKEN || process.env.ADVISOR_SPARK_HEALTH_TOKEN || "";

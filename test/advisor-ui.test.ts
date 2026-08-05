@@ -3,6 +3,8 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { renderChatPage, renderLoginPage } from "../src/advisor-ui.ts";
+import { bannerScheduleModule } from "../advisor/cleaner/modules/banner-schedule.js";
+import { navigatorScheduleModule } from "../advisor/cleaner/modules/navigator-schedule.js";
 
 // Minimal fake DOM element used to execute the chat page's inline <script>
 // in a sandboxed vm context. Real enough to drive the submit handler without
@@ -143,6 +145,9 @@ async function runChatSubmit(
       },
     },
     location: {},
+    // The module script sets globalThis.__scheduleModules in the browser; inject
+    // it here so the schedule-formatting path in the submit handler is exercised.
+    __scheduleModules: [bannerScheduleModule, navigatorScheduleModule],
   };
   vm.createContext(sandbox);
   vm.runInContext(script, sandbox);
@@ -377,26 +382,100 @@ test("renderChatPage reflects the mode at first paint and links the cleaner", ()
   assert.match(oai, /needsConsent/); // the consent handler is present in the script
 });
 
-test("wires a /sched composer command sharing the cleaner's schedule parser", () => {
+test("wires composer schedule formatting sharing the cleaner's parsers", () => {
   const page = renderChatPage("private");
-  // Shares the SAME module as the cleaner tab — no duplicated parser, no drift.
+  // Shares the SAME modules as the cleaner tab — no duplicated parsers, no drift.
   assert.match(page, /<script type="module">/);
   assert.match(
     page,
     /import \{ bannerScheduleModule \} from "\.\/cleaner\/modules\/banner-schedule\.js"/,
   );
-  assert.match(page, /bannerScheduleModule\.clean\(/);
-  // Capture-phase submit interception so it runs before the send handler.
-  assert.match(page, /addEventListener\("submit",[\s\S]*?,\s*true\)/);
+  assert.match(
+    page,
+    /import \{ navigatorScheduleModule \} from "\.\/cleaner\/modules\/navigator-schedule\.js"/,
+  );
+  // Module script exposes the parsers; the classic submit handler consumes them —
+  // so Enter and the Send button both run the formatting (no capture-phase path).
+  assert.match(page, /globalThis\.__scheduleModules = \[bannerScheduleModule, navigatorScheduleModule\]/);
+  assert.match(page, /for \(const mod of mods\)/);
   // Discoverable from the composer placeholder.
-  assert.match(page, /placeholder="[^"]*\/sched[^"]*"/);
+  assert.match(page, /placeholder="[^"]*auto-format[^"]*"/);
 });
 
-// The /sched command is a client-side text transform, so it must be present and
-// identical regardless of mode (it runs before any routing decision).
-test("the /sched command is wired in both private and openai mode", () => {
+// The submit handler is the single path both Enter (via requestSubmit) and the
+// Send button reach — so expanding /sched there guarantees identical behavior.
+// First submit must expand the paste in place and NOT send.
+test("/sched expands the paste in the submit handler without sending", async () => {
+  const cruft =
+    "Press enter key to view additional class details for Orientation to Graphic " +
+    "Communications GC 1010 001 for term 202608 Press Escape key to select the entire " +
+    "rowPress enter to activate popup";
+  const raw =
+    "/sched\n" +
+    `Orientation to Graphic Communications\tGC 1010 001\t80763${cruft}\t1\tWeb Registered\tChip Tonkin`;
+  const { elements, fetchCalls } = await runChatSubmit({ text: "ok" }, raw);
+  assert.equal(
+    fetchCalls.filter(([u]) => u === "chat").length,
+    0,
+    "expansion must not send on the first submit",
+  );
+  assert.match(elements.message.value, /\| Code \| Title \| CRN \| Cr \| Status \| Instructor \|/);
+  assert.match(elements.message.value, /GC 1010 001/);
+  assert.doesNotMatch(elements.message.value, /Press enter key/);
+});
+
+test("auto-detects a Banner schedule paste (no /sched) and formats it", async () => {
+  const cruft =
+    "Press enter key to view additional class details for X GC 1010 001 for term 202608 " +
+    "Press Escape key to select the entire rowPress enter to activate popup";
+  const raw =
+    `Orientation\tGC 1010 001\t80763${cruft}\t1\tWeb Registered\tChip Tonkin\n` +
+    `Digital Graphics\tGC 1020 001\t80771${cruft}\t2\tWeb Registered\tAmanda Wells Bridges`;
+  const { elements, fetchCalls } = await runChatSubmit({ text: "ok" }, raw);
+  assert.equal(fetchCalls.filter(([u]) => u === "chat").length, 0, "auto-format must not send");
+  assert.match(elements.message.value, /\| Code \| Title \| CRN \| Cr \| Status \| Instructor \|/);
+  assert.doesNotMatch(elements.message.value, /Press enter key/);
+});
+
+test("auto-detects a Navigator schedule paste (no /sched), with days/times + room", async () => {
+  const raw = [
+    "ACCT-2020-001-LEC Managerial Accounting Concepts\tDavid Garrison",
+    "Begins on 08/19/2026",
+    "",
+    "08/19/2026 - 12/11/2026",
+    "MW 2:30pm - 3:45pm ET",
+    "TILLMN-160",
+    "",
+    "GC-1010-001-LEC Orientation to Graphic Comm\tChip Tonkin",
+    "Begins on 08/19/2026",
+    "",
+    "08/19/2026 - 12/11/2026",
+    "F 11:15am - 12:05pm ET",
+    "JORDAN-G33",
+  ].join("\n");
+  const { elements, fetchCalls } = await runChatSubmit({ text: "ok" }, raw);
+  assert.equal(fetchCalls.filter(([u]) => u === "chat").length, 0, "auto-format must not send");
+  assert.match(elements.message.value, /\| Code \| Title \| Days\/Times \| Room \| Instructor \|/);
+  assert.match(elements.message.value, /ACCT 2020 001 \| Managerial Accounting Concepts \| MW 2:30pm - 3:45pm ET \| TILLMN-160/);
+  assert.doesNotMatch(elements.message.value, /Begins on/);
+});
+
+test("a normal question is not mistaken for a schedule", async () => {
+  const { elements, fetchCalls } = await runChatSubmit(
+    { text: "answer" },
+    "What are the GC 4061 conflicts this fall?",
+  );
+  assert.equal(fetchCalls.filter(([u]) => u === "chat").length, 1, "a normal question sends");
+  assert.equal(elements.message.value, "", "box cleared after send, not rewritten to a table");
+});
+
+// The schedule formatting is a client-side text transform, so it must be present
+// and identical regardless of mode (it runs before any routing decision).
+test("schedule formatting is wired in both private and openai mode", () => {
   for (const mode of ["private", "openai"] as const) {
-    assert.match(renderChatPage(mode), /cleaner\/modules\/banner-schedule\.js/);
+    const page = renderChatPage(mode);
+    assert.match(page, /cleaner\/modules\/banner-schedule\.js/);
+    assert.match(page, /cleaner\/modules\/navigator-schedule\.js/);
   }
 });
 

@@ -1,17 +1,17 @@
-export interface BannerScheduleResult {
+export interface NavigatorScheduleResult {
   schema: string;
   sanitized: {
     schema: string;
-    term: string | null;
-    totalCredits: number;
     courses: {
       code: string;
       section: string;
+      type: string;
       title: string;
-      crn: string;
-      credits: number;
-      status: string;
       instructor: string;
+      days: string;
+      time: string;
+      room: string;
+      dates: string;
     }[];
   };
   markdown: string;
@@ -19,12 +19,12 @@ export interface BannerScheduleResult {
   metrics: { label: string; value: string }[];
   preview: string;
 }
-export interface BannerScheduleModule {
+export interface NavigatorScheduleModule {
   id: string;
   label: string;
   description: string;
   accepts: ("pdf" | "text")[];
   detect(text: string): boolean;
-  clean(rawText: string): BannerScheduleResult;
+  clean(rawText: string): NavigatorScheduleResult;
 }
-export const bannerScheduleModule: BannerScheduleModule;
+export const navigatorScheduleModule: NavigatorScheduleModule;

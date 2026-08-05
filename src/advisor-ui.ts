@@ -186,7 +186,7 @@ export function renderChatPage(mode: "private" | "openai" = "private"): string {
 
 <form id="composer">
   <label for="message">Your question</label>
-  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for newline · /sched then paste a schedule from the student profile to format it"></textarea>
+  <textarea id="message" name="message" required placeholder="Enter to send · Shift+Enter for newline · paste a class schedule (Advising Profile or Navigator) to auto-format it"></textarea>
   <div id="composerbtns">
     <button id="send" type="submit">Send</button>
     <button id="mic" type="button" aria-label="Dictate your question" title="Dictate">🎙</button>
@@ -499,6 +499,31 @@ async function send(message, consent) {
 
 $("composer").addEventListener("submit", async (e) => {
   e.preventDefault();
+  // Format a pasted class schedule into a clean Markdown table using the SAME
+  // parsers as the cleaner tab (exposed by the module script). An explicit /sched
+  // forces formatting; otherwise a module must recognize the paste via detect().
+  // Two formats are supported (Banner "Advising Profile" and Navigator). The first
+  // submit expands in place for review; the next submit sends it. Done here so
+  // Enter and the Send button behave identically.
+  const mods = globalThis.__scheduleModules;
+  if (mods && mods.length) {
+    const slash = $("message").value.match(/^\\s*\\/sched\\b([\\s\\S]*)$/);
+    const body = slash ? slash[1].replace(/^[ \\t]*\\r?\\n?/, "") : $("message").value;
+    if (slash && !body.trim()) {
+      status.textContent = "Paste a schedule after /sched, then press Send.";
+      return;
+    }
+    for (const mod of mods) {
+      if (!slash && !mod.detect(body)) continue;
+      const cleaned = mod.clean(body);
+      if (cleaned.sanitized.courses.length >= 1) {
+        $("message").value = cleaned.markdown;
+        status.textContent = "Schedule formatted \\u2014 review, then press Send.";
+        $("message").focus();
+        return;
+      }
+    }
+  }
   const message = $("message").value.trim();
   if (!message) return;
   $("send").disabled = true; $("stop").disabled = false;
@@ -833,32 +858,17 @@ fbCancel.addEventListener("click", () => {
 });
 </script>
 <script type="module">
-// /sched <pasted Banner rows>: expand a registered-schedule paste into a clean
-// Markdown table using the SAME parser as the cleaner tab (no drift). The first
-// Send expands the paste in place for review; the second Send submits the cleaned
-// table. Runs in the CAPTURE phase on document so it fires before (and can stop)
-// the main send handler, leaving the classic script untouched. Works identically
-// in private and openai mode - it only rewrites the outgoing text, before routing.
+// Expose the cleaner tab's schedule parsers to the classic script so the composer
+// shares ONE set of parsers (no drift). Each module has detect(text) + clean(text);
+// the submit handler tries them in order. Two formats today (Banner "Advising
+// Profile" and Navigator); add a module here to support another. The handler reads
+// globalThis.__scheduleModules and does the expansion there, so Enter (via
+// requestSubmit) and the Send button take the exact same path. This import runs
+// after the classic script is parsed, which is fine: it only needs to be set
+// before the user submits a schedule paste.
 import { bannerScheduleModule } from "./cleaner/modules/banner-schedule.js";
-document.addEventListener("submit", (e) => {
-  if (!e.target || e.target.id !== "composer") return;
-  const box = document.getElementById("message");
-  const raw = box ? box.value : "";
-  const m = raw.match(/^\\s*\\/sched\\b([\\s\\S]*)$/);
-  if (!m) return;
-  e.preventDefault();
-  e.stopPropagation();
-  const st = document.getElementById("status");
-  const body = m[1].replace(/^[ \\t]*\\r?\\n?/, "");
-  if (!body.trim()) {
-    if (st) st.textContent = "Paste your Banner schedule rows after /sched, then press Send.";
-    box.focus();
-    return;
-  }
-  box.value = bannerScheduleModule.clean(body).markdown;
-  if (st) st.textContent = "Schedule cleaned \\u2014 review, then press Send.";
-  box.focus();
-}, true);
+import { navigatorScheduleModule } from "./cleaner/modules/navigator-schedule.js";
+globalThis.__scheduleModules = [bannerScheduleModule, navigatorScheduleModule];
 </script>`,
     ` data-mode="${mode}"`,
   );

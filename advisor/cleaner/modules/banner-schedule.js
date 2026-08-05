@@ -16,6 +16,22 @@ export const bannerScheduleModule = {
   description:
     "Clemson Banner registered-schedule paste → clean Markdown table (code, title, CRN, credits, instructor). Strips the screen-reader text; no student name or ID appears in this view.",
   accepts: ["text"],
+  // Does this paste look like a Banner "Advising Profile" schedule? Its rows carry
+  // a distinctive screen-reader phrase; failing that, two or more tab-delimited
+  // rows whose 2nd column is a "SUBJ NUM SEC" course code. Used to auto-format a
+  // paste without requiring the /sched prefix.
+  detect(text) {
+    const s = String(text || "");
+    if (/Press enter key to view additional class details|select the entire row/i.test(s)) {
+      return true;
+    }
+    let rows = 0;
+    for (const line of s.split("\n")) {
+      const cols = line.split("\t");
+      if (cols.length >= 4 && /^\s*[A-Z]{2,5}\s+\d{4}\s+\S+\s*$/.test(cols[1] || "")) rows++;
+    }
+    return rows >= 2;
+  },
   clean(rawText) {
     const lines = String(rawText || "")
       .split("\n")

@@ -9,6 +9,7 @@
 
 import { degreeWorksModule } from "./modules/degree-works.js";
 import { bannerScheduleModule } from "./modules/banner-schedule.js";
+import { navigatorScheduleModule } from "./modules/navigator-schedule.js";
 
 // pdf.js is loaded LAZILY, on the first PDF, not at module top level. A static
 // import that throws (pdfjs 4.x needs a very recent browser, e.g.
@@ -25,7 +26,7 @@ async function pdfjs() {
   return _pdfjs;
 }
 
-const MODULES = [degreeWorksModule, bannerScheduleModule]; // add a module object here to add a duty
+const MODULES = [degreeWorksModule, bannerScheduleModule, navigatorScheduleModule]; // add a module object here to add a duty
 
 const $ = (id) => document.getElementById(id);
 const els = {

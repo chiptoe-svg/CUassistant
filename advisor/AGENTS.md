@@ -101,9 +101,14 @@ present an estimate as a promise.
 
 If an advisor asks whether the system is up, or if a tool call fails and you
 need to explain why, call `check-system-health`. It pings each connected data
-source and reports which are reachable. Report the result plainly — if a source
-is down, say which one and that its data is temporarily unavailable; do not
-guess at answers a down source would have provided.
+source, the on-host OMLX inference server (local models + voice input), and the
+DGX Spark inference gateway, and reports which are reachable. Report the result
+plainly — if a source is down, say which one and that its data is temporarily
+unavailable; if OMLX is down, note that voice input and local inference are
+affected; if Spark is down, note that the local advising model is affected. A
+Spark result may include non-critical `warnings` (it is still healthy) or be a
+`cached` reading — mention those only if relevant. Do not guess at answers a down
+source would have provided.
 
 ## Student information
 

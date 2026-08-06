@@ -150,7 +150,7 @@ export function parseSchedule(raw: string): ProposedSchedule {
  * course title is a string the model chose, and it reaches a page an advisor
  * opens in a browser.
  */
-function esc(v: unknown): string {
+export function esc(v: unknown): string {
   return String(v)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

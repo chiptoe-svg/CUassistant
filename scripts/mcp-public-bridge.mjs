@@ -247,10 +247,22 @@ function supervise(port) {
 const ticks = PORTS.map((port) => supervise(port));
 
 // One scheduler for all ports: fast while anything is unbound, slow otherwise.
+//
+// The timer is deliberately NOT unref'd. When the container network goes idle
+// every listener closes (the "gateway disappeared" branch), and the net.Server
+// handles are the only things keeping the event loop alive. An unref'd poll timer
+// would then let the process EXIT cleanly whenever no container is running — and
+// launchd (KeepAlive) would relaunch it, cold. That cold restart (Node boot +
+// `container network inspect`) is far longer than a container's connect-retry
+// budget, so a container spawning right after an idle period could not reach the
+// bridge-dependent, loopback-only servers (8765/8011/10255). Keeping the timer
+// ref'd makes this a proper always-on daemon that stays warm across idle periods
+// and rebinds within FAST_MS when the gateway reappears. (History: `runs=105088`
+// launchd restarts — this poller was exiting on every idle window.)
 (function schedule() {
   const delay = unbound.size > 0 ? FAST_MS : RETRY_MS;
   setTimeout(() => {
     for (const tick of ticks) tick();
     schedule();
-  }, delay).unref?.();
+  }, delay);
 })();

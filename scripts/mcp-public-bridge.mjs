@@ -64,12 +64,14 @@ import { execFileSync } from 'child_process';
 const RETRY_MS = 5000;
 const FAST_MS = 250;
 const DECLARED_TTL_MS = 30_000;
+// Only the loopback-only services are bridged. 8766/8767 (public/catalog) bind
+// 0.0.0.0 in their own processes (verified: they LISTEN on `*:8766`/`*:8767`),
+// so the gateway address already reaches them directly — forwarding them here was
+// redundant. Bridge only what actually binds 127.0.0.1.
 const PORTS = [
-  8765, // cuassistant-credentialed MCP server
-  8766, // cuassistant-public MCP server (Clemson class schedule)
-  8767, // cuassistant-catalog MCP server (GC curriculum)
-  8011, // gc-alumni MCP server (GC alumni outcomes, no auth)
-  10255, // OneCLI credential proxy
+  8765, // cuassistant-credentialed MCP server (127.0.0.1-only)
+  8011, // gc-alumni MCP server (127.0.0.1-only, no auth)
+  10255, // OneCLI credential proxy (127.0.0.1-only)
 ];
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;

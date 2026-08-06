@@ -405,8 +405,15 @@ test("/export/schedule serves a document only after one has been proposed", asyn
     headers: { "Content-Type": "application/json", cookie: c },
     body: JSON.stringify({ message: "make me a schedule" }),
   });
-  const body = (await chat.json()) as { schedule?: boolean };
+  const body = (await chat.json()) as {
+    schedule?: boolean;
+    artifact?: { kind: string; html: string; height: number };
+  };
   assert.equal(body.schedule, true, "the UI needs to know a document exists");
+  assert.ok(body.artifact, "response carries an inline artifact");
+  assert.equal(body.artifact?.kind, "schedule");
+  assert.match(body.artifact?.html ?? "", /<!DOCTYPE html>/);
+  assert.equal(typeof body.artifact?.height, "number");
 
   const doc = await fetch(`http://127.0.0.1:${p}/export/schedule`, {
     headers: { cookie: c },

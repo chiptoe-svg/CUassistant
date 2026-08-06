@@ -53,6 +53,7 @@ import {
 } from "./advisor-agent.js";
 import { renderChatPage, renderLoginPage } from "./advisor-ui.js";
 import { renderSchedule } from "./advisor-artifacts.js";
+import { renderScheduleGrid, scheduleGridHeightPx, checkedScheduleToView } from "./schedule-grid.js";
 import { flagLikelyPrivate } from "./advisor-pii-detect.js";
 import { lookupCourse } from "./advisor-catalog.js";
 import { checkSystemHealth, type SystemHealth } from "./advisor-health.js";
@@ -542,6 +543,13 @@ export function createAdvisorServer(
           // Prose stays the default; the button only lights up once the agent
           // has actually called propose_schedule.
           schedule: Boolean(session.lastSchedule),
+          artifact: session.lastSchedule
+            ? {
+                kind: "schedule" as const,
+                html: renderScheduleGrid(checkedScheduleToView(session.lastSchedule)),
+                height: scheduleGridHeightPx(checkedScheduleToView(session.lastSchedule)),
+              }
+            : undefined,
         });
       }
 

@@ -22,6 +22,8 @@ interface FakeElement {
   parent?: FakeElement;
   listeners: Record<string, (...args: unknown[]) => unknown>;
   dataset: Record<string, string>;
+  attrs: Record<string, string>;
+  style: Record<string, string>;
   append(...nodes: FakeElement[]): void;
   appendChild(node: FakeElement): FakeElement;
   replaceChildren(): void;
@@ -45,6 +47,8 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     children: [],
     listeners: {},
     dataset: {},
+    attrs: {},
+    style: {},
     append(...nodes) {
       for (const n of nodes) n.parent = this;
       this.children.push(...nodes);
@@ -67,6 +71,7 @@ function makeElement(overrides: Partial<FakeElement> = {}): FakeElement {
     },
     focus() {},
     setAttribute(name, value) {
+      this.attrs[name] = value;
       if (name === "data-track") this.dataset.track = value;
       if (name === "data-mode") this.dataset.mode = value;
     },
@@ -369,6 +374,26 @@ test("the schedule button stays hidden until a schedule has been proposed", asyn
 
   const proposed = await runChatSubmit({ text: "Proposed.", schedule: true });
   assert.equal(proposed.elements.schedule!.hidden, false);
+});
+
+// A schedule artifact from the server is host-rendered HTML that must run
+// fully isolated from the page (no innerHTML, no scripts) — it is mounted as
+// a sandboxed iframe via srcdoc, never trusted into the page's own DOM.
+test("an artifact in the response mounts a sandboxed, script-free iframe via srcdoc", async () => {
+  const html = "<!DOCTYPE html><html><body>grid</body></html>";
+  const { elements } = await runChatSubmit({
+    text: "Here is your schedule.",
+    artifact: { kind: "schedule", html, height: 400 },
+  });
+  const agent = elements.answers.children.find((a) =>
+    a.children.some((c) => c.tagName === "h2" && String(c.textContent).indexOf("Advisor chat") === 0),
+  );
+  assert.ok(agent, "expected an assistant article");
+  const frame = agent!.children.find((c) => c.tagName === "iframe");
+  assert.ok(frame, "expected an <iframe> artifact");
+  assert.equal(frame!.attrs?.sandbox, "", "sandbox must be empty (no scripts)");
+  assert.doesNotMatch(String(frame!.attrs?.sandbox ?? ""), /allow-scripts/);
+  assert.equal(frame!.attrs?.srcdoc, html, "content set via srcdoc attribute, not page innerHTML");
 });
 
 test("renderChatPage reflects the mode at first paint and links the cleaner", () => {

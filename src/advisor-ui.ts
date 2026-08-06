@@ -59,6 +59,9 @@ const STYLE = `
   #answers table { border-collapse:collapse; width:100%; }
   #answers th, #answers td { border:1px solid #8886; padding:.35rem .6rem; text-align:left; }
   .mdtable-wrap { overflow-x:auto; }
+  #answers iframe.artifact { width:100%; border:1px solid #8884; border-radius:8px;
+    margin:.4rem 0 .2rem; background:#fff; }
+  @media (prefers-color-scheme: dark) { #answers iframe.artifact { background:#1c2024; } }
   code { font-family: ui-monospace, monospace; background:#8882; padding:.1rem .3rem; border-radius:4px; }
 
   #status { flex:0 0 auto; min-height:1.25rem; padding:0 1.75rem; color:#595959; font-size:.9rem; }
@@ -451,6 +454,21 @@ function addAnswer(role, text) {
   return art;
 }
 
+// Mount a host-rendered artifact as a SANDBOXED iframe. sandbox="" is maximally
+// restricted (no scripts, no same-origin), so arbitrary HTML/CSS is safe. Content
+// is set via setAttribute("srcdoc", …) — it runs only inside the isolated frame;
+// the page itself never uses innerHTML.
+function mountArtifact(container, artifact) {
+  if (!artifact || !artifact.html) return;
+  const frame = document.createElement("iframe");
+  frame.className = "artifact";
+  frame.setAttribute("sandbox", "");
+  frame.setAttribute("title", artifact.kind === "schedule" ? "Weekly schedule" : "Artifact");
+  frame.setAttribute("srcdoc", artifact.html);
+  if (artifact.height) frame.style.height = artifact.height + "px";
+  container.appendChild(frame);
+}
+
 // An animated "typing" placeholder shown while the turn runs, so the UI never
 // looks frozen. Replaced by the real answer (or removed on error/cancel).
 function addThinking() {
@@ -550,7 +568,8 @@ $("composer").addEventListener("submit", async (e) => {
       addAnswer("Advisor chat \\u2014 stopped", data.text);
       status.textContent = "Stopped.";
     } else {
-      addAnswer("Advisor chat", data.text);
+      const article = addAnswer("Advisor chat", data.text);
+      if (data.artifact) mountArtifact(article, data.artifact);
       status.textContent = "Response ready.";
     }
   } catch (err) {

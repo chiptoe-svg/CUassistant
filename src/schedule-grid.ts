@@ -64,9 +64,16 @@ function isTimed(e: ScheduleEntry): boolean {
   return !!e.days && e.startMin != null && e.endMin != null;
 }
 
+/** A timed entry that meets on at least one real grid day (M–U). An entry whose
+ * `days` hold only out-of-range letters can't land in any column, so it is
+ * treated as unscheduled rather than silently vanishing. */
+function isGriddable(e: ScheduleEntry): boolean {
+  return isTimed(e) && [...e.days].some((d) => DAY_LABEL[d]);
+}
+
 /** Used days (Mon–Fri always shown; Sat/Sun only if used) + hour-snapped bounds. */
 export function gridBounds(entries: ScheduleEntry[]): { days: string[]; startMin: number; endMin: number } {
-  const timed = entries.filter(isTimed);
+  const timed = entries.filter(isGriddable);
   const used = new Set<string>();
   let lo = Infinity;
   let hi = -Infinity;
@@ -85,9 +92,12 @@ export function gridBounds(entries: ScheduleEntry[]): { days: string[]; startMin
   };
 }
 
-/** Indices of entries that share a day and overlap in time. */
-export function findConflicts(entries: ScheduleEntry[]): Set<number> {
-  const hit = new Set<number>();
+/** Which entries conflict (shared day + time overlap) and how many overlapping
+ * PAIRS there are. Only timed entries participate. `pairs` counts clashes (a
+ * 3-way overlap is 3 pairs), so the badge never shows a fractional count. */
+function conflictInfo(entries: ScheduleEntry[]): { flagged: Set<number>; pairs: number } {
+  const flagged = new Set<number>();
+  let pairs = 0;
   const idx = entries.map((e, i) => i).filter((i) => isTimed(entries[i]));
   for (let a = 0; a < idx.length; a++) {
     for (let b = a + 1; b < idx.length; b++) {
@@ -96,12 +106,18 @@ export function findConflicts(entries: ScheduleEntry[]): Set<number> {
       const sharedDay = [...x.days].some((d) => y.days.includes(d));
       if (!sharedDay) continue;
       if ((x.startMin as number) < (y.endMin as number) && (y.startMin as number) < (x.endMin as number)) {
-        hit.add(idx[a]);
-        hit.add(idx[b]);
+        flagged.add(idx[a]);
+        flagged.add(idx[b]);
+        pairs++;
       }
     }
   }
-  return hit;
+  return { flagged, pairs };
+}
+
+/** Indices of entries that share a day and overlap in time. */
+export function findConflicts(entries: ScheduleEntry[]): Set<number> {
+  return conflictInfo(entries).flagged;
 }
 
 function hueFor(key: string): number {
@@ -126,7 +142,7 @@ export function scheduleGridHeightPx(view: ScheduleView): number {
 
 export function renderScheduleGrid(view: ScheduleView): string {
   const b = gridBounds(view.entries);
-  const conflicts = findConflicts(view.entries);
+  const { flagged, pairs } = conflictInfo(view.entries);
   const span = b.endMin - b.startMin;
   const bodyPx = (span / 60) * PX_PER_HOUR;
   const credits = view.entries.reduce((n, e) => n + (e.credits ?? 0), 0);
@@ -149,7 +165,7 @@ export function renderScheduleGrid(view: ScheduleView): string {
         const top = (((e.startMin as number) - b.startMin) / span) * bodyPx;
         const height = (((e.endMin as number) - (e.startMin as number)) / span) * bodyPx;
         const hue = hueFor(e.colorKey ?? e.label);
-        const conflict = conflicts.has(i) ? " conflict" : "";
+        const conflict = flagged.has(i) ? " conflict" : "";
         const room = e.room ? `<div class="room">${esc(e.room)}</div>` : "";
         return `<div class="block${conflict}" style="top:${top}px;height:${Math.max(height, 16)}px;` +
           `background:hsl(${hue} 70% 92%);border-color:hsl(${hue} 55% 62%)">` +
@@ -162,14 +178,16 @@ export function renderScheduleGrid(view: ScheduleView): string {
       `<div class="colbody" style="height:${bodyPx}px">${blocks}</div></div>`;
   }).join("");
 
-  const untimed = view.entries.filter((e) => !isTimed(e));
-  const untimedHtml = untimed.length
-    ? `<div class="unscheduled"><strong>Unscheduled (no meeting time):</strong> ` +
-      untimed.map((e) => esc(e.label)).join(", ") + `</div>`
+  // Anything that can't be placed on the grid — no meeting time, or a day
+  // outside M–U — is listed here rather than dropped.
+  const unscheduled = view.entries.filter((e) => !isGriddable(e));
+  const untimedHtml = unscheduled.length
+    ? `<div class="unscheduled"><strong>Unscheduled:</strong> ` +
+      unscheduled.map((e) => esc(e.label)).join(", ") + `</div>`
     : "";
 
-  const conflictNote = conflicts.size
-    ? `<span class="warn">${conflicts.size / 2} conflict${conflicts.size === 2 ? "" : "s"}</span>`
+  const conflictNote = pairs
+    ? `<span class="warn">${pairs} conflict${pairs === 1 ? "" : "s"}</span>`
     : "";
 
   return `<!DOCTYPE html>

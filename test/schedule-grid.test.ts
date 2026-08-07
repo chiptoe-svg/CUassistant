@@ -90,3 +90,33 @@ test("scheduleGridHeightPx grows with the time span", () => {
     { label: "A 1 001", days: "M", startMin: 540, endMin: 600, colorKey: "A" }] };
   assert.ok(tall > scheduleGridHeightPx(shortView));
 });
+
+// M1: the conflict badge counts overlapping PAIRS, never a fraction.
+test("one overlapping pair reads '1 conflict'; a 3-way overlap reads '3 conflicts'", () => {
+  const single = renderScheduleGrid(VIEW); // GC 1040 vs GC 1041 overlap on Tuesday = 1 pair
+  assert.match(single, /1 conflict\b/);
+  assert.doesNotMatch(single, /1\.5/);
+
+  const threeWay: ScheduleView = { term: "Fall 2026", entries: [
+    { label: "A 1 001", days: "M", startMin: 600, endMin: 660, colorKey: "A" },
+    { label: "B 2 001", days: "M", startMin: 610, endMin: 670, colorKey: "B" },
+    { label: "C 3 001", days: "M", startMin: 620, endMin: 680, colorKey: "C" },
+  ] };
+  const html = renderScheduleGrid(threeWay); // pairs AB, AC, BC = 3
+  assert.match(html, /3 conflicts/);
+  assert.doesNotMatch(html, /1\.5/);
+});
+
+// M3: a timed entry whose day is outside M–U is listed as Unscheduled, not
+// silently dropped, and does not stretch the grid's time axis.
+test("an out-of-range day letter goes to Unscheduled and does not affect bounds", () => {
+  const v: ScheduleView = { term: "Fall 2026", entries: [
+    { label: "GC 1010 001", days: "MWF", startMin: 870, endMin: 945, colorKey: "GC" },
+    { label: "ZZ 9 001", days: "X", startMin: 300, endMin: 360, colorKey: "ZZ" }, // 5:00am, invalid day
+  ] };
+  const b = gridBounds(v.entries);
+  assert.equal(b.startMin, 840, "bounds ignore the invalid-day entry (14:00, not 5:00)");
+  const html = renderScheduleGrid(v);
+  assert.match(html, /Unscheduled:/);
+  assert.match(html, /ZZ 9 001/);
+});
